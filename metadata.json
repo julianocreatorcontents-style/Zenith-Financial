@@ -1,0 +1,5 @@
+{
+  "name": "Zenith Financial",
+  "description": "High-performance financial ecosystem with integrated biometrics, smart asset tracking, and collaborative family sharing.",
+  "requestFramePermissions": ["camera", "microphone", "geolocation"]
+}

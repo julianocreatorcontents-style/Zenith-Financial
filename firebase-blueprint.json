@@ -1,0 +1,521 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "User Profile",
+      "description": "User's personal information and preferences.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string"
+        },
+        "displayName": {
+          "type": "string",
+          "description": "User's name."
+        },
+        "photoURL": {
+          "type": "string",
+          "description": "URL of the user's profile picture."
+        },
+        "email": {
+          "type": "string",
+          "description": "User's email address."
+        },
+        "pix_key": {
+          "type": "string",
+          "description": "User's static Pix key for receiving payments."
+        },
+        "investor_profile": {
+          "type": "string"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "authProvider": {
+          "type": "string",
+          "enum": ["google", "email"]
+        }
+      },
+      "required": ["displayName"]
+    },
+    "Participant": {
+      "title": "Participant",
+      "description": "A person added by a user to participate in family splitting.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "email": {
+          "type": "string"
+        },
+        "ownerUid": {
+          "type": "string"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["name", "ownerUid"]
+    },
+    "Split": {
+      "title": "Split",
+      "description": "A share of a transaction for a participant.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "description": "ID of the participant (who owes)."
+        },
+        "ownerUid": {
+          "type": "string",
+          "description": "ID of the transaction owner (who is owed)."
+        },
+        "transactionId": {
+          "type": "string",
+          "description": "ID of the parent transaction."
+        },
+        "transactionLabel": {
+          "type": "string",
+          "description": "Label of the parent transaction."
+        },
+        "shareValue": {
+          "type": "number",
+          "description": "Value of the share."
+        },
+        "status": {
+          "type": "string",
+          "enum": ["pending", "paid"],
+          "description": "Payment status of the split."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["uid", "ownerUid", "transactionId", "shareValue", "status"]
+    },
+    "Asset": {
+      "title": "Asset",
+      "description": "A financial asset or liability.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Name of the asset."
+        },
+        "value": {
+          "type": "number",
+          "description": "Current value of the asset."
+        },
+        "type": {
+          "type": "string",
+          "enum": ["liquidity", "investment", "physical"],
+          "description": "Category of the asset."
+        },
+        "detail": {
+          "type": "string",
+          "description": "Additional details about the asset."
+        },
+        "change": {
+          "type": "string",
+          "description": "Percentage or absolute change in value."
+        },
+        "uid": {
+          "type": "string",
+          "description": "Owner's user ID."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "When the asset was created."
+        }
+      },
+      "required": ["name", "value", "type", "uid"]
+    },
+    "Transaction": {
+      "title": "Transaction",
+      "description": "A financial transaction (income, expense, or yield).",
+      "type": "object",
+      "properties": {
+        "label": {
+          "type": "string",
+          "description": "Description of the transaction (Establishment)."
+        },
+        "value": {
+          "type": "number",
+          "description": "Amount of the transaction."
+        },
+        "type": {
+          "type": "string",
+          "enum": ["in", "out", "yield"],
+          "description": "Type of transaction."
+        },
+        "date": {
+          "type": "string",
+          "format": "date-time",
+          "description": "When the transaction occurred."
+        },
+        "uid": {
+          "type": "string",
+          "description": "Owner's user ID."
+        },
+        "categoria_primaria": {
+          "type": "string",
+          "description": "Mother category."
+        },
+        "etiqueta_personalizada": {
+          "type": "string",
+          "description": "Free writing tag."
+        },
+        "metodo_origem": {
+          "type": "string",
+          "description": "Payment method (Pix/Card/Manual)."
+        },
+        "status": {
+          "type": "string",
+          "enum": ["Confirmado", "Futuro"]
+        },
+        "participants": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "List of user IDs participating in the split."
+        },
+        "contexto_ia": {
+          "type": "object",
+          "properties": {
+            "insight": { "type": "string" },
+            "tendencia": { "type": "string", "enum": ["Alta", "Baixa", "Estável"] }
+          }
+        }
+      },
+      "required": ["label", "value", "type", "date", "uid"]
+    },
+    "DDA": {
+      "title": "DDA",
+      "description": "Authorized Direct Debit (DDA) record.",
+      "type": "object",
+      "properties": {
+        "beneficiary": {
+          "type": "string",
+          "description": "Name of the beneficiary."
+        },
+        "value": {
+          "type": "number",
+          "description": "Amount of the boleto."
+        },
+        "dueDate": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Due date of the boleto."
+        },
+        "status": {
+          "type": "string",
+          "enum": ["pending", "accepted", "rejected"],
+          "description": "Status of the DDA record."
+        },
+        "uid": {
+          "type": "string",
+          "description": "Owner's user ID."
+        },
+        "cpf": {
+          "type": "string",
+          "description": "The CPF associated with the DDA."
+        }
+      },
+      "required": ["beneficiary", "value", "dueDate", "status", "uid"]
+    },
+    "UserRule": {
+      "title": "User Rule",
+      "description": "A rule for AI data extraction based on user preference.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "description": "Owner's user ID."
+        },
+        "pattern": {
+          "type": "string",
+          "description": "The text pattern to match (e.g., establishment name)."
+        },
+        "category": {
+          "type": "string",
+          "description": "The category to apply when the pattern matches."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["uid", "pattern", "category"]
+    },
+    "SplitProposal": {
+      "title": "Split Proposal",
+      "description": "A proposal from Zenith IA to split a detected transaction or invoice.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "description": "Owner's user ID."
+        },
+        "label": {
+          "type": "string",
+          "description": "Description of the expense."
+        },
+        "value": {
+          "type": "number",
+          "description": "Total value of the expense."
+        },
+        "source": {
+          "type": "string",
+          "enum": ["email", "manual", "dda"],
+          "description": "Where the expense was detected."
+        },
+        "status": {
+          "type": "string",
+          "enum": ["pending", "accepted", "rejected"],
+          "description": "Status of the proposal."
+        },
+        "suggestedParticipants": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "User IDs suggested by IA."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["uid", "label", "value", "source", "status"]
+    },
+    "Report": {
+      "title": "Monthly Split Report",
+      "description": "Consolidated monthly report for family splitting.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "description": "Owner's user ID."
+        },
+        "month": {
+          "type": "number",
+          "description": "Report month (0-11)."
+        },
+        "year": {
+          "type": "number",
+          "description": "Report year."
+        },
+        "status": {
+          "type": "string",
+          "enum": ["pending", "approved", "rejected"],
+          "description": "Status of the report."
+        },
+        "totalConsolidated": {
+          "type": "number",
+          "description": "Total value across all splits in the report."
+        },
+        "participantsSummary": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "uid": { "type": "string" },
+              "displayName": { "type": "string" },
+              "totalToPay": { "type": "number" },
+              "splitsCount": { "type": "number" }
+            }
+          },
+          "description": "Summary per participant."
+        },
+        "iaFeedback": {
+          "type": "string",
+          "description": "Zenith IA feedback or rejection reasons."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["uid", "month", "year", "status"]
+    },
+    "Installment": {
+      "title": "Installment",
+      "description": "A commitment or installment plan for financial control.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "description": "Owner's user ID."
+        },
+        "person": {
+          "type": "string",
+          "description": "Person responsible or associated."
+        },
+        "institution": {
+          "type": "string",
+          "description": "Bank or institution."
+        },
+        "label": {
+          "type": "string",
+          "description": "Name of the commitment."
+        },
+        "value": {
+          "type": "number",
+          "description": "Value of the installment."
+        },
+        "totalValue": {
+          "type": "number",
+          "description": "Total value of the commitment."
+        },
+        "currentInstallment": {
+          "type": "number"
+        },
+        "totalInstallments": {
+          "type": "number"
+        },
+        "status": {
+          "type": "string",
+          "enum": ["Quitado", "Pendente", "Atrasado", "Adiantado"]
+        },
+        "dueDate": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "notes": {
+          "type": "string"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["uid", "label", "value", "status"]
+    },
+    "Settings": {
+      "title": "Settings",
+      "description": "User personalization and configuration settings.",
+      "type": "object",
+      "properties": {
+        "theme": {
+          "type": "string",
+          "enum": ["dark", "light", "high-contrast"],
+          "description": "UI theme preference."
+        },
+        "language": {
+          "type": "string",
+          "enum": ["pt-BR", "en-US"],
+          "description": "Preferred language."
+        },
+        "privacyMode": {
+          "type": "boolean",
+          "description": "Whether to mask sensitive values."
+        },
+        "activeWidgets": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "List of enabled dashboard widgets."
+        },
+        "yieldColor": {
+          "type": "string",
+          "description": "Highlight color for yield/rendimentos."
+        },
+        "granularity": {
+          "type": "string",
+          "enum": ["day", "month", "year"],
+          "description": "Default chart granularity."
+        },
+        "customTerms": {
+          "type": "object",
+          "description": "Custom mapping for financial terms."
+        },
+        "zenith_config": {
+          "type": "object",
+          "description": "Zenith Engine Centralized State Architecture.",
+          "properties": {
+            "master_states": {
+              "type": "object",
+              "properties": {
+                "modo_privacidade": { "type": "boolean" },
+                "insights_ia_ativo": { "type": "boolean" },
+                "idioma": { "type": "string" },
+                "tema_global": { "type": "string", "enum": ["Escuro", "Claro", "Contraste"] }
+              }
+            },
+            "categories": {
+              "type": "object",
+              "description": "Dynamic CRUD Repository for Dashboard Categories.",
+              "additionalProperties": {
+                "type": "object",
+                "properties": {
+                  "id": { "type": "string" },
+                  "nome": { "type": "string" },
+                  "cor_destaque": {
+                    "type": "object",
+                    "properties": {
+                      "hex": { "type": "string" },
+                      "opacity": { "type": "number" }
+                    }
+                  },
+                  "visivel_no_dash": { "type": "boolean" },
+                  "config_avancada": {
+                    "type": "object",
+                    "description": "Technical Vault - Maximum Priority."
+                  },
+                  "ia_insights_buffer": { "type": "object" }
+                }
+              }
+            }
+          }
+        }
+      },
+      "required": ["theme", "language", "privacyMode", "activeWidgets", "granularity"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "UserProfile",
+      "description": "User profiles."
+    },
+    "/settings/{userId}": {
+      "schema": "Settings",
+      "description": "User settings."
+    },
+    "/assets/{assetId}": {
+      "schema": "Asset",
+      "description": "User assets."
+    },
+    "/transactions/{transactionId}": {
+      "schema": "Transaction",
+      "description": "User transactions."
+    },
+    "/splits/{splitId}": {
+      "schema": "Split",
+      "description": "Splits for shared transactions."
+    },
+    "/ddas/{ddaId}": {
+      "schema": "DDA",
+      "description": "User DDA records."
+    },
+    "/user_rules/{ruleId}": {
+      "schema": "UserRule",
+      "description": "User-defined AI extraction rules."
+    },
+    "/split_proposals/{proposalId}": {
+      "schema": "SplitProposal",
+      "description": "IA-suggested split proposals."
+    },
+    "/participants/{participantId}": {
+      "schema": "Participant",
+      "description": "Participants for family splitting."
+    },
+    "/reports/{reportId}": {
+      "schema": "Report",
+      "description": "Monthly split reports."
+    },
+    "/installments/{installmentId}": {
+      "schema": "Installment",
+      "description": "User installment plans."
+    }
+  }
+}
