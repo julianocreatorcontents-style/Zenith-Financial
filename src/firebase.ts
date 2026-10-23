@@ -21,46 +21,50 @@ export enum OperationType {
   WRITE = 'write',
 }
 
-export interface FirestoreErrorInfo {
-  error: string;
+export const FIRESTORE_ERROR_EVENT = 'firestore_error';
+
+export interface FirestoreErrorDetail {
+  code: string;
   operationType: OperationType;
   path: string | null;
-  authInfo: {
-    userId: string | undefined;
-    email: string | null | undefined;
-    emailVerified: boolean | undefined;
-    isAnonymous: boolean | undefined;
-    tenantId: string | null | undefined;
-    providerInfo: {
-      providerId: string;
-      displayName: string | null;
-      email: string | null;
-      photoUrl: string | null;
-    }[];
-  }
+  timestamp: string;
 }
 
-export function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
-  const errInfo: FirestoreErrorInfo = {
-    error: error instanceof Error ? error.message : String(error),
-    authInfo: {
-      userId: auth.currentUser?.uid,
-      email: auth.currentUser?.email,
-      emailVerified: auth.currentUser?.emailVerified,
-      isAnonymous: auth.currentUser?.isAnonymous,
-      tenantId: auth.currentUser?.tenantId,
-      providerInfo: auth.currentUser?.providerData.map(provider => ({
-        providerId: provider.providerId,
-        displayName: provider.displayName,
-        email: provider.email,
-        photoUrl: provider.photoURL
-      })) || []
-    },
-    operationType,
-    path
+function sanitizePath(path: string | null): string | null {
+  if (!path) return null;
+  const parts = path.split('/').filter(Boolean);
+  if (parts.length === 0) return null;
+  return parts.length > 1 ? `${parts[0]}/{id}` : parts[0];
+}
+
+function getErrorCode(error: unknown): string {
+  if (typeof error === 'object' && error !== null && 'code' in error) {
+    const code = (error as { code?: unknown }).code;
+    if (typeof code === 'string' && code.length <= 80) return code;
   }
-  console.error('Firestore Error: ', JSON.stringify(errInfo));
-  throw new Error(JSON.stringify(errInfo));
+  return 'unknown';
+}
+
+/**
+ * Central Firestore error reporter. Never throws, so it is safe inside
+ * onSnapshot callbacks (React ErrorBoundary does not catch async errors).
+ * Only non-sensitive metadata is logged/emitted: no UID, e-mail or document id.
+ */
+export function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null): void {
+  const safePath = sanitizePath(path);
+  const code = getErrorCode(error);
+
+  console.error(`[Firestore] ${operationType} ${safePath ?? 'unknown-path'} failed (${code})`);
+
+  if (typeof window !== 'undefined') {
+    const detail: FirestoreErrorDetail = {
+      code,
+      operationType,
+      path: safePath,
+      timestamp: new Date().toISOString()
+    };
+    window.dispatchEvent(new CustomEvent<FirestoreErrorDetail>(FIRESTORE_ERROR_EVENT, { detail }));
+  }
 }
 
 export { 

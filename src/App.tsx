@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { Component, useState, useEffect, useCallback, useMemo } from 'react';
+import React, { Component, useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   Bell, Eye, EyeOff, MoreVertical, ShieldCheck, 
@@ -13,7 +13,7 @@ import {
   FileUp, Loader2, Settings as SettingsIcon, Check, ChevronRight, Palette, Globe, Layout,
   BarChart as BarChartIcon, Sparkles, Copy, CircleCheck, BellOff, UserPlus, ClipboardCheck,
   QrCode, FileText, Table, Edit3, Camera, Upload, AlertCircle, Search, Zap, Users,
-  Menu, Database, Trash, HardDrive, History, Calendar, Download
+  Menu, Database, Trash, HardDrive, History, Calendar, Download, KeyRound
 } from 'lucide-react';
 import { 
   AreaChart, Area, XAxis, YAxis, 
@@ -24,11 +24,21 @@ import {
   auth, db, googleProvider, signInWithPopup, signOut, 
   signInWithEmailAndPassword, createUserWithEmailAndPassword, updateProfile,
   collection, addDoc, doc, setDoc, updateDoc, deleteDoc, onSnapshot, query, where, orderBy, serverTimestamp,
-  handleFirestoreError, OperationType, getDocs, getDoc, getDocFromServer, writeBatch, limit
+  handleFirestoreError, OperationType, getDocs, getDoc, getDocFromServer, writeBatch, limit,
+  FIRESTORE_ERROR_EVENT
 } from './firebase';
 import { Timestamp } from 'firebase/firestore';
-import { GoogleGenAI, Type } from "@google/genai";
+import {
+  extractTransaction,
+  extractDocument,
+  extractAssets,
+  getAiErrorMessage,
+  GEMINI_API_KEY_STORAGE,
+  MissingApiKeyError,
+  InvalidApiKeyError,
+} from './lib/ai';
 import { TransactionSchema } from './lib/validations';
+import { z } from 'zod';
 import { read, utils } from 'xlsx';
 import { 
   calculateTotals, 
@@ -68,6 +78,7 @@ interface UserProfile {
   photoURL?: string;
   email?: string;
   pix_key?: string;
+  cpf?: string;
   investor_profile?: 'Conservador' | 'Sofisticado' | 'Arrojado';
 }
 
@@ -201,6 +212,155 @@ interface Settings {
 }
 
 // --- UTILS ---
+const SPREADSHEET_FIELDS: Record<string, string> = {
+  data: 'date', date: 'date', data_evento: 'date', data_da_transacao: 'date',
+  data_transacao: 'date', data_compra: 'date', data_de_compra: 'date',
+  data_da_compra: 'date', data_pagamento: 'date', data_lancamento: 'date',
+  data_movimento: 'date', data_operacao: 'date', competencia: 'date',
+  vencimento: 'date', due_date: 'date',
+  descricao: 'label', descricao_transacao: 'label', descricao_do_lancamento: 'label',
+  titulo: 'label', title: 'label', label: 'label', estabelecimento: 'label',
+  historico: 'label', lancamento: 'label', memo: 'label', name: 'label',
+  nome: 'label', details: 'label',
+  valor: 'value', value: 'value', valor_nominal: 'value', amount: 'value',
+  montante: 'value', quantia: 'value', total: 'value', valor_transacao: 'value',
+  valor_da_transacao: 'value', valor_total: 'value',
+  tipo: 'type', type: 'type', entrada_saida: 'type', natureza: 'type',
+  operacao: 'type', transaction_type: 'type', debito_credito: 'type',
+  categoria: 'category', categoria_primaria: 'category', categoria_de_gasto: 'category',
+  category: 'category', grupo: 'category', classificacao: 'category',
+  etiqueta: 'tag', etiqueta_personalizada: 'tag', tag: 'tag', tags: 'tag',
+  metodo: 'method', metodo_origem: 'method', method: 'method',
+  forma_pagamento: 'method', forma_de_pagamento: 'method', origem: 'method',
+  payment_method: 'method',
+  status: 'status', situacao: 'status'
+};
+
+function normalizeSpreadsheetKey(value: string): string {
+  return value
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '');
+}
+
+function parseSpreadsheetAmount(value: unknown): number {
+  if (typeof value === 'number') return value;
+
+  const raw = String(value ?? '').trim();
+  if (!raw) return NaN;
+
+  const negative = raw.startsWith('-') || /^\(.*\)$/.test(raw);
+  const cleaned = raw.replace(/[^\d,.-]/g, '');
+  if (!cleaned) return NaN;
+
+  let normalized = cleaned;
+  if (cleaned.includes(',')) {
+    normalized = cleaned.replace(/\./g, '').replace(',', '.');
+  } else if ((cleaned.match(/\./g) || []).length > 1) {
+    normalized = cleaned.replace(/\./g, '');
+  } else if (/^\d{1,3}\.\d{3}$/.test(cleaned)) {
+    normalized = cleaned.replace('.', '');
+  }
+
+  const parsed = Number(normalized);
+  if (!Number.isFinite(parsed)) return NaN;
+  return negative ? -Math.abs(parsed) : parsed;
+}
+
+function parseSpreadsheetDate(value: unknown): Date | undefined {
+  if (value instanceof Date && !Number.isNaN(value.getTime())) return value;
+
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    const excelEpoch = Date.UTC(1899, 11, 30);
+    const date = new Date(excelEpoch + value * 86400000 + 12 * 3600000);
+    return Number.isNaN(date.getTime()) ? undefined : date;
+  }
+
+  const raw = String(value ?? '').trim();
+  if (!raw) return undefined;
+
+  const dayFirst = raw.match(/^(\d{1,2})[/.-](\d{1,2})[/.-](\d{2,4})$/);
+  if (dayFirst) {
+    let year = Number(dayFirst[3]);
+    if (year < 100) year += 2000;
+    const month = Number(dayFirst[2]);
+    const day = Number(dayFirst[1]);
+    const date = new Date(year, month - 1, day, 12);
+    if (
+      date.getFullYear() === year &&
+      date.getMonth() === month - 1 &&
+      date.getDate() === day
+    ) return date;
+    return undefined;
+  }
+
+  const isoDate = raw.match(/^(\d{4})-(\d{1,2})-(\d{1,2})(?:[T\s].*)?$/);
+  if (isoDate) {
+    const year = Number(isoDate[1]);
+    const month = Number(isoDate[2]);
+    const day = Number(isoDate[3]);
+    const date = new Date(year, month - 1, day, 12);
+    if (
+      date.getFullYear() === year &&
+      date.getMonth() === month - 1 &&
+      date.getDate() === day
+    ) return date;
+    return undefined;
+  }
+
+  const parsed = new Date(raw);
+  return Number.isNaN(parsed.getTime()) ? undefined : parsed;
+}
+
+function parseSpreadsheetType(value: unknown): string {
+  const key = normalizeSpreadsheetKey(String(value ?? ''));
+  if (!key) return 'out';
+
+  if (['in', 'entrada', 'entradas', 'receita', 'receitas', 'credito', 'creditos', 'credit', 'ganho'].includes(key)) return 'in';
+  if (['out', 'saida', 'saidas', 'despesa', 'despesas', 'debito', 'debitos', 'debit', 'gasto', 'gastos'].includes(key)) return 'out';
+  if (['yield', 'rendimento', 'rendimentos', 'investimento', 'investimentos'].includes(key)) return 'yield';
+
+  return String(value ?? '').trim();
+}
+
+function parseSpreadsheetStatus(value: unknown): string | undefined {
+  const key = normalizeSpreadsheetKey(String(value ?? ''));
+  if (!key) return undefined;
+  if (['futuro', 'future', 'pendente', 'pending', 'agendado', 'scheduled'].includes(key)) return 'Futuro';
+  if (['confirmado', 'confirmed', 'pago', 'paid', 'concluido', 'completed', 'efetivado'].includes(key)) return 'Confirmado';
+  return String(value ?? '').trim();
+}
+
+function mapSpreadsheetRow(row: Record<string, unknown>) {
+  const mapped: Record<string, unknown> = {};
+
+  Object.entries(row).forEach(([key, value]) => {
+    const field = SPREADSHEET_FIELDS[normalizeSpreadsheetKey(key)];
+    if (!field || value === null || value === undefined || value === '') return;
+    if (mapped[field] === undefined || mapped[field] === '') mapped[field] = value;
+  });
+
+  const text = (value: unknown) => {
+    const normalized = String(value ?? '').trim();
+    return normalized || undefined;
+  };
+
+  const amount = parseSpreadsheetAmount(mapped.value);
+
+  return {
+    label: String(mapped.label ?? '').trim(),
+    value: Math.abs(amount),
+    type: parseSpreadsheetType(mapped.type),
+    date: parseSpreadsheetDate(mapped.date),
+    categoria_primaria: text(mapped.category),
+    etiqueta_personalizada: text(mapped.tag),
+    metodo_origem: text(mapped.method),
+    status: parseSpreadsheetStatus(mapped.status)
+  };
+}
+
 const getGreeting = () => {
   const hour = new Date().getHours();
   if (hour >= 5 && hour < 12) return "Bom dia";
@@ -252,23 +412,24 @@ class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
   }
 }
 
-// --- MOCK DATA FOR CHARTS (FALLBACK) ---
-const generateDailyData = () => {
-  const data = [{ name: '0', value: 0, date: 'Início' }];
-  let currentValue = 100;
+// --- CHART FALLBACK (DETERMINISTIC) ---
+const generateDailyData = (baseValue = 0) => {
   const months = ['JAN', 'FEV', 'MAR', 'ABR', 'MAI', 'JUN', 'JUL', 'AGO', 'SET', 'OUT', 'NOV', 'DEZ'];
-  
-  for (let i = 0; i < 30; i++) {
-    const day = i + 1;
-    const oscillation = (Math.random() - 0.5) * 15;
-    currentValue += oscillation;
-    if (currentValue < 0) currentValue = 10;
-    data.push({ 
-      name: day.toString().padStart(2, '0'), 
-      value: Math.round(currentValue),
-      date: `${day} de Março`
+  const today = new Date();
+  const value = Number.isFinite(baseValue) ? Math.round(baseValue) : 0;
+  const data: { name: string; value: number; date: string }[] = [];
+
+  for (let i = 29; i >= 0; i--) {
+    const date = new Date(today);
+    date.setDate(today.getDate() - i);
+    const day = date.getDate();
+    data.push({
+      name: day.toString().padStart(2, '0'),
+      value,
+      date: `${day} de ${months[date.getMonth()]}`
     });
   }
+
   return data;
 };
 
@@ -414,7 +575,7 @@ function gerarMensagemPersona(item: any, persona: any) {
   return msg;
 }
 
-function RateioFamiliarView({ transactions, splits, splitProposals, reports = [], users, familyMembers, allAvailableParticipants, language, profile, privacyMode, onSeed }: any) {
+function RateioFamiliarView({ transactions, splits, splitProposals, reports = [], familyMembers, allAvailableParticipants, language, profile, privacyMode, onSeed }: any) {
   const t = (pt: string, en: string) => (language === 'en-US' ? en : pt);
   const [isProcessing, setIsProcessing] = useState(false);
   const [selectedProposal, setSelectedProposal] = useState<any>(null);
@@ -497,7 +658,7 @@ function RateioFamiliarView({ transactions, splits, splitProposals, reports = []
       }
 
       await batch.commit();
-      alert(t("Relatório aprovado! Notificações enviadas via e-mail e WhatsApp.", "Report approved! Notifications sent via email and WhatsApp."));
+      alert(t("Relatório aprovado!", "Report approved!"));
     } catch (e) {
       handleFirestoreError(e, OperationType.WRITE, 'reports');
     } finally {
@@ -919,7 +1080,7 @@ function RateioFamiliarView({ transactions, splits, splitProposals, reports = []
                 <div className="p-4 bg-[var(--accent)]/5 rounded-2xl border border-[var(--accent)]/20 flex items-start gap-3">
                   <Sparkles size={18} className="text-[var(--accent)] shrink-0 mt-1" />
                   <p className="text-[10px] text-[var(--text-secondary)] leading-relaxed italic">
-                    "Zenith IA: Este rateio mantém o equilíbrio do fluxo de caixa familiar. As notificações serão enviadas com as saudações personalizadas de cada integrante."
+                    "Zenith IA: Este rateio mantém o equilíbrio do fluxo de caixa familiar entre os participantes selecionados."
                   </p>
                 </div>
               </div>
@@ -1524,24 +1685,34 @@ export default function ZenithApp() {
   const [isCategoryDetailsOpen, setIsCategoryDetailsOpen] = useState(false);
   const [activeCategoryDetail, setActiveCategoryDetail] = useState<string | null>(null);
   const [timeFilter, setTimeFilter] = useState<'7' | '15' | '30'>('30');
-  const [isProcessingFile, setIsProcessingFile] = useState(false);
   const [users, setUsers] = useState<UserProfile[]>([]);
   const [familyMembers, setFamilyMembers] = useState<any[]>([]);
   const [splits, setSplits] = useState<any[]>([]);
   const [installments, setInstallments] = useState<any[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const [copyFeedback, setCopyFeedback] = useState<string | null>(null);
+  const [firestoreIssues, setFirestoreIssues] = useState<{ id: string; code: string; operationType: string; path: string | null; timestamp: string }[]>([]);
+  const [geminiApiKey, setGeminiApiKey] = useState(() => {
+    try {
+      return localStorage.getItem(GEMINI_API_KEY_STORAGE) || '';
+    } catch {
+      return '';
+    }
+  });
+  const [isApiKeyModalOpen, setIsApiKeyModalOpen] = useState(false);
+  const [apiKeyDraft, setApiKeyDraft] = useState('');
+  const [apiKeyError, setApiKeyError] = useState<string | null>(null);
+  const isSeedingRef = useRef(false);
 
-  // Users Listener (to select participants for splits)
+  // Current User Listener (only the signed-in user's document).
+  // The users collection is no longer listable by regular users.
   useEffect(() => {
     if (!user) {
       setUsers([]);
       return;
     }
-    const unsub = onSnapshot(collection(db, 'users'), (snap) => {
-      const docs = snap.docs.map(d => ({ uid: d.id, ...d.data() } as UserProfile));
-      setUsers(docs);
-    }, (e) => handleFirestoreError(e, OperationType.LIST, 'users'));
+    const unsub = onSnapshot(doc(db, 'users', user.uid), (snap) => {
+      setUsers(snap.exists() ? [{ uid: snap.id, ...snap.data() } as UserProfile] : []);
+    }, (e) => handleFirestoreError(e, OperationType.GET, `users/${user.uid}`));
     return unsub;
   }, [user]);
 
@@ -1593,7 +1764,21 @@ export default function ZenithApp() {
     const prevYear = currentMonth === 0 ? currentYear - 1 : currentYear;
 
     const currentTotals = calculateTotals(transactions, currentMonth, currentYear, splits, assets);
-    const prevTotals = calculateTotals(transactions, prevMonth, prevYear, [], assets); // Previous month splits not tracked for now
+    const pendingSplits = splits.filter(s => s.status === 'pending');
+    const pendingToReceive = Math.round(
+      pendingSplits.reduce((acc, s) => acc + (s.shareValue ?? 0), 0) * 100
+    ) / 100;
+
+    const previousMonthSplits = splits.filter(s => {
+      if (s.status !== 'pending') return false;
+      const date = s.createdAt?.toDate ? s.createdAt.toDate() : (s.createdAt ? new Date(s.createdAt) : null);
+      return date && !isNaN(date.getTime()) &&
+        date.getMonth() === prevMonth && date.getFullYear() === prevYear;
+    });
+    const prevTotals = calculateTotals(transactions, prevMonth, prevYear, previousMonthSplits, assets);
+
+    const investmentAssets = assets.filter(a => a.type === 'investment');
+    const investedCost = investmentAssets.reduce((acc, a) => acc + (a.valorInvestido ?? a.value ?? 0), 0);
 
     return {
       in: { 
@@ -1615,12 +1800,15 @@ export default function ZenithApp() {
         data: getMiniChartData(transactions, 'yield', MINI_CHART_DATA) 
       },
       toReceive: {
-        total: currentTotals.toReceive,
-        var: calculateVariation(currentTotals.toReceive, prevTotals.toReceive),
-        trend: currentTotals.toReceive >= prevTotals.toReceive ? 'up' : 'down',
-        data: [] // Mini chart for toReceive could be added later
+        total: pendingToReceive,
+        var: calculateVariation(pendingToReceive, prevTotals.toReceive),
+        trend: pendingToReceive >= prevTotals.toReceive ? 'up' : 'down',
+        data: pendingSplits.map(s => ({ v: s.shareValue ?? 0 }))
       },
-      investments: currentTotals.investments
+      investments: currentTotals.investments,
+      investmentsVar: calculateVariation(currentTotals.investments, investedCost),
+      investmentsTrend: currentTotals.investments >= investedCost ? 'up' : 'down',
+      investmentsData: investmentAssets.map(a => ({ v: a.value ?? 0 }))
     };
   }, [transactions, splits, assets]);
 
@@ -1631,17 +1819,24 @@ export default function ZenithApp() {
   const [investmentTab, setInvestmentTab] = useState<'Ativos' | 'Subcategorias' | 'Estratégias'>('Ativos');
 
   const cashFlowData = useMemo(() => calculateCashFlowData(transactions), [transactions]);
-  const [currentTab, setCurrentTab] = useState<'Início' | 'Carteira' | 'Investimentos' | 'IA' | 'Rateio' | 'Armazenamento' | 'Lixeira' | 'Parcelas'>('Início');
+  const [currentTab, setCurrentTab] = useState<'Início' | 'Carteira' | 'Investimentos' | 'IA' | 'Armazenamento' | 'Lixeira' | 'Parcelas'>('Início');
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
 
+  // Split participants: the signed-in user plus the family members stored
+  // under their own user scope. The global users collection is never read.
   const allAvailableParticipants = useMemo(() => {
-    const list = users.map((u: any) => ({ 
-      uid: u.uid, 
-      displayName: u.displayName, 
-      photoURL: u.photoURL,
-      type: 'user'
-    }));
-    
+    const list: any[] = [];
+    const self = users[0] || profile;
+
+    if (self) {
+      list.push({
+        uid: self.uid,
+        displayName: self.displayName,
+        photoURL: self.photoURL,
+        type: 'self'
+      });
+    }
+
     familyMembers.forEach((m: any) => {
       if (!list.find(u => u.uid === m.id)) {
         list.push({ 
@@ -1654,7 +1849,7 @@ export default function ZenithApp() {
     });
 
     return fixDuplicates(list, 'uid');
-  }, [users, familyMembers]);
+  }, [users, profile, familyMembers]);
 
   // Auth Listener
   useEffect(() => {
@@ -1860,10 +2055,11 @@ export default function ZenithApp() {
               "cashflow": createDefaultCategory("cashflow", "Fluxo de Caixa", "#FF9500"),
             },
             dashboard_order: [
-              'CHART_EVOL_PATRIMONIO',
               'METRIC_SALDO',
               'METRIC_ENTRADAS',
               'METRIC_SAIDAS',
+              'METRIC_ARECEBER',
+              'METRIC_INVESTIMENTOS',
               'METRIC_RENDIMENTOS',
               'CHART_ALOC_ATIV',
               'CHART_FLUXO_CAIXA',
@@ -1880,43 +2076,161 @@ export default function ZenithApp() {
     return unsub;
   }, [user]);
 
+  const handleFileUpload = async (file: File) => {
+    if (!file || !user) return;
+
+    const extension = file.name.split('.').pop()?.toLowerCase() || '';
+    if (!['xlsx', 'xls', 'csv', 'tsv'].includes(extension)) {
+      setError(t('Formato de planilha não suportado. Use XLSX, XLS, CSV ou TSV.', 'Unsupported spreadsheet format. Use XLSX, XLS, CSV or TSV.'));
+      return;
+    }
+
+    setIsProcessingIA(true);
+    setError(null);
+
+    try {
+      const workbook = read(new Uint8Array(await file.arrayBuffer()), { type: 'array', cellDates: true });
+      const rawRows: { row: number; data: Record<string, unknown> }[] = [];
+
+      workbook.SheetNames.forEach(sheetName => {
+        const worksheet = workbook.Sheets[sheetName];
+        if (!worksheet) return;
+        const rows = utils.sheet_to_json<Record<string, unknown>>(worksheet, { defval: '', raw: true });
+        rows.forEach((row, index) => rawRows.push({ row: index + 2, data: row }));
+      });
+
+      if (rawRows.length === 0) {
+        setError(t('A planilha está vazia ou não possui linhas de dados.', 'The spreadsheet is empty or has no data rows.'));
+        return;
+      }
+
+      const rowSchema = z.object({
+        label: z.string().trim().min(1, t('Descrição obrigatória', 'Description required')).max(100, t('Descrição muito longa', 'Description too long')),
+        value: z.number({ message: t('Valor inválido', 'Invalid value') }).positive(t('O valor deve ser positivo', 'Value must be positive')).max(1_000_000_000, t('Valor muito alto', 'Value too high')),
+        type: z.enum(['in', 'out', 'yield'], { message: t('Tipo inválido', 'Invalid type') }),
+        date: z.custom<Date>((value) => value instanceof Date && !Number.isNaN(value.getTime()), { message: t('Data inválida (use DD/MM/AAAA)', 'Invalid date (use DD/MM/YYYY)') }),
+        categoria_primaria: z.string().trim().max(50, t('Categoria muito longa', 'Category too long')).optional(),
+        etiqueta_personalizada: z.string().trim().max(100, t('Etiqueta muito longa', 'Tag too long')).optional(),
+        metodo_origem: z.string().trim().max(50, t('Método de origem muito longo', 'Origin method too long')).optional(),
+        status: z.enum(['Confirmado', 'Futuro'], { message: t('Status inválido', 'Invalid status') }).optional()
+      });
+
+      const validTransactions: Record<string, unknown>[] = [];
+      const invalidRows: { row: number; reason: string }[] = [];
+      const seenRows = new Set<string>();
+
+      for (const { row, data } of rawRows) {
+        const mapped = mapSpreadsheetRow(data);
+        if (!mapped.label && Number.isNaN(mapped.value) && !mapped.date) continue;
+
+        const parsed = rowSchema.safeParse(mapped);
+        if (!parsed.success) {
+          invalidRows.push({
+            row,
+            reason: parsed.error.issues.map(issue => issue.message).join('; ')
+          });
+          continue;
+        }
+
+        const duplicateKey = `${parsed.data.date.toISOString()}|${parsed.data.label}|${parsed.data.value}|${parsed.data.type}`;
+        if (seenRows.has(duplicateKey)) {
+          invalidRows.push({ row, reason: t('Linha duplicada na planilha', 'Duplicate row in spreadsheet') });
+          continue;
+        }
+        seenRows.add(duplicateKey);
+
+        const finalValidation = TransactionSchema.safeParse({
+          ...parsed.data,
+          uid: user.uid,
+          participants: [],
+          date: parsed.data.date,
+          createdAt: new Date()
+        });
+
+        if (!finalValidation.success) {
+          invalidRows.push({
+            row,
+            reason: finalValidation.error.issues.map(issue => issue.message).join('; ')
+          });
+          continue;
+        }
+
+        validTransactions.push({
+          ...finalValidation.data,
+          date: Timestamp.fromDate(parsed.data.date),
+          createdAt: serverTimestamp()
+        });
+      }
+
+      if (validTransactions.length === 0) {
+        const details = invalidRows
+          .slice(0, 5)
+          .map(item => `${t('linha', 'row')} ${item.row}: ${item.reason}`)
+          .join(' | ');
+        setError(t(
+          `Nenhuma transação válida foi encontrada na planilha.${details ? ` Linhas com problema: ${details}` : ''}`,
+          `No valid transaction was found in the spreadsheet.${details ? ` Problem rows: ${details}` : ''}`
+        ));
+        return;
+      }
+
+      if (validTransactions.length > 450) {
+        setError(t(
+          'A planilha possui mais de 450 transações válidas. Divida o arquivo em partes menores para importar.',
+          'The spreadsheet has more than 450 valid transactions. Split the file into smaller parts to import.'
+        ));
+        return;
+      }
+
+      const batch = writeBatch(db);
+      validTransactions.forEach(transaction => {
+        batch.set(doc(collection(db, 'transactions')), transaction);
+      });
+      await batch.commit();
+      await recalculateBalances(user.uid);
+
+      if (invalidRows.length > 0) {
+        const details = invalidRows
+          .slice(0, 5)
+          .map(item => `${t('linha', 'row')} ${item.row}: ${item.reason}`)
+          .join(' | ');
+        alert(t(
+          `${validTransactions.length} transações importadas. ${invalidRows.length} linha(s) ignorada(s): ${details}`,
+          `${validTransactions.length} transactions imported. ${invalidRows.length} row(s) ignored: ${details}`
+        ));
+      } else {
+        alert(t(
+          `${validTransactions.length} transações importadas com sucesso.`,
+          `${validTransactions.length} transactions imported successfully.`
+        ));
+      }
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, 'transactions/batch');
+      setError(t('Não foi possível importar a planilha. Verifique o arquivo e tente novamente.', 'Could not import the spreadsheet. Check the file and try again.'));
+    } finally {
+      setIsProcessingIA(false);
+    }
+  };
+
   const handleUniversalIngestion = async (type: 'scanner' | 'upload' | 'spreadsheet' | 'manual') => {
     setIsIngestionHubOpen(false);
     
     if (type === 'manual') {
       const prompt = window.prompt(t("O que você deseja lançar? (Ex: Paguei 50 reais de almoço no Pix)", "What do you want to enter? (Ex: Paid 50 reais for lunch via Pix)"));
       if (!prompt) return;
+
+      const apiKey = getGeminiApiKey();
+      if (!apiKey) return;
       
       setIsProcessingIA(true);
       setIsReviewModalOpen(true);
       
       try {
-        const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-        const rulesStr = userRules.map(r => `- Se o texto for similar a "${r.pattern}", use category="${r.category}"`).join('\n');
-        
-        const response = await ai.models.generateContent({
-          model: "gemini-3-flash-preview",
-          contents: [{ text: `Atue como Especialista em IA Financeira. Analise este texto: "${prompt}".
-          Extraia os dados financeiros:
-          - label: O que foi comprado ou de onde veio o dinheiro.
-          - value: O valor numérico.
-          - type: 'in' (entrada), 'out' (saída), 'yield' (rendimento).
-          - category: Categoria sugerida.
-          
-          REGRAS DE AUTOMAÇÃO PERSONALIZADAS:
-          ${rulesStr}
-
-          REGRAS DE AUTOMAÇÃO PADRÃO:
-          - Se o texto mencionar "Fatura", "Energia", "Luz", "Enel", "CPFL", etc., defina type="out" e category="Moradia".
-          
-          Retorne APENAS JSON: { "label": "...", "value": 0, "type": "in|out|yield", "category": "..." }` }],
-          config: { responseMimeType: "application/json" }
-        });
-        
-        const data = JSON.parse(response.text);
+        const data = await extractTransaction(apiKey, { text: prompt, userRules });
         setPendingTransaction(data);
       } catch (e) {
         console.error(e);
+        handleAiError(e);
         setIsReviewModalOpen(false);
       } finally {
         setIsProcessingIA(false);
@@ -1924,62 +2238,58 @@ export default function ZenithApp() {
       return;
     }
 
+    if (type === 'spreadsheet') {
+      const spreadsheetInput = document.createElement('input');
+      spreadsheetInput.type = 'file';
+      spreadsheetInput.accept = '.csv,.xlsx,.xls,.tsv';
+      spreadsheetInput.onchange = (event: any) => {
+        const file = event.target.files?.[0];
+        if (file) handleFileUpload(file);
+      };
+      spreadsheetInput.click();
+      return;
+    }
+
     const input = document.createElement('input');
     input.type = 'file';
-    input.accept = type === 'spreadsheet' ? '.csv,.xlsx,.tsv' : 'image/*,application/pdf';
+    input.accept = 'image/*,application/pdf';
     
-    input.onchange = async (e: any) => {
+    input.onchange = (e: any) => {
       const file = e.target.files[0];
       if (!file) return;
+
+      const apiKey = getGeminiApiKey();
+      if (!apiKey) return;
       
       setIsProcessingIA(true);
       setIsReviewModalOpen(true);
-      
-      try {
-        const reader = new FileReader();
-        reader.readAsDataURL(file);
-        reader.onload = async () => {
-          const base64Data = (reader.result as string).split(',')[1];
-          const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-          const rulesStr = userRules.map(r => `- Se o emissor for similar a "${r.pattern}", use category="${r.category}"`).join('\n');
-          
-          const response = await ai.models.generateContent({
-            model: "gemini-3-flash-preview",
-            contents: [
-              { inlineData: { data: base64Data, mimeType: file.type || 'application/octet-stream' } },
-              { text: `Atue como Especialista em IA Financeira. Analise este documento/imagem.
-              1. Identifique o TIPO:
-                 - 'in' (ENTRADA): Salário, Pix Recebido, Venda, Resgate.
-                 - 'out' (SAÍDA): Fatura, Pagamento, Compra, Boleto, Consumo.
-                 - 'yield' (RENDIMENTO): Dividendos, JCP, Rendimento de Aplicação.
-              2. Extraia o VALOR TOTAL (number).
-              3. Identifique o EMISSOR/ESTABELECIMENTO (label).
-              4. Sugira uma CATEGORIA (ex: Moradia, Alimentação, Lazer, Investimentos).
-              
-              REGRAS DE AUTOMAÇÃO PERSONALIZADAS:
-              ${rulesStr}
 
-              REGRAS DE AUTOMAÇÃO PADRÃO:
-              - Se o documento for uma "Fatura de Energia", "Conta de Luz" ou similar, defina type="out" e category="Moradia".
-              
-              Retorne APENAS um JSON: { "label": "...", "value": 0, "type": "in|out|yield", "categoria_primaria": "..." }` }
-            ],
-            config: { responseMimeType: "application/json" }
+      const reader = new FileReader();
+      reader.readAsDataURL(file);
+
+      reader.onload = async () => {
+        try {
+          const base64Data = (reader.result as string).split(',')[1];
+          const data = await extractDocument(apiKey, {
+            data: base64Data,
+            mimeType: file.type,
+            userRules
           });
-          
-          const data = JSON.parse(response.text);
-          // Ensure category mapping if AI uses the old key
-          if (data.category && !data.categoria_primaria) {
-            data.categoria_primaria = data.category;
-          }
           setPendingTransaction(data);
-        };
-      } catch (e) {
-        console.error(e);
+        } catch (error) {
+          console.error(error);
+          handleAiError(error);
+          setIsReviewModalOpen(false);
+        } finally {
+          setIsProcessingIA(false);
+        }
+      };
+
+      reader.onerror = () => {
+        handleAiError(reader.error);
         setIsReviewModalOpen(false);
-      } finally {
         setIsProcessingIA(false);
-      }
+      };
     };
     input.click();
   };
@@ -2112,89 +2422,6 @@ export default function ZenithApp() {
     }
   };
 
-  const handleFileUpload = async (file: File) => {
-    setIsProcessingFile(true);
-    try {
-      const reader = new FileReader();
-      reader.readAsDataURL(file);
-      reader.onload = async () => {
-        const base64Data = (reader.result as string).split(',')[1];
-        const mimeType = file.type;
-
-        const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-        const response = await ai.models.generateContent({
-          model: "gemini-3-flash-preview",
-          contents: [
-            {
-              inlineData: {
-                data: base64Data,
-                mimeType: mimeType,
-              },
-            },
-            {
-              text: `Extraia os dados desta transação financeira. Retorne um JSON seguindo este esquema:
-              {
-                "transacao": {
-                  "data_evento": "ISO-8601",
-                  "titulo": "String (Estabelecimento)",
-                  "valor_nominal": "Double",
-                  "moeda": "BRL",
-                  "categoria_primaria": "String (Mãe)",
-                  "etiqueta_personalizada": "String (Escrita Livre)",
-                  "metodo_origem": "String (Pix/Cartão/Manual)",
-                  "status": "Confirmado/Futuro"
-                },
-                "contexto_ia": {
-                  "insight": "String (Análise curta)",
-                  "tendencia": "Alta/Baixa/Estável"
-                }
-              }`,
-            },
-          ],
-          config: {
-            responseMimeType: "application/json",
-          }
-        });
-
-        const result = JSON.parse(response.text);
-        const tx = result.transacao;
-        const ctx = result.contexto_ia;
-
-        // Check for duplicates (date + value + title)
-        const isDuplicate = transactions.some(t => {
-          const tDate = t.date?.toDate ? t.date.toDate().toISOString().split('T')[0] : '';
-          const newDate = tx.data_evento.split('T')[0];
-          return tDate === newDate && t.value === tx.valor_nominal && t.label === tx.titulo;
-        });
-
-        if (isDuplicate) {
-          alert("Transação possivelmente duplicada detectada.");
-          setIsProcessingFile(false);
-          return;
-        }
-
-        const newTx: any = {
-          label: tx.titulo,
-          value: tx.valor_nominal,
-          type: 'out', // Default to out for extracted receipts
-          date: Timestamp.fromDate(new Date(tx.data_evento)),
-          uid: user.uid,
-          categoria_primaria: tx.categoria_primaria,
-          etiqueta_personalizada: tx.etiqueta_personalizada,
-          metodo_origem: tx.metodo_origem,
-          status: tx.status,
-          contexto_ia: ctx,
-          createdAt: serverTimestamp()
-        };
-
-        await setDoc(doc(collection(db, 'transactions')), newTx);
-        setIsProcessingFile(false);
-      };
-    } catch (e) {
-      console.error("Erro no processamento AI:", e);
-      setIsProcessingFile(false);
-    }
-  };
   const recalculateBalances = async (userId: string) => {
     try {
       const q = query(collection(db, 'transactions'), where('uid', '==', userId), orderBy('date', 'asc'), limit(450));
@@ -2263,6 +2490,84 @@ export default function ZenithApp() {
     return settings?.language === 'en-US' ? en : pt;
   }, [settings?.language]);
 
+  useEffect(() => {
+    const onFirestoreError = (event: Event) => {
+      const detail = (event as CustomEvent<{ code?: string; operationType?: string; path?: string | null; timestamp?: string }>).detail;
+      const code = detail?.code || 'unknown';
+      const en = settings?.language === 'en-US';
+      let message: string;
+
+      setFirestoreIssues(previous => [{
+        id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        code,
+        operationType: detail?.operationType || 'unknown',
+        path: detail?.path || null,
+        timestamp: detail?.timestamp || new Date().toISOString()
+      }, ...previous].slice(0, 5));
+
+      if (code === 'permission-denied') {
+        message = en
+          ? 'You do not have permission to access this data.'
+          : 'Você não tem permissão para acessar estes dados.';
+      } else if (code === 'resource-exhausted') {
+        message = en
+          ? 'Firestore quota reached. Some operations may fail temporarily.'
+          : 'Limite do Firestore atingido. Algumas operações podem falhar temporariamente.';
+      } else if (code === 'unavailable' || code === 'deadline-exceeded') {
+        message = en
+          ? 'Connection to the database failed. Check your internet and try again.'
+          : 'Falha de conexão com o banco de dados. Verifique sua internet e tente novamente.';
+      } else {
+        message = en
+          ? 'Could not sync your data. Please try again.'
+          : 'Não foi possível sincronizar seus dados. Tente novamente.';
+      }
+
+      const isDev = (import.meta as any).env?.DEV === true;
+      if (isDev && detail?.path) {
+        message += ` [${detail.operationType || 'unknown'}: ${detail.path}]`;
+      }
+
+      setError(message);
+    };
+
+    window.addEventListener(FIRESTORE_ERROR_EVENT, onFirestoreError);
+    return () => window.removeEventListener(FIRESTORE_ERROR_EVENT, onFirestoreError);
+  }, [settings?.language]);
+
+  const getGeminiApiKey = useCallback(() => {
+    let stored = geminiApiKey;
+
+    if (!stored) {
+      try {
+        stored = localStorage.getItem(GEMINI_API_KEY_STORAGE) || '';
+      } catch {
+        stored = '';
+      }
+    }
+
+    const key = stored.trim();
+    if (!key) {
+      setApiKeyDraft('');
+      setApiKeyError(null);
+      setIsApiKeyModalOpen(true);
+      return null;
+    }
+
+    return key;
+  }, [geminiApiKey]);
+
+  const handleAiError = useCallback((e: unknown) => {
+    const message = getAiErrorMessage(e, settings?.language);
+    setError(message);
+
+    if (e instanceof MissingApiKeyError || e instanceof InvalidApiKeyError) {
+      setApiKeyDraft(geminiApiKey);
+      setApiKeyError(message);
+      setIsApiKeyModalOpen(true);
+    }
+  }, [geminiApiKey, settings?.language]);
+
   const resolveStyle = useCallback((catId: string, propertyName: string, defaultValue?: any) => {
     const config = settings?.zenith_config;
     if (!config) return defaultValue !== undefined ? defaultValue : 'var(--accent)';
@@ -2316,11 +2621,11 @@ export default function ZenithApp() {
     const metricsConfig = settings?.zenith_config?.metrics || {};
     
     const defaultOrder = [
-      'CHART_EVOL_PATRIMONIO',
       'METRIC_SALDO',
       'METRIC_ENTRADAS',
       'METRIC_SAIDAS',
       'METRIC_ARECEBER',
+      'METRIC_INVESTIMENTOS',
       'METRIC_RENDIMENTOS',
       'CHART_ALOC_ATIV',
       'CHART_FLUXO_CAIXA',
@@ -2330,7 +2635,7 @@ export default function ZenithApp() {
       'CHART_METAS_PROG'
     ];
 
-    const finalOrder = [...new Set(order)];
+    const finalOrder = [...new Set(order)].filter(id => id !== 'CHART_EVOL_PATRIMONIO');
     defaultOrder.forEach(id => {
       if (!finalOrder.includes(id)) finalOrder.push(id);
     });
@@ -2345,7 +2650,13 @@ export default function ZenithApp() {
     const metricConfig = (settings?.zenith_config?.metrics?.[id] || { visible: true, label: id.replace('METRIC_', '') }) as ChartSlot;
     if (metricConfig.visible === false) return null;
 
-    const mainColor = metricConfig.color || (id === 'METRIC_ENTRADAS' ? 'var(--trend-up)' : id === 'METRIC_SAIDAS' ? 'var(--trend-down)' : 'var(--trend-yield)');
+    const mainColor = metricConfig.color || (
+      id === 'METRIC_ENTRADAS' ? 'var(--trend-up)' :
+      id === 'METRIC_SAIDAS' ? 'var(--trend-down)' :
+      id === 'METRIC_ARECEBER' ? 'var(--accent)' :
+      id === 'METRIC_INVESTIMENTOS' ? 'var(--trend-up)' :
+      'var(--trend-yield)'
+    );
     const opacity = (metricConfig.opacity || 100) / 100;
 
     switch (id) {
@@ -2358,7 +2669,7 @@ export default function ZenithApp() {
             value={(metrics.investments + metrics.in.total - metrics.out.total).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })} 
             percent="+2.4%" 
             trend="up" 
-            data={generateDailyData().slice(-10).map(d => ({ v: d.value }))} 
+            data={generateDailyData(metrics.investments + metrics.in.total - metrics.out.total).slice(-10).map(d => ({ v: d.value }))} 
             color={mainColor}
             opacity={opacity}
             privacy={privacyMode}
@@ -2402,7 +2713,22 @@ export default function ZenithApp() {
           />
         );
       case 'METRIC_ARECEBER':
-        return null; // Nested in CHART_DIST_CATEG
+        return (
+          <MiniMetricCard 
+            key={id}
+            id="to-receive"
+            label={metricConfig.label || t("A Receber", "To Receive")} 
+            value={(metrics.toReceive.total ?? 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })} 
+            percent={metrics.toReceive.var} 
+            trend={metrics.toReceive.trend} 
+            data={metrics.toReceive.data} 
+            color={mainColor}
+            opacity={opacity}
+            privacy={privacyMode}
+            onSettings={() => setIsHeritageSettingsOpen(true)}
+            resolveStyle={resolveStyle}
+          />
+        );
       case 'METRIC_RENDIMENTOS':
         return (
           <MiniMetricCard 
@@ -2421,7 +2747,22 @@ export default function ZenithApp() {
           />
         );
       case 'METRIC_INVESTIMENTOS':
-        return null; // Nested in CHART_ALOC_ATIV
+        return (
+          <MiniMetricCard 
+            key={id}
+            id="investments"
+            label={metricConfig.label || t("Investimentos", "Investments")} 
+            value={(metrics.investments ?? 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })} 
+            percent={metrics.investmentsVar} 
+            trend={metrics.investmentsTrend} 
+            data={metrics.investmentsData} 
+            color={mainColor}
+            opacity={opacity}
+            privacy={privacyMode}
+            onSettings={() => setIsHeritageSettingsOpen(true)}
+            resolveStyle={resolveStyle}
+          />
+        );
       default:
         return null;
     }
@@ -2441,7 +2782,7 @@ export default function ZenithApp() {
     switch (id) {
       case 'CHART_EVOL_PATRIMONIO':
         return (
-          <div key={id} className="h-48 w-full -mr-5 sm:-mr-6 mt-4 overflow-hidden">
+          <div key={id} className="h-48 w-full -mr-5 sm:-mr-6 mt-2 overflow-hidden">
             <ResponsiveContainer width="100%" height="100%">
               {visualType === 'Linha' || visualType === 'Área' ? (
                 <AreaChart 
@@ -2894,14 +3235,14 @@ export default function ZenithApp() {
 
   const syncDDA = useCallback(async () => {
     if (!user) return;
-    // Simulate finding a new DDA for the specific CPF
+    // Simulated DDA. CPF is only included when the user has one saved in their profile.
     const mockDDA = {
       beneficiary: 'ENEL Distribuição SP',
       value: 185.40,
       dueDate: serverTimestamp(),
       status: 'pending',
       uid: user.uid,
-      cpf: '097.166.479-05'
+      ...(profile?.cpf ? { cpf: profile.cpf } : {})
     };
     try {
       const ddaRef = doc(collection(db, 'ddas'));
@@ -2909,7 +3250,7 @@ export default function ZenithApp() {
     } catch (e) {
       handleFirestoreError(e, OperationType.WRITE, 'ddas');
     }
-  }, [user]);
+  }, [user, profile?.cpf]);
 
   const handleAcceptDDA = async (dda: DDA) => {
     try {
@@ -3001,14 +3342,6 @@ export default function ZenithApp() {
     }
   };
 
-  const handleCopyPix = (key: string, feedbackId: string) => {
-    if (!key) return;
-    navigator.clipboard.writeText(key).then(() => {
-      setCopyFeedback(feedbackId);
-      setTimeout(() => setCopyFeedback(null), 2000);
-    });
-  };
-
   const moveToTrash = async (item: any, collectionName: string) => {
     try {
       if (!user) return;
@@ -3032,35 +3365,8 @@ export default function ZenithApp() {
       }
 
       await batch.commit();
-      setCopyFeedback(t("Item movido para a lixeira!", "Item moved to trash!"));
-      setTimeout(() => setCopyFeedback(null), 3000);
     } catch (e) {
       handleFirestoreError(e, OperationType.DELETE, `${collectionName}/${item.id}`);
-    }
-  };
-
-  const handleSettleSplit = async (split: any) => {
-    try {
-      const batch = writeBatch(db);
-      const splitRef = doc(db, 'splits', split.id);
-      batch.update(splitRef, { status: 'paid' });
-      
-      const newTxRef = doc(collection(db, 'transactions'));
-      const participantName = users.find((u: any) => u.uid === split.uid)?.displayName || t('Participante', 'Participant');
-      
-      batch.set(newTxRef, {
-        label: `${t('Recebimento', 'Receipt')}: ${split.transactionLabel || participantName}`,
-        value: split.shareValue,
-        type: 'in',
-        date: serverTimestamp(),
-        uid: user!.uid,
-        createdAt: serverTimestamp()
-      });
-      
-      await batch.commit();
-      await recalculateBalances(user!.uid);
-    } catch (e) {
-      handleFirestoreError(e, OperationType.UPDATE, `splits/${split.id}`);
     }
   };
 
@@ -3168,9 +3474,6 @@ export default function ZenithApp() {
             </button>
           </div>
 
-          <p className="text-center text-[var(--text-muted)] text-[10px] font-bold uppercase tracking-widest">
-            {t("Protegido por Criptografia Militar", "Protected by Military-Grade Encryption")}
-          </p>
         </motion.div>
       </div>
     );
@@ -3190,44 +3493,75 @@ export default function ZenithApp() {
   }
   const seedMockData = async () => {
     if (!user) return;
-    const batch = writeBatch(db);
-    
-    // 1. Seed Assets
-    const mockAssets = [
-      { name: 'Tesouro Selic 2029', value: 5000, type: 'investment', subcategoria: 'Renda Fixa', emissor: 'Tesouro Nacional', taxaInflacao: 4.5, valorInvestido: 4800 },
-      { name: 'PETR4', value: 2500, type: 'investment', subcategoria: 'Ações', emissor: 'Petrobras', taxaInflacao: 4.5, valorInvestido: 2000 },
-      { name: 'HGLG11', value: 3000, type: 'investment', subcategoria: 'FIIs', emissor: 'Credit Suisse', taxaInflacao: 4.5, valorInvestido: 2800 },
-      { name: 'Bitcoin', value: 1500, type: 'investment', subcategoria: 'Cripto', emissor: 'Binance', taxaInflacao: 4.5, valorInvestido: 1000 },
-    ];
+    if (isSeedingRef.current) return;
 
-    mockAssets.forEach(a => {
-      const newDoc = doc(collection(db, 'assets'));
-      batch.set(newDoc, { ...a, uid: user.uid, createdAt: serverTimestamp() });
-    });
+    const warnExistingData = () => {
+      console.warn('Seed ignorado: o usuário já possui ativos ou familiares cadastrados.');
+      alert(t(
+        'Já existem dados neste perfil. O seed não será executado novamente.',
+        'This profile already has data. The seed will not run again.'
+      ));
+    };
 
-    // 2. Seed Family Members (Local Management)
-    const membersToSeed = [
-      { name: 'Rafael Knazh', email: 'rafael@zenith.com', photoURL: 'https://picsum.photos/seed/rafael/100/100' },
-      { name: 'Alexandre Knazh', email: 'alexandre@zenith.com', photoURL: 'https://picsum.photos/seed/alexandre/100/100' },
-      { name: 'Linda Knazh', email: 'linda@zenith.com', photoURL: 'https://picsum.photos/seed/linda/100/100' },
-      { name: 'Patrícia Knazh', email: 'patricia@zenith.com', photoURL: 'https://picsum.photos/seed/patricia/100/100' },
-      { name: 'Valdemar Knazh', email: 'valdemar@zenith.com', photoURL: 'https://picsum.photos/seed/valdemar/100/100' },
-    ];
+    if (assets.length > 0 || familyMembers.length > 0) {
+      warnExistingData();
+      return;
+    }
 
-    membersToSeed.forEach(m => {
-      const memberRef = doc(collection(db, 'family_members'));
-      batch.set(memberRef, {
-        name: m.name,
-        email: m.email,
-        photoURL: m.photoURL,
-        ownerUid: user.uid,
-        createdAt: serverTimestamp()
+    isSeedingRef.current = true;
+
+    try {
+      const [assetSnap, familySnap] = await Promise.all([
+        getDocs(query(collection(db, 'assets'), where('uid', '==', user.uid), limit(1))),
+        getDocs(query(collection(db, 'family_members'), where('ownerUid', '==', user.uid), limit(1)))
+      ]);
+
+      if (!assetSnap.empty || !familySnap.empty) {
+        warnExistingData();
+        return;
+      }
+
+      const batch = writeBatch(db);
+
+      // 1. Seed Assets
+      const mockAssets = [
+        { name: 'Tesouro Selic 2029', value: 5000, type: 'investment', subcategoria: 'Renda Fixa', emissor: 'Tesouro Nacional', taxaInflacao: 4.5, valorInvestido: 4800 },
+        { name: 'PETR4', value: 2500, type: 'investment', subcategoria: 'Ações', emissor: 'Petrobras', taxaInflacao: 4.5, valorInvestido: 2000 },
+        { name: 'HGLG11', value: 3000, type: 'investment', subcategoria: 'FIIs', emissor: 'Credit Suisse', taxaInflacao: 4.5, valorInvestido: 2800 },
+        { name: 'Bitcoin', value: 1500, type: 'investment', subcategoria: 'Cripto', emissor: 'Binance', taxaInflacao: 4.5, valorInvestido: 1000 },
+      ];
+
+      mockAssets.forEach(a => {
+        const newDoc = doc(collection(db, 'assets'));
+        batch.set(newDoc, { ...a, uid: user.uid, createdAt: serverTimestamp() });
       });
-    });
 
-    await batch.commit().catch(e => handleFirestoreError(e, OperationType.WRITE, 'sync_family_batch'));
-    setCopyFeedback(t("Dados de exemplo e família sincronizados!", "Sample data and family synchronized!"));
-    setTimeout(() => setCopyFeedback(null), 3000);
+      // 2. Seed Family Members (Local Management)
+      const membersToSeed = [
+        { name: 'Rafael Knazh', email: 'rafael@zenith.com', photoURL: 'https://picsum.photos/seed/rafael/100/100' },
+        { name: 'Alexandre Knazh', email: 'alexandre@zenith.com', photoURL: 'https://picsum.photos/seed/alexandre/100/100' },
+        { name: 'Linda Knazh', email: 'linda@zenith.com', photoURL: 'https://picsum.photos/seed/linda/100/100' },
+        { name: 'Patrícia Knazh', email: 'patricia@zenith.com', photoURL: 'https://picsum.photos/seed/patricia/100/100' },
+        { name: 'Valdemar Knazh', email: 'valdemar@zenith.com', photoURL: 'https://picsum.photos/seed/valdemar/100/100' },
+      ];
+
+      membersToSeed.forEach(m => {
+        const memberRef = doc(collection(db, 'family_members'));
+        batch.set(memberRef, {
+          name: m.name,
+          email: m.email,
+          photoURL: m.photoURL,
+          ownerUid: user.uid,
+          createdAt: serverTimestamp()
+        });
+      });
+
+      await batch.commit();
+    } catch (e) {
+      handleFirestoreError(e, OperationType.WRITE, 'sync_family_batch');
+    } finally {
+      isSeedingRef.current = false;
+    }
   };
 
   return (
@@ -3304,6 +3638,37 @@ export default function ZenithApp() {
               </motion.div>
             )}
           </AnimatePresence>
+
+          {firestoreIssues.length > 0 && (
+            <div className="fixed bottom-28 left-4 right-4 z-[130] mx-auto max-w-md">
+              <div className="bg-[var(--bg-card)] border border-red-500/40 rounded-2xl p-4 shadow-2xl backdrop-blur-xl">
+                <div className="flex items-center justify-between gap-3 mb-2">
+                  <p className="text-[10px] font-black uppercase tracking-widest text-red-400">{t("Diagnóstico Firestore", "Firestore Diagnostics")}</p>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => {
+                        const report = firestoreIssues.map(issue => `${issue.code} | ${issue.operationType} | ${issue.path || 'sem caminho'}`).join('\n');
+                        if (navigator.clipboard) navigator.clipboard.writeText(report);
+                      }}
+                      className="text-[9px] font-bold uppercase tracking-widest text-[var(--text-secondary)] hover:text-white px-2 py-1 rounded-lg bg-white/5"
+                    >
+                      {t("Copiar", "Copy")}
+                    </button>
+                    <button onClick={() => setFirestoreIssues([])} className="text-[var(--text-secondary)] hover:text-white p-1">
+                      <X size={14} />
+                    </button>
+                  </div>
+                </div>
+                <div className="space-y-1 max-h-32 overflow-y-auto">
+                  {firestoreIssues.map(issue => (
+                    <p key={issue.id} className="text-[10px] font-mono leading-relaxed text-[var(--text-secondary)] break-all">
+                      {issue.code} | {issue.operationType} | {issue.path || t("sem caminho", "no path")}
+                    </p>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
 
           {currentTab === 'Armazenamento' && (
             <StorageView transactions={transactions} assets={assets} reports={reports} language={settings?.language} />
@@ -3439,7 +3804,7 @@ export default function ZenithApp() {
                   </div>
                 </div>
                 
-                <div className="flex items-center gap-3 mb-6">
+                <div className="flex items-center gap-3 mb-2">
                   <h2 className="text-3xl font-mono tracking-tighter font-medium text-[var(--text-primary)]">
                     {privacyMode ? '••••••••' : (totalNetWorth ?? 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
                   </h2>
@@ -3457,6 +3822,7 @@ export default function ZenithApp() {
                     {privacyMode ? <EyeOff size={14} /> : <Eye size={14} />}
                   </button>
                 </div>
+                {renderChart('CHART_EVOL_PATRIMONIO')}
               </section>
 
               {/* DASHBOARD INTEGRADO (DYNAMIC ORDER) */}
@@ -3475,16 +3841,7 @@ export default function ZenithApp() {
             <DetalhesGastosPage 
               transactions={transactions}
               splits={splits}
-              splitProposals={splitProposals}
-              reports={reports}
-              users={users}
-              familyMembers={familyMembers}
-              allAvailableParticipants={allAvailableParticipants}
-              profile={profile}
-              privacyMode={privacyMode}
-              onSeed={seedMockData}
               language={settings?.language}
-              onNavigateToRateio={() => setCurrentTab('Rateio')}
               onEdit={(tx: any) => {
                 setSelectedTransaction(tx);
                 setIsEditingTransaction(true);
@@ -3518,7 +3875,6 @@ export default function ZenithApp() {
               language={settings?.language}
               transactions={transactions}
               assets={assets}
-              profile={profile}
             />
           )}
 
@@ -3530,25 +3886,6 @@ export default function ZenithApp() {
             />
           )}
 
-          {currentTab === 'Rateio' && (
-            <div className="py-20 text-center flex flex-col items-center justify-center space-y-4">
-              <div className="w-16 h-16 bg-white/5 rounded-full flex items-center justify-center text-[var(--accent)]">
-                <Users size={32} />
-              </div>
-              <div>
-                <h3 className="text-xl font-bold text-white">{t("Módulo Relocado", "Module Relocated")}</h3>
-                <p className="text-[var(--text-muted)] text-sm max-w-[280px] mx-auto mt-2">
-                  {t("A gestão de rateio agora está integrada à sua Carteira para uma visão unificada.", "Split management is now integrated into your Wallet for a unified view.")}
-                </p>
-              </div>
-              <button 
-                onClick={() => setCurrentTab('Carteira')}
-                className="px-8 py-4 bg-[var(--accent)] text-[var(--bg-app)] rounded-2xl text-[10px] font-bold uppercase tracking-widest shadow-lg shadow-[var(--accent)]/20"
-              >
-                {t("Acessar Carteira", "Access Wallet")}
-              </button>
-            </div>
-          )}
         </main>
 
         {/* --- MODALS --- */}
@@ -3598,12 +3935,99 @@ export default function ZenithApp() {
               language={settings.language}
               investorProfile={investorProfile}
               user={user}
+              getApiKey={getGeminiApiKey}
+              onApiKeyError={handleAiError}
               onAdd={async (data) => {
                 const newAssetRef = doc(collection(db, 'assets'));
                 await setDoc(newAssetRef, { ...data, uid: user.uid, createdAt: serverTimestamp() }).catch(e => handleFirestoreError(e, OperationType.CREATE, 'assets'));
                 setIsAddingAsset(false);
               }}
             />
+          )}
+
+          {/* Gemini API Key (BYOK) Modal */}
+          {isApiKeyModalOpen && (
+            <div className="fixed inset-0 z-[150] flex items-center justify-center p-6 bg-black/60 backdrop-blur-sm">
+              <motion.div
+                initial={{ opacity: 0, scale: 0.9 }}
+                animate={{ opacity: 1, scale: 1 }}
+                className="bg-[var(--bg-card)] border border-[var(--border-card)] rounded-[32px] p-8 max-w-md w-full space-y-5 shadow-2xl"
+              >
+                <div className="w-16 h-16 bg-[var(--accent)]/10 rounded-2xl flex items-center justify-center mx-auto text-[var(--accent)]">
+                  <KeyRound size={32} />
+                </div>
+
+                <div className="space-y-2 text-center">
+                  <h3 className="text-xl font-bold text-[var(--text-primary)]">
+                    {t('Chave da API Gemini', 'Gemini API Key')}
+                  </h3>
+                  <p className="text-xs text-[var(--text-secondary)] leading-relaxed">
+                    {t(
+                      'Para usar os recursos de IA, informe sua própria chave do Google AI Studio. Ela fica salva apenas neste navegador.',
+                      'To use AI features, enter your own Google AI Studio key. It is stored only in this browser.'
+                    )}
+                  </p>
+                </div>
+
+                <input
+                  type="password"
+                  autoFocus
+                  value={apiKeyDraft}
+                  onChange={(e) => {
+                    setApiKeyDraft(e.target.value);
+                    setApiKeyError(null);
+                  }}
+                  placeholder="AIza..."
+                  className="w-full bg-[var(--bg-app)] border border-[var(--border-card)] rounded-xl p-3 text-[var(--text-primary)] text-sm focus:border-[var(--accent)] outline-none font-mono"
+                />
+
+                {apiKeyError && (
+                  <p className="text-xs text-red-500 font-medium">{apiKeyError}</p>
+                )}
+
+                <p className="text-[10px] text-[var(--text-muted)] text-center leading-relaxed">
+                  {t('Obtenha uma chave em', 'Get a key at')}{' '}
+                  <a
+                    href="https://aistudio.google.com/app/apikey"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-[var(--accent)] underline"
+                  >
+                    aistudio.google.com/app/apikey
+                  </a>
+                </p>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <button
+                    onClick={() => setIsApiKeyModalOpen(false)}
+                    className="py-3 rounded-xl border border-[var(--border-card)] text-[var(--text-secondary)] text-[10px] font-bold uppercase tracking-widest hover:bg-white/5 transition-colors"
+                  >
+                    {t('Agora não', 'Not now')}
+                  </button>
+                  <button
+                    onClick={() => {
+                      const key = apiKeyDraft.trim();
+                      if (!key) {
+                        setApiKeyError(t('Informe uma chave válida.', 'Enter a valid key.'));
+                        return;
+                      }
+                      try {
+                        localStorage.setItem(GEMINI_API_KEY_STORAGE, key);
+                      } catch {
+                        // Private mode/storage blocked: keep the key in memory for this session.
+                      }
+                      setGeminiApiKey(key);
+                      setIsApiKeyModalOpen(false);
+                      setApiKeyError(null);
+                      setError(null);
+                    }}
+                    className="py-3 rounded-xl bg-[var(--accent)] text-[var(--bg-app)] text-[10px] font-black uppercase tracking-widest hover:bg-[var(--accent)]/80 transition-colors"
+                  >
+                    {t('Salvar chave', 'Save key')}
+                  </button>
+                </div>
+              </motion.div>
+            </div>
           )}
 
           {/* Profile Edit Modal */}
@@ -4008,13 +4432,6 @@ function StorageView({ transactions, assets, reports, language }: any) {
         <p className="text-sm text-[var(--text-muted)] leading-relaxed">
           {t('A Zenith utiliza Firestore Enterprise para garantir persistência e segurança. O espaço ocupado é proporcional ao número de registros. Para liberar espaço, você pode gerenciar itens na lixeira ou remover ativos antigos.', 'Zenith uses Firestore Enterprise to ensure persistence and security. Occupied space is proportional to the number of records. To free up space, you can manage items in the trash or remove old assets.')}
         </p>
-        <div className="h-2 w-full bg-[var(--bg-app)] rounded-full overflow-hidden">
-          <div className="h-full bg-[var(--accent)] w-1/4" />
-        </div>
-        <div className="flex justify-between items-center text-[10px] font-bold text-[var(--text-muted)] uppercase tracking-widest">
-          <span>{t('Usado', 'Used')}</span>
-          <span>500 records limit (Spark)</span>
-        </div>
       </div>
     </div>
   );
@@ -4297,12 +4714,13 @@ function ProcessingOverlay({ language, stage, progress }: { language: string, st
   );
 }
 
-function AddAssetModal({ onClose, onAdd, language, investorProfile, user }: any) {
+function AddAssetModal({ onClose, onAdd, language, investorProfile, user, getApiKey, onApiKeyError }: any) {
   const t = (pt: string, en: string) => (language === 'en-US' ? en : pt);
   const [formData, setFormData] = useState({ name: '', value: 0, type: 'liquidity', detail: '' });
   const [isExtracting, setIsExtracting] = useState(false);
   const [extractionStage, setExtractionStage] = useState('');
   const [extractionProgress, setExtractionProgress] = useState(0);
+  const [extractionError, setExtractionError] = useState<string | null>(null);
   const [dragActive, setDragActive] = useState(false);
 
   const handleAdd = () => {
@@ -4319,7 +4737,11 @@ function AddAssetModal({ onClose, onAdd, language, investorProfile, user }: any)
 
   const handleFileUpload = async (file: File) => {
     if (!file) return;
-    
+
+    const apiKey = getApiKey();
+    if (!apiKey) return;
+
+    setExtractionError(null);
     setIsExtracting(true);
     setExtractionStage(t("Lendo arquivo...", "Reading file..."));
     setExtractionProgress(0.1);
@@ -4335,9 +4757,8 @@ function AddAssetModal({ onClose, onAdd, language, investorProfile, user }: any)
         setExtractionStage(t("Extraindo metadados...", "Extracting metadata..."));
         setExtractionProgress(0.4);
 
-        const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-        let part;
-        
+        let documentInput: { data?: string; text?: string; mimeType?: string };
+
         if (isSpreadsheet) {
           const data = new Uint8Array(e.target?.result as ArrayBuffer);
           const workbook = read(data, { type: 'array' });
@@ -4346,61 +4767,26 @@ function AddAssetModal({ onClose, onAdd, language, investorProfile, user }: any)
             const worksheet = workbook.Sheets[sheetName];
             content += `Sheet: ${sheetName}\n${utils.sheet_to_csv(worksheet)}\n`;
           });
-          part = { text: `Document content (Spreadsheet converted to CSV):\n${content}` };
+          documentInput = { text: `Document content (Spreadsheet converted to CSV):\n${content}` };
         } else if (isImageOrPdf) {
           const base64Data = e.target?.result?.toString().split(',')[1];
-          if (!base64Data) return;
-          part = { inlineData: { data: base64Data, mimeType: file.type || 'application/octet-stream' } };
+          if (!base64Data) {
+            setIsExtracting(false);
+            return;
+          }
+          documentInput = { data: base64Data, mimeType: file.type || 'application/octet-stream' };
         } else {
-          const textContent = e.target?.result?.toString();
-          part = { text: `Document content (Text):\n${textContent}` };
+          documentInput = { text: `Document content (Text):\n${e.target?.result?.toString()}` };
         }
 
         setExtractionStage(t("Consultando IA Zenith...", "Consulting Zenith AI..."));
         setExtractionProgress(0.8);
 
-        const response = await ai.models.generateContent({
-          model: "gemini-3-flash-preview",
-          contents: [
-            {
-              parts: [
-                { text: `Você receberá um documento financeiro em formato de Imagem, PDF ou Texto (Planilha convertida).
-                  1. Se for IMAGEM/PDF: Use OCR avançado para ler tabelas, cabeçalhos e rodapés.
-                  2. Se for TEXTO/PLANILHA: Analise as colunas de 'Valor', 'Data' e 'Descrição'.
-                  3. Identifique o tipo de ativo (CDB, Ações, FII, Tesouro) e o emissor.
-                  4. Gere um INSIGHT baseado no Perfil [${investorProfile}] fornecido.
-                  5. Responda APENAS o JSON: { "ativos": [{ "name": "string", "value": 0.0, "type": "investment", "subcategoria": "string", "emissor": "string" }], "insight": "string", "total_detectado": 0.0 }` 
-                },
-                part
-              ]
-            }
-          ],
-          config: {
-            responseMimeType: "application/json",
-            responseSchema: {
-              type: Type.OBJECT,
-              properties: {
-                ativos: {
-                  type: Type.ARRAY,
-                  items: {
-                    type: Type.OBJECT,
-                    properties: {
-                      name: { type: Type.STRING },
-                      value: { type: Type.NUMBER },
-                      type: { type: Type.STRING, enum: ['liquidity', 'investment', 'physical'] },
-                      subcategoria: { type: Type.STRING },
-                      emissor: { type: Type.STRING }
-                    }
-                  }
-                },
-                insight: { type: Type.STRING },
-                total_detectado: { type: Type.NUMBER }
-              }
-            }
-          }
+        const result = await extractAssets(apiKey, {
+          ...documentInput,
+          investorProfile
         });
 
-        const result = JSON.parse(response.text || '{}');
         
         setExtractionStage(t("Sincronizando Carteira...", "Syncing Wallet..."));
         setExtractionProgress(0.9);
@@ -4443,6 +4829,8 @@ function AddAssetModal({ onClose, onAdd, language, investorProfile, user }: any)
     } catch (error) {
       console.error("Erro na extração:", error);
       setIsExtracting(false);
+      setExtractionError(getAiErrorMessage(error, language));
+      onApiKeyError(error);
     }
   };
 
@@ -4516,6 +4904,10 @@ function AddAssetModal({ onClose, onAdd, language, investorProfile, user }: any)
               </>
             )}
           </div>
+
+          {extractionError && (
+            <p className="text-[10px] text-red-500 font-medium leading-relaxed">{extractionError}</p>
+          )}
 
           <div className="space-y-4">
             <div>
@@ -5015,54 +5407,6 @@ function MiniMetricCard({ id, label, value, percent, trend, data, color, opacity
   );
 }
 
-function SplitsList({ splits, users, onCopyPix, onSettle, pixKey, copyFeedback, language }: any) {
-  const t = (pt: string, en: string) => (language === 'en-US' ? en : pt);
-  
-  if (splits.length === 0) return null;
-
-  return (
-    <div className="mt-4 space-y-2 max-h-40 overflow-y-auto pr-1 custom-scrollbar">
-      {splits.map((split: any, idx: number) => {
-        const participant = users.find((u: any) => u.uid === split.uid);
-        const isCopied = copyFeedback === split.id;
-        
-        return (
-          <div key={`split-item-${split.id}-${idx}`} className="flex items-center justify-between p-3 bg-[var(--bg-app)]/50 rounded-xl border border-[var(--border-card)]">
-            <div className="flex items-center gap-2">
-              <div className="w-6 h-6 rounded-full overflow-hidden bg-[var(--accent)]/10">
-                <img src={participant?.photoURL || `https://picsum.photos/seed/${split.uid}/50/50`} alt="" className="w-full h-full object-cover" />
-              </div>
-              <div>
-                <p className="text-[10px] font-bold text-[var(--text-primary)] leading-none mb-1">{participant?.displayName || '...'}</p>
-                <p className="text-[10px] font-mono text-[var(--accent)] leading-none">
-                  {split.shareValue.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
-                </p>
-              </div>
-            </div>
-            
-            <div className="flex items-center gap-1">
-              <button 
-                onClick={() => onCopyPix(pixKey, split.id)}
-                className={`p-2 rounded-lg transition-all ${isCopied ? 'bg-[var(--trend-up)] text-[var(--bg-app)]' : 'bg-[var(--accent)]/10 text-[var(--accent)] hover:bg-[var(--accent)]/20'}`}
-                title={t('Copiar Minha Chave Pix', 'Copy My Pix Key')}
-              >
-                {isCopied ? <Check size={12} /> : <Copy size={12} />}
-              </button>
-              <button 
-                onClick={() => onSettle(split)}
-                className="p-2 rounded-lg bg-[var(--text-primary)]/5 text-[var(--text-muted)] hover:text-[var(--accent)] hover:bg-[var(--accent)]/10 transition-all"
-                title={t('Confirmar Recebimento', 'Confirm Receipt')}
-              >
-                <CircleCheck size={12} />
-              </button>
-            </div>
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
 function DDASuggestion({ dda, onAccept, onReject, privacy, language }: { dda: DDA, onAccept: (dda: DDA) => void, onReject: (dda: DDA) => void, privacy: boolean, language: string }) {
   const t = (pt: string, en: string) => (language === 'en-US' ? en : pt);
   return (
@@ -5082,7 +5426,7 @@ function DDASuggestion({ dda, onAccept, onReject, privacy, language }: { dda: DD
           <p className="text-[10px] text-[var(--text-muted)]">
             {privacy ? '••••••' : (dda.value ?? 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })} • 
             {t("Vencimento", "Due Date")}: {dda.dueDate?.toDate ? dda.dueDate.toDate().toLocaleDateString('pt-BR') : 'Hoje'} • 
-            CPF: {dda.cpf || '097.166.479-05'}
+            CPF: {dda.cpf || t('Não informado', 'Not provided')}
           </p>
         </div>
       </div>
@@ -5144,20 +5488,11 @@ function HomeInvestmentCard({ saldoTotal, perfilAtual, privacyMode, onClick }: a
 function DetalhesGastosPage({ 
   transactions, 
   splits, 
-  splitProposals, 
-  reports, 
-  users, 
-  familyMembers, 
-  allAvailableParticipants,
-  profile, 
-  privacyMode, 
-  onSeed, 
   language, 
   onEdit, 
   onDelete 
 }: any) {
   const t = (pt: string, en: string) => (language === 'en-US' ? en : pt);
-  const [activeTab, setActiveTab] = useState<'transacoes' | 'rateio'>('transacoes');
   
   const totalAReceber = splits.reduce((acc: number, s: any) => acc + (s.shareValue || 0), 0);
 
@@ -5187,39 +5522,9 @@ function DetalhesGastosPage({
           <h2 className="text-2xl font-bold text-white tracking-tight">{t('Carteira', 'Wallet')}</h2>
           <p className="text-[var(--text-muted)] text-xs">{t('Gestão financeira completa', 'Complete financial management')}</p>
         </div>
-        <div className="flex bg-[var(--bg-card)] p-1 rounded-2xl border border-[var(--border-card)]">
-          <button 
-            onClick={() => setActiveTab('transacoes')}
-            className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${activeTab === 'transacoes' ? 'bg-[var(--accent)] text-[var(--bg-app)] shadow-lg shadow-[var(--accent)]/20' : 'text-[var(--text-muted)] hover:text-white'}`}
-          >
-            {t('Transações', 'Transactions')}
-          </button>
-          <button 
-            onClick={() => setActiveTab('rateio')}
-            className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${activeTab === 'rateio' ? 'bg-[var(--accent)] text-[var(--bg-app)] shadow-lg shadow-[var(--accent)]/20' : 'text-[var(--text-muted)] hover:text-white'}`}
-          >
-            {t('Rateio', 'Split')}
-          </button>
-        </div>
       </header>
 
-      {activeTab === 'rateio' ? (
-        <RateioFamiliarView 
-          transactions={transactions}
-          splits={splits}
-          splitProposals={splitProposals}
-          reports={reports}
-          users={users}
-          familyMembers={familyMembers}
-          allAvailableParticipants={allAvailableParticipants}
-          language={language}
-          profile={profile}
-          privacyMode={privacyMode}
-          onSeed={onSeed}
-        />
-      ) : (
-        <>
-          {/* Header com Card A Receber */}
+      {/* Header com Card A Receber */}
           <section className="bg-[var(--bg-card)] border border-[var(--border-card)] rounded-[32px] p-6 relative overflow-hidden group">
         <div className="absolute top-0 right-0 w-32 h-32 bg-[var(--accent)]/5 rounded-full -mr-16 -mt-16 blur-3xl group-hover:bg-[var(--accent)]/10 transition-colors" />
         <div className="flex justify-between items-start mb-4">
@@ -5227,13 +5532,6 @@ function DetalhesGastosPage({
             <span className="text-[10px] font-black text-[var(--accent)] uppercase tracking-[0.3em]">{t("Gestão de Créditos", "Credit Management")}</span>
             <div className="flex items-center gap-3 mt-1">
               <h3 className="text-2xl font-medium text-[var(--text-primary)]">{t("A Receber", "To Receive")}</h3>
-              <button 
-                onClick={() => setActiveTab('rateio')}
-                className="px-3 py-1 bg-[var(--accent)]/10 text-[var(--accent)] rounded-lg text-[10px] font-bold uppercase tracking-widest hover:bg-[var(--accent)]/20 transition-all flex items-center gap-1"
-              >
-                <Users size={12} />
-                {t("Conciliar", "Conciliate")}
-              </button>
             </div>
           </div>
           <div className="w-12 h-12 rounded-2xl bg-[var(--accent)]/10 flex items-center justify-center text-[var(--accent)]">
@@ -5303,15 +5601,89 @@ function DetalhesGastosPage({
           ))}
         </div>
       </div>
-        </>
-      )}
     </div>
   );
 }
 
-function ZenithIAView({ language, transactions, assets, profile }: any) {
+function ZenithIAView({ language, transactions, assets }: any) {
   const t = (pt: string, en: string) => (language === 'en-US' ? en : pt);
-  
+  const now = new Date();
+  const currentMonth = now.getMonth();
+  const currentYear = now.getFullYear();
+  const formatBRL = (value: number) => value.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+
+  const getMonthTransactions = (month: number, year: number) => transactions.filter((tx: any) => {
+    const date = tx.date?.toDate ? tx.date.toDate() : (tx.date ? new Date(tx.date) : null);
+    return date && !isNaN(date.getTime()) && date.getMonth() === month && date.getFullYear() === year;
+  });
+
+  const sumByType = (txs: any[], types: string[]) => txs
+    .filter((tx: any) => types.includes(tx.type))
+    .reduce((acc: number, tx: any) => acc + (tx.value ?? 0), 0);
+
+  const expensesByCategory = (txs: any[]) => txs
+    .filter((tx: any) => tx.type === 'out')
+    .reduce<Record<string, number>>((acc, tx: any) => {
+      const category = tx.categoria_primaria || 'Outros';
+      acc[category] = (acc[category] ?? 0) + (tx.value ?? 0);
+      return acc;
+    }, {});
+
+  const currentMonthTx = getMonthTransactions(currentMonth, currentYear);
+  const previousMonthDate = new Date(currentYear, currentMonth - 1, 1);
+  const previousMonthTx = getMonthTransactions(previousMonthDate.getMonth(), previousMonthDate.getFullYear());
+  const currentExpenses = expensesByCategory(currentMonthTx);
+  const previousExpenses = expensesByCategory(previousMonthTx);
+  const topCategory = Object.entries(currentExpenses).sort((a, b) => b[1] - a[1])[0];
+
+  let dailyInsight: string;
+  if (topCategory) {
+    const [category, value] = topCategory;
+    const previousValue = previousExpenses[category] ?? 0;
+
+    if (previousValue > 0) {
+      const variation = ((value - previousValue) / previousValue) * 100;
+      dailyInsight = t(
+        `Sua maior despesa este mês é "${category}" (${formatBRL(value)}), ${variation >= 0 ? 'alta' : 'queda'} de ${Math.abs(variation).toFixed(1)}% em relação ao mês anterior.`,
+        `Your largest expense this month is "${category}" (${formatBRL(value)}), ${variation >= 0 ? 'up' : 'down'} ${Math.abs(variation).toFixed(1)}% from last month.`
+      );
+    } else {
+      dailyInsight = t(
+        `Sua maior despesa este mês é "${category}", totalizando ${formatBRL(value)}.`,
+        `Your largest expense this month is "${category}", totaling ${formatBRL(value)}.`
+      );
+    }
+  } else {
+    dailyInsight = t(
+      'Ainda não há despesas registradas neste mês. Adicione transações para receber insights.',
+      'There are no expenses registered this month yet. Add transactions to receive insights.'
+    );
+  }
+
+  const recentMonths = [1, 2, 3].map(offset => {
+    const date = new Date(currentYear, currentMonth - offset, 1);
+    const txs = getMonthTransactions(date.getMonth(), date.getFullYear());
+    return {
+      hasData: txs.length > 0,
+      net: sumByType(txs, ['in', 'yield']) - sumByType(txs, ['out'])
+    };
+  });
+  const monthsWithData = recentMonths.filter(month => month.hasData);
+  const averageNet = monthsWithData.length > 0
+    ? monthsWithData.reduce((acc, month) => acc + month.net, 0) / monthsWithData.length
+    : 0;
+  const totalAssets = assets.reduce((acc: number, asset: any) => acc + (asset.value ?? 0), 0);
+
+  const wealthSummary = monthsWithData.length > 0 || totalAssets > 0
+    ? t(
+      `Seu patrimônio atual é ${formatBRL(totalAssets)}. Nos últimos ${monthsWithData.length} ${monthsWithData.length === 1 ? 'mês' : 'meses'} com movimentação, seu fluxo médio mensal foi ${formatBRL(averageNet)}.`,
+      `Your current net worth is ${formatBRL(totalAssets)}. Over the last ${monthsWithData.length} ${monthsWithData.length === 1 ? 'month' : 'months'} with activity, your average monthly cash flow was ${formatBRL(averageNet)}.`
+    )
+    : t(
+      'Cadastre ativos e transações para ver um resumo baseado nos seus dados.',
+      'Add assets and transactions to see a summary based on your data.'
+    );
+
   return (
     <div className="space-y-8 pb-32">
       <div className="flex flex-col items-center text-center space-y-4 py-10">
@@ -5338,25 +5710,20 @@ function ZenithIAView({ language, transactions, assets, profile }: any) {
             <span className="text-xs font-bold uppercase tracking-widest text-[var(--text-primary)]">{t("Insight do Dia", "Daily Insight")}</span>
           </div>
           <p className="text-sm text-[var(--text-secondary)] leading-relaxed italic">
-            "{t("Notei que seus gastos com 'Energia' subiram 15% este mês. Que tal revisar o uso do ar-condicionado?", "I noticed your 'Energy' expenses rose 15% this month. How about reviewing the air conditioning use?")}"
+            "{dailyInsight}"
           </p>
         </div>
 
         <div className="bg-[var(--bg-card)] border border-[var(--border-card)] rounded-[32px] p-6 space-y-4">
           <div className="flex items-center gap-3">
             <TrendingUp size={20} className="text-[var(--accent)]" />
-            <span className="text-xs font-bold uppercase tracking-widest text-[var(--text-primary)]">{t("Projeção de Patrimônio", "Wealth Projection")}</span>
+            <span className="text-xs font-bold uppercase tracking-widest text-[var(--text-primary)]">{t("Patrimônio e Fluxo", "Net Worth & Cash Flow")}</span>
           </div>
           <p className="text-sm text-[var(--text-secondary)] leading-relaxed">
-            {t("Mantendo sua taxa de poupança atual, você atingirá sua meta de 'Liberdade Financeira' em 8.4 anos.", "Maintaining your current savings rate, you will reach your 'Financial Freedom' goal in 8.4 years.")}
+            {wealthSummary}
           </p>
         </div>
       </div>
-
-      <button className="w-full py-5 bg-[var(--accent)] text-[var(--bg-app)] rounded-2xl font-black text-[10px] uppercase tracking-widest hover:bg-[var(--accent)]/80 transition-all flex items-center justify-center gap-3">
-        <Sparkles size={16} />
-        {t("Gerar Relatório Completo", "Generate Full Report")}
-      </button>
     </div>
   );
 }

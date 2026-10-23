@@ -231,7 +231,6 @@ export const HeritageSettings: React.FC<HeritageSettingsProps> = ({
   };
 
   const DEFAULT_DASHBOARD_ORDER = [
-    'CHART_EVOL_PATRIMONIO',
     'METRIC_ENTRADAS',
     'METRIC_SAIDAS',
     'METRIC_RENDIMENTOS',

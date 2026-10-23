@@ -42,8 +42,9 @@ service cloud.firestore {
     //   - ownerUid: string (required, owner who is owed)
     //   - transactionId: string (required)
     //   - shareValue: number (required)
-    //   - status: string (required, one of ['pending', 'paid'])
+    //   - status: string (required, one of ['pending', 'paid', 'consolidated'])
     //   - createdAt: timestamp (optional)
+    //   - approvedAt: timestamp (optional, set when a report is approved)
     //
     // Collection: settings
     // Document ID: userId (from Auth)
@@ -156,15 +157,16 @@ service cloud.firestore {
 
     function isValidSplit(data) {
       let requiredFields = ['uid', 'ownerUid', 'transactionId', 'shareValue', 'status'];
-      let allowedFields = ['uid', 'ownerUid', 'transactionId', 'shareValue', 'status', 'createdAt', 'transactionLabel'];
+      let allowedFields = ['uid', 'ownerUid', 'transactionId', 'shareValue', 'status', 'createdAt', 'transactionLabel', 'approvedAt'];
       return data.keys().hasAll(requiredFields) &&
              data.keys().hasOnly(allowedFields) &&
              data.uid is string &&
              data.ownerUid is string &&
              data.transactionId is string &&
              data.shareValue is number && data.shareValue > 0 &&
-             data.status in ['pending', 'paid'] &&
+             data.status in ['pending', 'paid', 'consolidated'] &&
              (!('createdAt' in data) || data.createdAt is timestamp) &&
+             (!('approvedAt' in data) || data.approvedAt is timestamp) &&
              (!('transactionLabel' in data) || data.transactionLabel is string);
     }
 
@@ -254,7 +256,7 @@ service cloud.firestore {
              data.uid == request.auth.uid &&
              data.month is number && data.month >= 0 && data.month <= 11 &&
              data.year is number &&
-             data.status in ['pending', 'approved', 'rejected'] &&
+             data.status in ['pending', 'approved', 'consolidated', 'rejected'] &&
              (!('totalConsolidated' in data) || data.totalConsolidated is number) &&
              (!('participantsSummary' in data) || data.participantsSummary is list) &&
              (!('iaFeedback' in data) || data.iaFeedback is string) &&
@@ -286,10 +288,23 @@ service cloud.firestore {
     // ===============================================================
 
     match /users/{userId} {
-      // PRD: Apenas o dono pode ler/escrever seus dados.
-      // Ajuste: Necessário leitura para autenticados para permitir seleção de participantes em rateios.
-      allow read: if isAuthenticated();
-      allow create, update: if request.auth.uid == userId && isValidUser(request.resource.data);
+      // Own profile can be fetched individually (get). Collection listing (list) is
+      // reserved for admins to avoid exposing every user's email/pix_key.
+      allow get: if isAuthenticated() && (request.auth.uid == userId || isAdmin());
+
+      // On creation, a regular user cannot grant themselves the admin role.
+      allow create: if request.auth.uid == userId &&
+                       isValidUser(request.resource.data) &&
+                       (!('role' in request.resource.data) ||
+                        request.resource.data.role == 'user' ||
+                        isAdmin());
+
+      // Role changes are admin-only. Non-admins must keep their current role.
+      allow update: if request.auth.uid == userId &&
+                       isValidUser(request.resource.data) &&
+                       (!('role' in request.resource.data) ||
+                        (('role' in resource.data) && request.resource.data.role == resource.data.role) ||
+                        isAdmin());
     }
 
     match /participants/{participantId} {
@@ -406,7 +421,7 @@ service cloud.firestore {
       allow create: if isAuthenticated() && isValidReport(request.resource.data);
       allow update: if isDocOwner() && (
         isValidReport(request.resource.data) || 
-        (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status']) && request.resource.data.status == 'approved')
+        (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status']) && request.resource.data.status in ['approved', 'consolidated'])
       );
       allow delete: if isDocOwner() || isAdmin();
     }

@@ -113,23 +113,50 @@ export const calculateEvolutionData = (assets: any[], transactions: any[]) => {
 
 export const calculateCashFlowData = (transactions: any[]) => {
   const months = ['JAN', 'FEV', 'MAR', 'ABR', 'MAI', 'JUN', 'JUL', 'AGO', 'SET', 'OUT', 'NOV', 'DEZ'];
-  const currentMonth = new Date().getMonth();
-  
-  return months.map((name, index) => {
-    const isPredicted = index > currentMonth;
+  const now = new Date();
+  const currentMonth = now.getMonth();
+  const currentYear = now.getFullYear();
+
+  const getMonthValue = (month: number, year: number) => {
     const monthTx = transactions.filter(t => {
-      const txDate = t.date?.toDate ? t.date.toDate() : new Date();
-      return txDate.getMonth() === index;
+      const txDate = t.date?.toDate ? t.date.toDate() : (t.date ? new Date(t.date) : null);
+      if (!txDate || isNaN(txDate.getTime())) return false;
+      return txDate.getMonth() === month && txDate.getFullYear() === year;
     });
 
-    const income = monthTx.filter(t => t.type === 'in' || t.type === 'yield').reduce((acc, t) => Math.round((acc + t.value) * 100) / 100, 0);
-    const expense = monthTx.filter(t => t.type === 'out').reduce((acc, t) => Math.round((acc + t.value) * 100) / 100, 0);
-    
-    let value = Math.round((income - expense) / 1000);
-    
-    if (isPredicted && value === 0) {
-      value = Math.round((Math.random() * 15) + 5);
-    }
+    const income = monthTx
+      .filter(t => t.type === 'in' || t.type === 'yield')
+      .reduce((acc, t) => Math.round((acc + (t.value ?? 0)) * 100) / 100, 0);
+    const expense = monthTx
+      .filter(t => t.type === 'out')
+      .reduce((acc, t) => Math.round((acc + (t.value ?? 0)) * 100) / 100, 0);
+
+    return {
+      value: Math.round((income - expense) / 1000),
+      hasData: monthTx.length > 0
+    };
+  };
+
+  const previousMonths = [0, 1, 2].map(offset => {
+    const date = new Date(currentYear, currentMonth - offset, 1);
+    return getMonthValue(date.getMonth(), date.getFullYear());
+  });
+  const monthsWithData = previousMonths.filter(m => m.hasData);
+
+  let projection = 0;
+  if (monthsWithData.length >= 3) {
+    projection = Math.round(monthsWithData.reduce((acc, m) => acc + m.value, 0) / 3);
+  } else if (previousMonths[1].hasData) {
+    projection = previousMonths[1].value;
+  } else if (previousMonths[0].hasData) {
+    projection = previousMonths[0].value;
+  }
+
+  return months.map((name, index) => {
+    const isPredicted = index > currentMonth;
+    const value = isPredicted
+      ? projection
+      : getMonthValue(index, currentYear).value;
 
     return { name, value, isPredicted };
   });
