@@ -13,7 +13,6 @@ export const TransactionSchema = z.object({
   type: z.enum(['in', 'out', 'yield']),
   date: z.any(), // Firestore Timestamp ou Date
   uid: z.string().min(1, "UID do usuário é obrigatório"),
-  participants: z.array(z.string()).default([]), // IDs dos participantes para rateio
   partialBalance: z.number().optional(),
   categoria_primaria: z.string().max(50, "Categoria muito longa").optional(),
   etiqueta_personalizada: z.string().max(100, "Etiqueta muito longa").optional(),
@@ -26,22 +25,14 @@ export const TransactionSchema = z.object({
   createdAt: z.any().optional()
 });
 
-export const SplitSchema = z.object({
-  uid: z.string().min(1, "ID do participante é obrigatório"),
-  ownerUid: z.string().min(1, "ID do dono é obrigatório"),
-  transactionId: z.string().min(1, "ID da transação é obrigatório"),
-  transactionLabel: z.string().optional(),
-  shareValue: z.number().positive("O valor da cota deve ser positivo"),
-  status: z.enum(['pending', 'paid']).default('pending'),
-  createdAt: z.any().optional()
-});
-
 export const UserProfileSchema = z.object({
   uid: z.string(),
   displayName: z.string().optional(),
   email: z.string().email().optional(),
-  photoURL: z.string().url().optional(),
-  pix_key: z.string().optional(),
+  photoURL: z.string().refine(
+    (value) => /^(https?:\/\/|data:image\/(png|jpeg|webp);base64,)/.test(value),
+    "URL de foto inválida"
+  ).optional(),
   investor_profile: z.enum(['Conservador', 'Sofisticado', 'Arrojado']).default('Conservador'),
   updatedAt: z.any().optional()
 });
@@ -63,6 +54,5 @@ export const AssetSchema = z.object({
 });
 
 export type Transaction = z.infer<typeof TransactionSchema>;
-export type Split = z.infer<typeof SplitSchema>;
 export type UserProfile = z.infer<typeof UserProfileSchema>;
 export type Asset = z.infer<typeof AssetSchema>;

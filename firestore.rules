@@ -33,18 +33,6 @@ service cloud.firestore {
     //   - type: string (required, one of ['in', 'out', 'yield'])
     //   - date: timestamp (required)
     //   - uid: string (required, matches auth.uid)
-    //   - participants: list (optional, strings of userIds)
-    //
-    // Collection: splits
-    // Document ID: auto-generated
-    // Fields:
-    //   - uid: string (required, participant who owes)
-    //   - ownerUid: string (required, owner who is owed)
-    //   - transactionId: string (required)
-    //   - shareValue: number (required)
-    //   - status: string (required, one of ['pending', 'paid', 'consolidated'])
-    //   - createdAt: timestamp (optional)
-    //   - approvedAt: timestamp (optional, set when a report is approved)
     //
     // Collection: settings
     // Document ID: userId (from Auth)
@@ -69,10 +57,6 @@ service cloud.firestore {
       return request.auth != null;
     }
 
-    function isOwner(userId) {
-      return isAuthenticated() && request.auth.uid == userId;
-    }
-
     function isDocOwner() {
       return isAuthenticated() && request.auth.uid == resource.data.uid;
     }
@@ -87,8 +71,12 @@ service cloud.firestore {
       return email is string && email.matches("^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$");
     }
 
-    function isValidUrl(url) {
-      return url is string && (url.matches("^https://.*") || url.matches("^http://.*"));
+    function isValidPhotoURL(url) {
+      return url is string && (
+        url.matches("^https://.*") ||
+        url.matches("^http://.*") ||
+        (url.matches("^data:image/(png|jpeg|webp);base64,.*") && url.size() < 300000)
+      );
     }
 
     // ===============================================================
@@ -101,7 +89,7 @@ service cloud.firestore {
       return data.keys().hasAll(requiredFields) &&
              data.keys().hasOnly(allowedFields) &&
              data.displayName is string && data.displayName.size() > 0 && data.displayName.size() <= 100 &&
-             (!('photoURL' in data) || isValidUrl(data.photoURL)) &&
+             (!('photoURL' in data) || isValidPhotoURL(data.photoURL)) &&
              (!('email' in data) || isValidEmail(data.email)) &&
              (!('role' in data) || data.role in ['admin', 'user']) &&
              (!('pix_key' in data) || (data.pix_key is string && data.pix_key.size() <= 100)) &&
@@ -133,7 +121,7 @@ service cloud.firestore {
       let allowedFields = [
         'label', 'value', 'type', 'uid', 'date', 'partialBalance', 
         'categoria_primaria', 'etiqueta_personalizada', 'metodo_origem', 
-        'status', 'contexto_ia', 'createdAt', 'participants'
+        'status', 'contexto_ia', 'createdAt'
       ];
       return data.keys().hasAll(requiredFields) &&
              data.keys().hasOnly(allowedFields) &&
@@ -151,23 +139,7 @@ service cloud.firestore {
                (!('insight' in data.contexto_ia) || data.contexto_ia.insight is string) &&
                (!('tendencia' in data.contexto_ia) || data.contexto_ia.tendencia in ['Alta', 'Baixa', 'Estável'])
              )) &&
-             (!('createdAt' in data) || data.createdAt is timestamp) &&
-             (!('participants' in data) || (data.participants is list));
-    }
-
-    function isValidSplit(data) {
-      let requiredFields = ['uid', 'ownerUid', 'transactionId', 'shareValue', 'status'];
-      let allowedFields = ['uid', 'ownerUid', 'transactionId', 'shareValue', 'status', 'createdAt', 'transactionLabel', 'approvedAt'];
-      return data.keys().hasAll(requiredFields) &&
-             data.keys().hasOnly(allowedFields) &&
-             data.uid is string &&
-             data.ownerUid is string &&
-             data.transactionId is string &&
-             data.shareValue is number && data.shareValue > 0 &&
-             data.status in ['pending', 'paid', 'consolidated'] &&
-             (!('createdAt' in data) || data.createdAt is timestamp) &&
-             (!('approvedAt' in data) || data.approvedAt is timestamp) &&
-             (!('transactionLabel' in data) || data.transactionLabel is string);
+             (!('createdAt' in data) || data.createdAt is timestamp);
     }
 
     function isValidDDA(data, isUpdate) {
@@ -183,43 +155,6 @@ service cloud.firestore {
              (!('cpf' in data) || (data.cpf is string && data.cpf.size() <= 20));
     }
 
-    function isValidUIConfig(data) {
-      return data.keys().hasOnly(['general', 'quick_customization', 'advanced_config']) &&
-             (!('general' in data) || data.general is map) &&
-             (!('quick_customization' in data) || data.quick_customization is map) &&
-             (!('advanced_config' in data) || data.advanced_config is map);
-    }
-
-    function isValidMasterStates(data) {
-      let requiredFields = ['modo_privacidade', 'insights_ia_ativo', 'idioma', 'tema_global'];
-      return data.keys().hasAll(requiredFields) &&
-             data.modo_privacidade is bool &&
-             data.insights_ia_ativo is bool &&
-             data.idioma is string &&
-             data.tema_global is string;
-    }
-
-    function isValidZenithConfig(data) {
-      let requiredFields = ['master_states', 'categories'];
-      return data.keys().hasAll(requiredFields) &&
-             isValidMasterStates(data.master_states) &&
-             data.categories is map;
-    }
-
-    function isValidSettings(data) {
-      let requiredFields = ['theme', 'language', 'privacyMode', 'activeWidgets', 'granularity'];
-      return data.keys().hasAll(requiredFields) &&
-             data.theme in ['dark', 'light', 'high-contrast'] &&
-             data.language in ['pt-BR', 'en-US'] &&
-             data.privacyMode is bool &&
-             data.activeWidgets is list &&
-             data.granularity in ['day', 'month', 'year'] &&
-             (!('yieldColor' in data) || data.yieldColor is string) &&
-             (!('customTerms' in data) || data.customTerms is map) &&
-             (!('ui_config' in data) || isValidUIConfig(data.ui_config)) &&
-             (!('zenith_config' in data) || isValidZenithConfig(data.zenith_config));
-    }
-
     function isValidUserRule(data) {
       let requiredFields = ['uid', 'pattern', 'category'];
       let allowedFields = ['uid', 'pattern', 'category', 'createdAt'];
@@ -231,40 +166,7 @@ service cloud.firestore {
              (!('createdAt' in data) || data.createdAt is timestamp);
     }
 
-    function isValidSplitProposal(data) {
-      let requiredFields = ['uid', 'label', 'value', 'source', 'status'];
-      let allowedFields = ['uid', 'label', 'value', 'source', 'status', 'suggestedParticipants', 'createdAt'];
-      return data.keys().hasAll(requiredFields) &&
-             data.keys().hasOnly(allowedFields) &&
-             data.uid == request.auth.uid &&
-             data.label is string && data.label.size() > 0 &&
-             data.value is number && data.value > 0 &&
-             data.source in ['email', 'manual', 'dda'] &&
-             data.status in ['pending', 'accepted', 'rejected'] &&
-             (!('suggestedParticipants' in data) || data.suggestedParticipants is list) &&
-             (!('createdAt' in data) || data.createdAt is timestamp);
-    }
-
-    function isValidReport(data) {
-      let requiredFields = ['uid', 'month', 'year', 'status'];
-      let allowedFields = [
-        'uid', 'month', 'year', 'status', 'totalConsolidated', 
-        'participantsSummary', 'iaFeedback', 'createdAt', 'involvedSplitIds'
-      ];
-      return data.keys().hasAll(requiredFields) &&
-             data.keys().hasOnly(allowedFields) &&
-             data.uid == request.auth.uid &&
-             data.month is number && data.month >= 0 && data.month <= 11 &&
-             data.year is number &&
-             data.status in ['pending', 'approved', 'consolidated', 'rejected'] &&
-             (!('totalConsolidated' in data) || data.totalConsolidated is number) &&
-             (!('participantsSummary' in data) || data.participantsSummary is list) &&
-             (!('iaFeedback' in data) || data.iaFeedback is string) &&
-             (!('createdAt' in data) || data.createdAt is timestamp) &&
-             (!('involvedSplitIds' in data) || data.involvedSplitIds is list);
-    }
-
-    function isValidInstallment(data, isUpdate) {
+    function isValidInstallment(data) {
       let requiredFields = ['uid', 'label', 'value', 'status'];
       let allowedFields = ['uid', 'person', 'institution', 'label', 'value', 'totalValue', 'currentInstallment', 'totalInstallments', 'status', 'dueDate', 'notes', 'createdAt'];
       return data.keys().hasAll(requiredFields) &&
@@ -307,19 +209,6 @@ service cloud.firestore {
                         isAdmin());
     }
 
-    match /participants/{participantId} {
-      // PRD: Apenas o dono pode criar/editar participantes, todos autenticados podem ler
-      allow write: if request.auth.uid == (resource == null ? request.resource.data.ownerUid : resource.data.ownerUid);
-      allow read: if isAuthenticated();
-    }
-
-    match /family_members/{memberId} {
-      allow read: if isAuthenticated() && (resource.data.ownerUid == request.auth.uid || isAdmin());
-      allow create: if isAuthenticated() && request.resource.data.ownerUid == request.auth.uid;
-      allow update: if isAuthenticated() && resource.data.ownerUid == request.auth.uid && request.resource.data.ownerUid == request.auth.uid;
-      allow delete: if isAuthenticated() && resource.data.ownerUid == request.auth.uid;
-    }
-
     match /assets/{assetId} {
       // Users can only see their own assets.
       allow read: if isAuthenticated() && (resource.data.uid == request.auth.uid || isAdmin());
@@ -337,12 +226,8 @@ service cloud.firestore {
     }
 
     match /transactions/{transactionId} {
-      // Users can see their own transactions or transactions where they are participants.
-      allow read: if isAuthenticated() && (
-        resource.data.uid == request.auth.uid || 
-        (resource.data.participants is list && request.auth.uid in resource.data.participants) ||
-        isAdmin()
-      );
+      // Users can only see their own transactions.
+      allow read: if isAuthenticated() && (resource.data.uid == request.auth.uid || isAdmin());
       
       // Users can create transactions for themselves.
       allow create: if isAuthenticated() && isValidTransaction(request.resource.data, false);
@@ -353,30 +238,6 @@ service cloud.firestore {
       
       // Users can delete their own transactions.
       allow delete: if isDocOwner() || isAdmin();
-    }
-
-    match /splits/{splitId} {
-      // Participants and the owner can read splits.
-      allow read: if isAuthenticated() && (
-        resource.data.ownerUid == request.auth.uid ||
-        resource.data.uid == request.auth.uid ||
-        isAdmin()
-      );
-
-      // Only the transaction owner can create/delete splits.
-      // Participants can update status to 'paid' (or the owner can).
-      allow create: if isAuthenticated() && request.resource.data.ownerUid == request.auth.uid && isValidSplit(request.resource.data);
-      
-      allow update: if isAuthenticated() && (
-        (resource.data.ownerUid == request.auth.uid || resource.data.uid == request.auth.uid) &&
-        isValidSplit(request.resource.data) &&
-        request.resource.data.uid == resource.data.uid &&
-        request.resource.data.ownerUid == resource.data.ownerUid &&
-        request.resource.data.transactionId == resource.data.transactionId &&
-        request.resource.data.shareValue == resource.data.shareValue
-      );
-
-      allow delete: if isAuthenticated() && (resource.data.ownerUid == request.auth.uid || isAdmin());
     }
 
     match /ddas/{ddaId} {
@@ -408,28 +269,10 @@ service cloud.firestore {
       allow delete: if isDocOwner() || isAdmin();
     }
 
-    match /split_proposals/{proposalId} {
-      allow read: if isAuthenticated() && (resource.data.uid == request.auth.uid || isAdmin());
-      allow create: if isAuthenticated() && isValidSplitProposal(request.resource.data);
-      allow update: if isDocOwner() && isValidSplitProposal(request.resource.data);
-      allow delete: if isDocOwner() || isAdmin();
-    }
-
-    match /reports/{reportId} {
-      // PRD: read, write if request.auth != null
-      allow read: if isAuthenticated() && (resource.data.uid == request.auth.uid || isAdmin());
-      allow create: if isAuthenticated() && isValidReport(request.resource.data);
-      allow update: if isDocOwner() && (
-        isValidReport(request.resource.data) || 
-        (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status']) && request.resource.data.status in ['approved', 'consolidated'])
-      );
-      allow delete: if isDocOwner() || isAdmin();
-    }
-
     match /installments/{installmentId} {
       allow read: if isAuthenticated() && (resource.data.uid == request.auth.uid || isAdmin());
-      allow create: if isAuthenticated() && isValidInstallment(request.resource.data, false);
-      allow update: if isDocOwner() && isValidInstallment(request.resource.data, true);
+      allow create: if isAuthenticated() && isValidInstallment(request.resource.data);
+      allow update: if isDocOwner() && isValidInstallment(request.resource.data);
       allow delete: if isDocOwner() || isAdmin();
     }
 

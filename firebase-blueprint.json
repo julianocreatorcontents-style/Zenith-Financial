@@ -33,68 +33,15 @@
         },
         "authProvider": {
           "type": "string",
-          "enum": ["google", "email"]
+          "enum": [
+            "google",
+            "email"
+          ]
         }
       },
-      "required": ["displayName"]
-    },
-    "Participant": {
-      "title": "Participant",
-      "description": "A person added by a user to participate in family splitting.",
-      "type": "object",
-      "properties": {
-        "name": {
-          "type": "string"
-        },
-        "email": {
-          "type": "string"
-        },
-        "ownerUid": {
-          "type": "string"
-        },
-        "createdAt": {
-          "type": "string",
-          "format": "date-time"
-        }
-      },
-      "required": ["name", "ownerUid"]
-    },
-    "Split": {
-      "title": "Split",
-      "description": "A share of a transaction for a participant.",
-      "type": "object",
-      "properties": {
-        "uid": {
-          "type": "string",
-          "description": "ID of the participant (who owes)."
-        },
-        "ownerUid": {
-          "type": "string",
-          "description": "ID of the transaction owner (who is owed)."
-        },
-        "transactionId": {
-          "type": "string",
-          "description": "ID of the parent transaction."
-        },
-        "transactionLabel": {
-          "type": "string",
-          "description": "Label of the parent transaction."
-        },
-        "shareValue": {
-          "type": "number",
-          "description": "Value of the share."
-        },
-        "status": {
-          "type": "string",
-          "enum": ["pending", "paid"],
-          "description": "Payment status of the split."
-        },
-        "createdAt": {
-          "type": "string",
-          "format": "date-time"
-        }
-      },
-      "required": ["uid", "ownerUid", "transactionId", "shareValue", "status"]
+      "required": [
+        "displayName"
+      ]
     },
     "Asset": {
       "title": "Asset",
@@ -111,7 +58,11 @@
         },
         "type": {
           "type": "string",
-          "enum": ["liquidity", "investment", "physical"],
+          "enum": [
+            "liquidity",
+            "investment",
+            "physical"
+          ],
           "description": "Category of the asset."
         },
         "detail": {
@@ -132,7 +83,12 @@
           "description": "When the asset was created."
         }
       },
-      "required": ["name", "value", "type", "uid"]
+      "required": [
+        "name",
+        "value",
+        "type",
+        "uid"
+      ]
     },
     "Transaction": {
       "title": "Transaction",
@@ -149,7 +105,11 @@
         },
         "type": {
           "type": "string",
-          "enum": ["in", "out", "yield"],
+          "enum": [
+            "in",
+            "out",
+            "yield"
+          ],
           "description": "Type of transaction."
         },
         "date": {
@@ -175,22 +135,35 @@
         },
         "status": {
           "type": "string",
-          "enum": ["Confirmado", "Futuro"]
-        },
-        "participants": {
-          "type": "array",
-          "items": { "type": "string" },
-          "description": "List of user IDs participating in the split."
+          "enum": [
+            "Confirmado",
+            "Futuro"
+          ]
         },
         "contexto_ia": {
           "type": "object",
           "properties": {
-            "insight": { "type": "string" },
-            "tendencia": { "type": "string", "enum": ["Alta", "Baixa", "Estável"] }
+            "insight": {
+              "type": "string"
+            },
+            "tendencia": {
+              "type": "string",
+              "enum": [
+                "Alta",
+                "Baixa",
+                "Estável"
+              ]
+            }
           }
         }
       },
-      "required": ["label", "value", "type", "date", "uid"]
+      "required": [
+        "label",
+        "value",
+        "type",
+        "date",
+        "uid"
+      ]
     },
     "DDA": {
       "title": "DDA",
@@ -212,7 +185,11 @@
         },
         "status": {
           "type": "string",
-          "enum": ["pending", "accepted", "rejected"],
+          "enum": [
+            "pending",
+            "accepted",
+            "rejected"
+          ],
           "description": "Status of the DDA record."
         },
         "uid": {
@@ -224,7 +201,13 @@
           "description": "The CPF associated with the DDA."
         }
       },
-      "required": ["beneficiary", "value", "dueDate", "status", "uid"]
+      "required": [
+        "beneficiary",
+        "value",
+        "dueDate",
+        "status",
+        "uid"
+      ]
     },
     "UserRule": {
       "title": "User Rule",
@@ -248,96 +231,11 @@
           "format": "date-time"
         }
       },
-      "required": ["uid", "pattern", "category"]
-    },
-    "SplitProposal": {
-      "title": "Split Proposal",
-      "description": "A proposal from Zenith IA to split a detected transaction or invoice.",
-      "type": "object",
-      "properties": {
-        "uid": {
-          "type": "string",
-          "description": "Owner's user ID."
-        },
-        "label": {
-          "type": "string",
-          "description": "Description of the expense."
-        },
-        "value": {
-          "type": "number",
-          "description": "Total value of the expense."
-        },
-        "source": {
-          "type": "string",
-          "enum": ["email", "manual", "dda"],
-          "description": "Where the expense was detected."
-        },
-        "status": {
-          "type": "string",
-          "enum": ["pending", "accepted", "rejected"],
-          "description": "Status of the proposal."
-        },
-        "suggestedParticipants": {
-          "type": "array",
-          "items": { "type": "string" },
-          "description": "User IDs suggested by IA."
-        },
-        "createdAt": {
-          "type": "string",
-          "format": "date-time"
-        }
-      },
-      "required": ["uid", "label", "value", "source", "status"]
-    },
-    "Report": {
-      "title": "Monthly Split Report",
-      "description": "Consolidated monthly report for family splitting.",
-      "type": "object",
-      "properties": {
-        "uid": {
-          "type": "string",
-          "description": "Owner's user ID."
-        },
-        "month": {
-          "type": "number",
-          "description": "Report month (0-11)."
-        },
-        "year": {
-          "type": "number",
-          "description": "Report year."
-        },
-        "status": {
-          "type": "string",
-          "enum": ["pending", "approved", "rejected"],
-          "description": "Status of the report."
-        },
-        "totalConsolidated": {
-          "type": "number",
-          "description": "Total value across all splits in the report."
-        },
-        "participantsSummary": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "properties": {
-              "uid": { "type": "string" },
-              "displayName": { "type": "string" },
-              "totalToPay": { "type": "number" },
-              "splitsCount": { "type": "number" }
-            }
-          },
-          "description": "Summary per participant."
-        },
-        "iaFeedback": {
-          "type": "string",
-          "description": "Zenith IA feedback or rejection reasons."
-        },
-        "createdAt": {
-          "type": "string",
-          "format": "date-time"
-        }
-      },
-      "required": ["uid", "month", "year", "status"]
+      "required": [
+        "uid",
+        "pattern",
+        "category"
+      ]
     },
     "Installment": {
       "title": "Installment",
@@ -376,7 +274,12 @@
         },
         "status": {
           "type": "string",
-          "enum": ["Quitado", "Pendente", "Atrasado", "Adiantado"]
+          "enum": [
+            "Quitado",
+            "Pendente",
+            "Atrasado",
+            "Adiantado"
+          ]
         },
         "dueDate": {
           "type": "string",
@@ -390,7 +293,12 @@
           "format": "date-time"
         }
       },
-      "required": ["uid", "label", "value", "status"]
+      "required": [
+        "uid",
+        "label",
+        "value",
+        "status"
+      ]
     },
     "Settings": {
       "title": "Settings",
@@ -399,12 +307,19 @@
       "properties": {
         "theme": {
           "type": "string",
-          "enum": ["dark", "light", "high-contrast"],
+          "enum": [
+            "dark",
+            "light",
+            "high-contrast"
+          ],
           "description": "UI theme preference."
         },
         "language": {
           "type": "string",
-          "enum": ["pt-BR", "en-US"],
+          "enum": [
+            "pt-BR",
+            "en-US"
+          ],
           "description": "Preferred language."
         },
         "privacyMode": {
@@ -413,7 +328,9 @@
         },
         "activeWidgets": {
           "type": "array",
-          "items": { "type": "string" },
+          "items": {
+            "type": "string"
+          },
           "description": "List of enabled dashboard widgets."
         },
         "yieldColor": {
@@ -422,7 +339,11 @@
         },
         "granularity": {
           "type": "string",
-          "enum": ["day", "month", "year"],
+          "enum": [
+            "day",
+            "month",
+            "year"
+          ],
           "description": "Default chart granularity."
         },
         "customTerms": {
@@ -436,10 +357,23 @@
             "master_states": {
               "type": "object",
               "properties": {
-                "modo_privacidade": { "type": "boolean" },
-                "insights_ia_ativo": { "type": "boolean" },
-                "idioma": { "type": "string" },
-                "tema_global": { "type": "string", "enum": ["Escuro", "Claro", "Contraste"] }
+                "modo_privacidade": {
+                  "type": "boolean"
+                },
+                "insights_ia_ativo": {
+                  "type": "boolean"
+                },
+                "idioma": {
+                  "type": "string"
+                },
+                "tema_global": {
+                  "type": "string",
+                  "enum": [
+                    "Escuro",
+                    "Claro",
+                    "Contraste"
+                  ]
+                }
               }
             },
             "categories": {
@@ -448,28 +382,46 @@
               "additionalProperties": {
                 "type": "object",
                 "properties": {
-                  "id": { "type": "string" },
-                  "nome": { "type": "string" },
+                  "id": {
+                    "type": "string"
+                  },
+                  "nome": {
+                    "type": "string"
+                  },
                   "cor_destaque": {
                     "type": "object",
                     "properties": {
-                      "hex": { "type": "string" },
-                      "opacity": { "type": "number" }
+                      "hex": {
+                        "type": "string"
+                      },
+                      "opacity": {
+                        "type": "number"
+                      }
                     }
                   },
-                  "visivel_no_dash": { "type": "boolean" },
+                  "visivel_no_dash": {
+                    "type": "boolean"
+                  },
                   "config_avancada": {
                     "type": "object",
                     "description": "Technical Vault - Maximum Priority."
                   },
-                  "ia_insights_buffer": { "type": "object" }
+                  "ia_insights_buffer": {
+                    "type": "object"
+                  }
                 }
               }
             }
           }
         }
       },
-      "required": ["theme", "language", "privacyMode", "activeWidgets", "granularity"]
+      "required": [
+        "theme",
+        "language",
+        "privacyMode",
+        "activeWidgets",
+        "granularity"
+      ]
     }
   },
   "firestore": {
@@ -489,10 +441,6 @@
       "schema": "Transaction",
       "description": "User transactions."
     },
-    "/splits/{splitId}": {
-      "schema": "Split",
-      "description": "Splits for shared transactions."
-    },
     "/ddas/{ddaId}": {
       "schema": "DDA",
       "description": "User DDA records."
@@ -500,18 +448,6 @@
     "/user_rules/{ruleId}": {
       "schema": "UserRule",
       "description": "User-defined AI extraction rules."
-    },
-    "/split_proposals/{proposalId}": {
-      "schema": "SplitProposal",
-      "description": "IA-suggested split proposals."
-    },
-    "/participants/{participantId}": {
-      "schema": "Participant",
-      "description": "Participants for family splitting."
-    },
-    "/reports/{reportId}": {
-      "schema": "Report",
-      "description": "Monthly split reports."
     },
     "/installments/{installmentId}": {
       "schema": "Installment",

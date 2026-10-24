@@ -3,17 +3,17 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { Component, useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import React, { Component, useState, useEffect, useCallback, useMemo, useRef, lazy, Suspense } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   Bell, Eye, EyeOff, MoreVertical, ShieldCheck, 
-  ArrowUpRight, X, CreditCard, Landmark, Car,
+  ArrowUpRight, ArrowLeft, X, CreditCard, Landmark, Car,
   PieChart, Briefcase, TrendingUp, MoreHorizontal,
   ArrowRightLeft, LayoutGrid, LogIn, LogOut, Plus, Trash2, Edit2, Save, User as UserIcon,
   FileUp, Loader2, Settings as SettingsIcon, Check, ChevronRight, Palette, Globe, Layout,
   BarChart as BarChartIcon, Sparkles, Copy, CircleCheck, BellOff, UserPlus, ClipboardCheck,
   QrCode, FileText, Table, Edit3, Camera, Upload, AlertCircle, Search, Zap, Users,
-  Menu, Database, Trash, HardDrive, History, Calendar, Download, KeyRound
+  History, KeyRound, HardDrive
 } from 'lucide-react';
 import { 
   AreaChart, Area, XAxis, YAxis, 
@@ -23,7 +23,7 @@ import {
 import { 
   auth, db, googleProvider, signInWithPopup, signOut, 
   signInWithEmailAndPassword, createUserWithEmailAndPassword, updateProfile,
-  collection, addDoc, doc, setDoc, updateDoc, deleteDoc, onSnapshot, query, where, orderBy, serverTimestamp,
+  collection, doc, setDoc, updateDoc, deleteDoc, onSnapshot, query, where, orderBy, serverTimestamp,
   handleFirestoreError, OperationType, getDocs, getDoc, getDocFromServer, writeBatch, limit,
   FIRESTORE_ERROR_EVENT
 } from './firebase';
@@ -39,19 +39,27 @@ import {
 } from './lib/ai';
 import { TransactionSchema } from './lib/validations';
 import { z } from 'zod';
-import { read, utils } from 'xlsx';
 import { 
   calculateTotals, 
   calculateRealProfitability,
   calculateVariation, 
   getMiniChartData, 
   calculateEvolutionData, 
-  calculateCashFlowData 
+  calculateCashFlowData,
+  calculateMonthBalance,
+  calculateNetWorth
 } from './lib/finance';
 import { onAuthStateChanged, User } from 'firebase/auth';
 import ColorPicker from './components/ColorPicker';
-import { HeritageSettings } from './components/HeritageSettings';
-import { checkDuplicates, fixDuplicates } from './lib/dataUtils';
+import LoadingSpinner from './components/LoadingSpinner';
+import Modal from './components/ui/Modal';
+import { checkDuplicates } from './lib/dataUtils';
+import StorageTrashView from './views/StorageTrashView';
+
+const HeritageSettings = lazy(() =>
+  import('./components/HeritageSettings').then((module) => ({ default: module.HeritageSettings }))
+);
+const ZenithIAView = lazy(() => import('./views/ZenithIAView'));
 
 // --- TYPES ---
 type AssetType = 'liquidity' | 'investment' | 'physical';
@@ -77,7 +85,6 @@ interface UserProfile {
   displayName: string;
   photoURL?: string;
   email?: string;
-  pix_key?: string;
   cpf?: string;
   investor_profile?: 'Conservador' | 'Sofisticado' | 'Arrojado';
 }
@@ -90,7 +97,6 @@ interface Transaction {
   date: any; // Firestore timestamp
   uid: string;
   category?: string;
-  participants?: string[];
   partialBalance?: number;
   categoria_primaria?: string;
   etiqueta_personalizada?: string;
@@ -110,34 +116,6 @@ interface DDA {
   status: 'pending' | 'accepted' | 'rejected';
   uid: string;
   cpf?: string;
-}
-
-interface SplitProposal {
-  id: string;
-  uid: string;
-  label: string;
-  value: number;
-  source: 'email' | 'manual' | 'dda';
-  status: 'pending' | 'accepted' | 'rejected';
-  suggestedParticipants?: string[];
-  createdAt: any;
-}
-
-interface Report {
-  id: string;
-  uid: string;
-  month: number;
-  year: number;
-  status: 'pending' | 'approved' | 'rejected';
-  totalConsolidated: number;
-  participantsSummary: {
-    uid: string;
-    displayName: string;
-    totalToPay: number;
-    splitsCount: number;
-  }[];
-  iaFeedback?: string;
-  createdAt: any;
 }
 
 interface ColorValue {
@@ -412,30 +390,16 @@ class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
   }
 }
 
-// --- CHART FALLBACK (DETERMINISTIC) ---
-const generateDailyData = (baseValue = 0) => {
-  const months = ['JAN', 'FEV', 'MAR', 'ABR', 'MAI', 'JUN', 'JUL', 'AGO', 'SET', 'OUT', 'NOV', 'DEZ'];
-  const today = new Date();
-  const value = Number.isFinite(baseValue) ? Math.round(baseValue) : 0;
-  const data: { name: string; value: number; date: string }[] = [];
+const BRL_FORMATTER = new Intl.NumberFormat('pt-BR', {
+  style: 'currency',
+  currency: 'BRL',
+  maximumFractionDigits: 0,
+});
 
-  for (let i = 29; i >= 0; i--) {
-    const date = new Date(today);
-    date.setDate(today.getDate() - i);
-    const day = date.getDate();
-    data.push({
-      name: day.toString().padStart(2, '0'),
-      value,
-      date: `${day} de ${months[date.getMonth()]}`
-    });
-  }
+const formatBRL = (value: number) => BRL_FORMATTER.format(Number.isFinite(value) ? value : 0);
 
-  return data;
-};
-
-const MINI_CHART_DATA = [
-  { v: 40 }, { v: 35 }, { v: 55 }, { v: 45 }, { v: 70 }, { v: 65 }, { v: 85 }, { v: 75 }, { v: 95 }, { v: 100 }
-];
+const getTransactionCategory = (transaction: any) =>
+  transaction?.categoria_primaria || transaction?.category || 'Outros';
 
 // --- COMPONENTS ---
 const Timeline = ({ transactions, privacyMode }: { transactions: Transaction[], privacyMode: boolean }) => {
@@ -503,1167 +467,24 @@ const Timeline = ({ transactions, privacyMode }: { transactions: Transaction[], 
   );
 };
 
-// --- CONSTANTS ---
-const CHAVE_PIX = '3c4e26f9-390e-4f52-8bbc-f62bcaa290be';
-
-const PERFIS = {
-  'Rafael': {
-    area: 'direito', emoji: '⚖️',
-    saudacao: 'Pagamento protocolado. Petição de quitação deferida.',
-    corpoIndividual: (v: string, d: string, p: number, t: number, i: string, f: string) => `Cláusula vigente do acordo ${d}:\n${v}\nVencimento conforme instrumento.\n\n📅 Período: ${i} ~ ${f}\n📊 Progresso: ${p}ª de ${t} parcelas (${Math.round((p/t)*100)}% concluído)`,
-    corpoRateio: (v: string, g: string) => `Participação no rateio ${g}:\n${v}\n📅 Período: Contínuo`,
-    encerramento: 'O restante é mera formalidade processual.',
-    assinatura: 'Nada a opor.'
-  },
-  'Alexandre': {
-    area: 'fibra', emoji: '🌊',
-    saudacao: 'Sinal financeiro estável. Manutenção programada na rede.',
-    corpoIndividual: (v: string, d: string, p: number, t: number, i: string, f: string) => `💳 ${d}: ${v}\n📅 Período: ${i} ~ ${f}\n📊 Progresso: ${p}ª de ${t} (${Math.round((p/t)*100)}%)`,
-    corpoRateio: (v: string, g: string) => `${g}: ${v}\n📅 Período: Contínuo`,
-    encerramento: 'Cada parcela é um pacote de dados a menos na rede. Latência zero pra preocupação.',
-    assinatura: 'Sinal estável. Segue o fluxo.'
-  },
-  'Juliano': {
-    area: 'historia', emoji: '📚',
-    saudacao: 'Esse mês a agenda financeira está densa como um tratado do século XIX. Vamos por partes:',
-    corpoIndividual: (v: string, d: string, p: number, t: number, i: string, f: string) => `📿 ${d}: ${v}\n📅 Período: ${i} ~ ${f}\n📊 Progresso: ${p}ª de ${t} (${Math.round((p/t)*100)}%)`,
-    corpoRateio: (v: string, g: string) => `🏠 ${g}: ${v}\n📅 Período: Contínuo`,
-    encerramento: 'É lastro, Juliano. Saúde, propósito, conhecimento e o teto sobre a cabeça. Nada disso é supérfluo.',
-    assinatura: 'Assim caminha a humanidade.'
-  },
-  'Patrícia': {
-    area: 'enfermagem', emoji: '🏥',
-    saudacao: 'Sinais vitais financeiros estáveis.',
-    corpoIndividual: (v: string, d: string) => `Prescrição: ${d}\n${v}`,
-    corpoRateio: (v: string, g: string) => `${g}: ${v}\n📅 Período: Contínuo`,
-    encerramento: 'Nada fora da curva. O plantão segue tranquilo.',
-    assinatura: 'Um descanso merecido pra você.'
-  },
-  'Valdemar': {
-    area: 'cartazista', emoji: '🎨',
-    saudacao: 'ATENÇÃO: CARTAZ DO MÊS',
-    corpoIndividual: (v: string, d: string) => `${d}: ${v}`,
-    corpoRateio: (v: string, g: string) => `${g}: ${v} (contínuo)`,
-    encerramento: 'Letreiro bem legível, sem pressa pra ler.',
-    assinatura: 'Letras garrafais, vida simples.'
-  },
-  'Linda': {
-    area: 'lar', emoji: '🏡',
-    saudacao: 'Página virada. A engrenagem da casa rodou lisa. Esse mês começa zerado.',
-    corpoIndividual: (v: string, d: string) => `${d}: ${v}`,
-    corpoRateio: (v: string, g: string) => `${g}: ${v}\n📅 Período: Contínuo`,
-    encerramento: 'Mais uma voltinha no carrossel das contas. Nada que você já não tenha domado antes.',
-    assinatura: 'Respira. Você dá conta.'
-  }
-};
-
-function gerarMensagemPersona(item: any, persona: any) {
-  if (!persona) return "Saldo a recuperar: " + item.totalOwed.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
-  
-  let msg = `${persona.emoji} ${persona.saudacao}\n\n`;
-  
-  item.pendingSplits.forEach((split: any) => {
-    msg += persona.corpoRateio(split.shareValue.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }), split.label || 'Despesa') + '\n\n';
-  });
-  
-  msg += `💰 Total do mês: ${item.totalOwed.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}\n\n`;
-  msg += `💳 Pagamento:\nPix copia e cola:\n${CHAVE_PIX}\n(Juliano Knazh)\n\n`;
-  msg += persona.encerramento + '\n\n';
-  msg += '─'.repeat(20) + '\n\n';
-  msg += persona.assinatura;
-  
-  return msg;
-}
-
-function RateioFamiliarView({ transactions, splits, splitProposals, reports = [], familyMembers, allAvailableParticipants, language, profile, privacyMode, onSeed }: any) {
-  const t = (pt: string, en: string) => (language === 'en-US' ? en : pt);
-  const [isProcessing, setIsProcessing] = useState(false);
-  const [selectedProposal, setSelectedProposal] = useState<any>(null);
-  const [selectedParticipants, setSelectedParticipants] = useState<string[]>([]);
-  const [isMonitoringActive, setIsMonitoringActive] = useState(true);
-  const [showReport, setShowReport] = useState(false);
-  const [isManagingMembers, setIsManagingMembers] = useState(false);
-  const [newMemberName, setNewMemberName] = useState('');
-
-  const consolidatedData = useMemo(() => {
-    const data: any = {};
-    
-    allAvailableParticipants.forEach(p => {
-      data[p.uid] = { 
-        user: { uid: p.uid, displayName: p.displayName, photoURL: p.photoURL }, 
-        totalOwed: 0, 
-        pendingSplits: [] 
-      };
-    });
-
-    if (profile?.uid && !data[profile.uid]) {
-      data[profile.uid] = { user: profile, totalOwed: 0, pendingSplits: [] };
-    }
-    
-    splits.forEach((split: any) => {
-      if (data[split.uid]) {
-        data[split.uid].totalOwed += (split.shareValue || 0);
-        data[split.uid].pendingSplits.push(split);
-      }
-    });
-    
-    const rawConsolidated = Object.values(data).filter((item: any) => item.totalOwed > 0 || item.user.uid === profile?.uid);
-    return fixDuplicates(rawConsolidated, 'user.uid'); 
-  }, [splits, allAvailableParticipants, profile]);
-
-  const generateMonthlyReport = async () => {
-    if (!auth.currentUser) return;
-    setIsProcessing(true);
-    try {
-      const now = new Date();
-      const report = {
-        uid: auth.currentUser.uid,
-        month: now.getMonth(),
-        year: now.getFullYear(),
-        status: 'pending',
-        totalConsolidated: consolidatedData.reduce((acc: number, curr: any) => acc + curr.totalOwed, 0),
-        participantsSummary: consolidatedData.map((item: any) => ({
-          uid: item.user.uid,
-          displayName: item.user.displayName,
-          totalToPay: item.totalOwed,
-          splitsCount: item.pendingSplits.length
-        })),
-        involvedSplitIds: consolidatedData.flatMap(item => item.pendingSplits.map((s: any) => s.id)),
-        createdAt: serverTimestamp()
-      };
-      await addDoc(collection(db, 'reports'), report);
-      alert(t("Relatório mensal gerado para aprovação.", "Monthly report generated for approval."));
-    } catch (e) {
-      handleFirestoreError(e, OperationType.WRITE, 'reports');
-    } finally {
-      setIsProcessing(false);
-    }
-  };
-
-  const approveReport = async (reportId: string) => {
-    setIsProcessing(true);
-    try {
-      const batch = writeBatch(db);
-      const reportRef = doc(db, 'reports', reportId);
-      const reportSnap = await getDocFromServer(reportRef);
-      const data = reportSnap.data();
-
-      batch.update(reportRef, { status: 'approved' });
-      
-      // Mark involved splits as completed so they don't sum up again
-      if (data?.involvedSplitIds) {
-        data.involvedSplitIds.forEach((id: string) => {
-          batch.update(doc(db, 'splits', id), { status: 'consolidated', approvedAt: serverTimestamp() });
-        });
-      }
-
-      await batch.commit();
-      alert(t("Relatório aprovado!", "Report approved!"));
-    } catch (e) {
-      handleFirestoreError(e, OperationType.WRITE, 'reports');
-    } finally {
-      setIsProcessing(false);
-    }
-  };
-
-  const rejectReport = async (reportId: string) => {
-    if (!confirm(t("Deseja realmente excluir este relatório e descartar todos os rateios pendentes associados?", "Are you sure you want to delete this report and discard all associated pending splits?"))) return;
-    
-    setIsProcessing(true);
-    try {
-      const batch = writeBatch(db);
-      const reportRef = doc(db, 'reports', reportId);
-      const reportSnap = await getDocFromServer(reportRef);
-      const data = reportSnap.data();
-
-      // Delete involved splits to satisfy "not summing files"
-      if (data?.involvedSplitIds) {
-        data.involvedSplitIds.forEach((id: string) => {
-          batch.delete(doc(db, 'splits', id));
-        });
-      }
-
-      await batch.delete(reportRef);
-      await batch.commit();
-      alert(t("Relatório e rateios associados excluídos com sucesso.", "Report and associated splits deleted successfully."));
-    } catch (e) {
-      handleFirestoreError(e, OperationType.DELETE, `reports/${reportId}`);
-    } finally {
-      setIsProcessing(false);
-    }
-  };
-
-  const simulateDetection = async () => {
-    if (!auth.currentUser) return;
-    setIsProcessing(true);
-    try {
-      const proposal = {
-        uid: auth.currentUser.uid,
-        label: 'Fatura Copel - Residencial',
-        value: 450.80,
-        source: 'email',
-        status: 'pending',
-        suggestedParticipants: [],
-        createdAt: serverTimestamp()
-      };
-      await setDoc(doc(collection(db, 'split_proposals')), proposal);
-    } catch (e) {
-      handleFirestoreError(e, OperationType.WRITE, 'split_proposals');
-    } finally {
-      setIsProcessing(false);
-    }
-  };
-
-  const addFamilyMember = async () => {
-    if (!newMemberName.trim() || !auth.currentUser) return;
-    setIsProcessing(true);
-    try {
-      await addDoc(collection(db, 'family_members'), {
-        name: newMemberName.trim(),
-        ownerUid: auth.currentUser.uid,
-        createdAt: serverTimestamp(),
-        photoURL: `https://picsum.photos/seed/${newMemberName}/100/100`
-      });
-      setNewMemberName('');
-    } catch (e) {
-      handleFirestoreError(e, OperationType.WRITE, 'family_members');
-    } finally {
-      setIsProcessing(false);
-    }
-  };
-
-  const removeFamilyMember = async (id: string) => {
-    try {
-      await deleteDoc(doc(db, 'family_members', id));
-    } catch (e) {
-      handleFirestoreError(e, OperationType.DELETE, `family_members/${id}`);
-    }
-  };
-
-  const handleAcceptProposal = (proposal: any) => {
-    setSelectedProposal(proposal);
-    // Todos os integrantes do grupo participam por padrão e regra de negócio
-    setSelectedParticipants(allAvailableParticipants.map(u => u.uid));
-  };
-
-  const handleConfirmSplit = async () => {
-    if (!selectedProposal || !auth.currentUser) return;
-    setIsProcessing(true);
-    try {
-      const batch = writeBatch(db);
-      const txRef = doc(collection(db, 'transactions'));
-      batch.set(txRef, {
-        uid: auth.currentUser.uid,
-        label: selectedProposal.label,
-        value: selectedProposal.value,
-        type: 'out',
-        date: serverTimestamp(),
-        categoria_primaria: 'Moradia',
-        status: 'Confirmado',
-        participants: selectedParticipants,
-        createdAt: serverTimestamp()
-      });
-
-      const shareValue = selectedProposal.value / selectedParticipants.length;
-      selectedParticipants.forEach(pUid => {
-        if (pUid === auth.currentUser?.uid) return;
-        const splitRef = doc(collection(db, 'splits'));
-        batch.set(splitRef, {
-          uid: pUid,
-          ownerUid: auth.currentUser?.uid,
-          transactionId: txRef.id,
-          transactionLabel: selectedProposal.label,
-          shareValue: Math.round(shareValue * 100) / 100,
-          status: 'pending',
-          createdAt: serverTimestamp()
-        });
-      });
-
-      batch.update(doc(db, 'split_proposals', selectedProposal.id), { status: 'accepted' });
-      await batch.commit();
-      setSelectedProposal(null);
-      setSelectedParticipants([]);
-    } catch (e) {
-      handleFirestoreError(e, OperationType.WRITE, 'confirm_split');
-    } finally {
-      setIsProcessing(false);
-    }
-  };
-
-  return (
-    <div className="space-y-8 pb-32">
-      <header className="flex justify-between items-center mb-10">
-        <div>
-          <h2 className="text-4xl font-black text-white tracking-tighter uppercase">{t("Rateio Familiar", "Family Split")}</h2>
-          <p className="text-[10px] text-[var(--text-muted)] uppercase font-black tracking-[0.3em] mt-1 opacity-60">Dashboard de Conciliação</p>
-        </div>
-        <div className="flex gap-3 items-center">
-          <div className="p-1.5 bg-white/5 backdrop-blur-xl rounded-2xl border border-white/10 hover:border-[var(--accent)]/40 hover:bg-white/10 transition-all duration-500 shadow-2xl group flex items-center gap-3">
-            <button 
-              onClick={() => setIsManagingMembers(!isManagingMembers)}
-              className={`flex items-center gap-2 px-6 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-[0.2em] transition-all ${
-                isManagingMembers ? 'bg-[var(--accent)] text-[var(--bg-app)] shadow-lg shadow-[var(--accent)]/30' : 'bg-white/5 text-[var(--accent)] hover:bg-[var(--accent)]/20'
-              }`}
-            >
-              <UserPlus size={14} className={isManagingMembers ? 'animate-pulse' : 'group-hover:scale-110 transition-transform'} />
-              {t("Membros", "Members")}
-            </button>
-          </div>
-          <button 
-            onClick={simulateDetection}
-            disabled={isProcessing}
-            className="w-12 h-12 flex items-center justify-center bg-[var(--accent)]/10 text-[var(--accent)] rounded-2xl border border-[var(--accent)]/20 hover:bg-[var(--accent)]/20 transition-all disabled:opacity-50 group"
-            title={t("Simular IA", "Simulate AI")}
-          >
-            {isProcessing ? <Loader2 size={18} className="animate-spin" /> : <Sparkles size={18} className="group-hover:rotate-12 transition-transform" />}
-          </button>
-        </div>
-      </header>
-
-      {/* GERENCIAR MEMBROS */}
-      <AnimatePresence>
-        {isManagingMembers && (
-          <motion.section 
-            initial={{ opacity: 0, height: 0 }}
-            animate={{ opacity: 1, height: 'auto' }}
-            exit={{ opacity: 0, height: 0 }}
-            className="bg-[var(--bg-card)] border border-[var(--border-card)] rounded-[32px] overflow-hidden"
-          >
-            <div className="p-6 space-y-6">
-              <div className="flex justify-between border-b border-[var(--border-card)] pb-4">
-                <h3 className="text-sm font-bold text-[var(--text-primary)] uppercase tracking-widest">Membros da Família</h3>
-                <button onClick={() => setIsManagingMembers(false)} className="text-[var(--text-muted)] hover:text-[var(--text-primary)]">
-                  <X size={18} />
-                </button>
-              </div>
-
-              <div className="flex gap-2">
-                <input 
-                  type="text" 
-                  value={newMemberName}
-                  onChange={(e) => setNewMemberName(e.target.value)}
-                  placeholder="Nome do familiar (Ex: Linda Knazh)"
-                  className="flex-1 bg-[var(--bg-app)] border border-[var(--border-card)] rounded-xl px-4 py-2 text-sm text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent)]"
-                />
-                <button 
-                  onClick={addFamilyMember}
-                  disabled={isProcessing || !newMemberName.trim()}
-                  className="bg-[var(--accent)] text-[var(--bg-app)] px-4 py-2 rounded-xl text-[10px] font-bold uppercase tracking-widest hover:bg-[var(--accent)]/80 transition-all disabled:opacity-50"
-                >
-                  Adicionar
-                </button>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
-                {familyMembers.map((m: any, idx: number) => (
-                  <div key={`member-${m.id}-${idx}`} className="flex items-center justify-between p-3 bg-[var(--bg-app)] rounded-2xl border border-[var(--border-card)]">
-                    <div className="flex items-center gap-3">
-                      <img src={m.photoURL} alt="" className="w-8 h-8 rounded-lg object-cover" />
-                      <span className="text-[11px] font-bold text-[var(--text-primary)]">{m.name}</span>
-                    </div>
-                    <button onClick={() => removeFamilyMember(m.id)} className="p-1 text-[var(--text-muted)] hover:text-[var(--trend-down)] transition-colors">
-                      <Trash2 size={14} />
-                    </button>
-                  </div>
-                ))}
-                {familyMembers.length === 0 && (
-                  <div className="col-span-full py-6 text-center text-[var(--text-muted)] text-[10px] uppercase font-bold tracking-widest opacity-50">
-                    Nenhum membro cadastrado.
-                  </div>
-                )}
-              </div>
-
-              <div className="pt-4 border-t border-[var(--border-card)]">
-                <button 
-                  onClick={onSeed}
-                  className="flex items-center gap-2 text-[var(--accent)] text-[10px] font-bold uppercase tracking-widest hover:underline"
-                >
-                  <Sparkles size={14} />
-                  Sincronizar Personas Demo
-                </button>
-              </div>
-            </div>
-          </motion.section>
-        )}
-      </AnimatePresence>
-
-      {/* ZENITH IA - PROPOSTAS */}
-      {splitProposals.filter((p: any) => p.status === 'pending').length > 0 && (
-        <section className="space-y-4">
-          <div className="flex items-center gap-2 px-1">
-            <Sparkles size={16} className="text-[var(--accent)]" />
-            <h3 className="text-xs font-bold text-[var(--text-primary)] uppercase tracking-widest">Propostas da Zenith IA</h3>
-          </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {splitProposals.filter((p: any) => p.status === 'pending').map((proposal: any, idx: number) => (
-              <motion.div 
-                key={`proposal-${proposal.id}-${idx}`}
-                initial={{ opacity: 0, scale: 0.95 }}
-                animate={{ opacity: 1, scale: 1 }}
-                className="bg-[var(--bg-card)] border-2 border-[var(--accent)]/30 rounded-3xl p-5 space-y-4 relative overflow-hidden"
-              >
-                <div className="flex justify-between items-start">
-                  <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-xl bg-[var(--accent)]/10 flex items-center justify-center text-[var(--accent)]">
-                      {proposal.source === 'email' ? <Globe size={18} /> : <FileText size={18} />}
-                    </div>
-                    <div>
-                      <p className="text-[10px] text-[var(--text-muted)] uppercase font-bold tracking-widest">Detectado via {proposal.source}</p>
-                      <h4 className="text-sm font-bold text-[var(--text-primary)]">{proposal.label}</h4>
-                    </div>
-                  </div>
-                  <p className="text-lg font-mono font-bold text-[var(--accent)]">
-                    {proposal.value.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
-                  </p>
-                </div>
-                <p className="text-[10px] text-[var(--text-secondary)] leading-relaxed">
-                  Zenith IA identificou uma nova fatura. O pagamento antecipado via rateio pode economizar até 1.2% em juros evitados.
-                </p>
-                <div className="flex gap-2">
-                  <button 
-                    onClick={() => handleAcceptProposal(proposal)}
-                    className="flex-1 py-2 bg-[var(--accent)] text-[var(--bg-app)] rounded-xl text-[10px] font-bold uppercase tracking-widest hover:bg-[var(--accent)]/80 transition-all"
-                  >
-                    {t("Aceitar e Dividir", "Accept and Split")}
-                  </button>
-                  <button 
-                    onClick={async () => await deleteDoc(doc(db, 'split_proposals', proposal.id))}
-                    className="px-4 py-2 bg-[var(--bg-app)] border border-[var(--border-card)] text-[var(--text-muted)] rounded-xl text-[10px] font-bold uppercase tracking-widest hover:text-[var(--trend-down)] transition-all"
-                  >
-                    {t("Ignorar", "Ignore")}
-                  </button>
-                </div>
-              </motion.div>
-            ))}
-          </div>
-        </section>
-      )}
-
-      {/* MODAL DE CONFIGURAÇÃO DE RATEIO */}
-      <AnimatePresence>
-        {selectedProposal && (
-          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
-            <motion.div 
-              initial={{ opacity: 0, scale: 0.9, y: 20 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.9, y: 20 }}
-              className="bg-[var(--bg-card)] border border-[var(--border-card)] rounded-[40px] w-full max-w-md p-8 space-y-6 shadow-2xl"
-            >
-              <div className="flex justify-between items-center">
-                <h3 className="text-xl font-bold text-[var(--text-primary)]">{t("Configurar Rateio", "Configure Split")}</h3>
-                <button onClick={() => setSelectedProposal(null)} className="text-[var(--text-muted)] hover:text-[var(--text-primary)]">
-                  <X size={24} />
-                </button>
-              </div>
-
-              <div className="p-4 bg-[var(--bg-app)] rounded-2xl border border-[var(--border-card)]">
-                <p className="text-[10px] text-[var(--text-muted)] uppercase font-bold tracking-widest">{selectedProposal.label}</p>
-                <p className="text-2xl font-mono font-bold text-[var(--accent)] mt-1">
-                  {selectedProposal.value.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
-                </p>
-              </div>
-
-              <div className="space-y-3">
-                <p className="text-[10px] text-[var(--text-muted)] uppercase font-bold tracking-widest px-1">Participantes do Grupo</p>
-                <div className="flex flex-wrap gap-2">
-                  {allAvailableParticipants.map((u: any, idx: number) => (
-                    <div 
-                      key={`select-participant-${u.uid}-${idx}`}
-                      className="flex items-center gap-2 p-2 px-3 rounded-full bg-[var(--accent)]/10 border border-[var(--accent)]/20 shadow-sm"
-                    >
-                      <img src={u.photoURL} className="w-5 h-5 rounded-full object-cover" alt="" />
-                      <span className="text-[9px] font-bold text-[var(--accent)] truncate">{u.displayName}</span>
-                    </div>
-                  ))}
-                </div>
-                <p className="text-[8px] text-[var(--text-muted)] italic px-1 mt-2">
-                  {t("Segundo as regras do Zenith, todos os membros do grupo participam obrigatoriamente do rateio.", "According to Zenith rules, all group members must participate in the split.")}
-                </p>
-              </div>
-
-              <div className="p-4 bg-[var(--accent)]/5 rounded-2xl border border-[var(--accent)]/20 space-y-2">
-                <div className="flex justify-between text-[10px] font-bold uppercase tracking-widest">
-                  <span className="text-[var(--text-muted)]">Custo por Pessoa</span>
-                  <span className="text-[var(--accent)]">
-                    {(selectedProposal.value / selectedParticipants.length).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
-                  </span>
-                </div>
-                <p className="text-[8px] text-[var(--text-secondary)] italic">
-                  O valor será dividido igualmente entre os {selectedParticipants.length} participantes selecionados.
-                </p>
-              </div>
-
-              <div className="flex gap-3">
-                <button 
-                  onClick={() => setShowReport(true)}
-                  className="flex-1 py-4 bg-[var(--bg-app)] border border-[var(--border-card)] text-[var(--text-primary)] rounded-2xl text-[10px] font-bold uppercase tracking-widest hover:bg-[var(--text-primary)]/5 transition-all"
-                >
-                  {t("Ver Relatório", "View Report")}
-                </button>
-                <button 
-                  onClick={handleConfirmSplit}
-                  disabled={isProcessing || selectedParticipants.length < 1}
-                  className="flex-[2] py-4 bg-[var(--accent)] text-[var(--bg-app)] rounded-2xl text-[10px] font-bold uppercase tracking-widest hover:bg-[var(--accent)]/80 transition-all flex items-center justify-center gap-2"
-                >
-                  {isProcessing ? <Loader2 size={16} className="animate-spin" /> : <Check size={16} />}
-                  {t("Aprovar e Disparar", "Approve and Dispatch")}
-                </button>
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
-
-      {/* MODAL DE RELATÓRIO DE RATEIO */}
-      <AnimatePresence>
-        {showReport && selectedProposal && (
-          <div className="fixed inset-0 z-[110] flex items-center justify-center p-4 bg-black/80 backdrop-blur-md">
-            <motion.div 
-              initial={{ opacity: 0, scale: 0.9 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.9 }}
-              className="bg-[var(--bg-card)] border border-[var(--border-card)] rounded-[40px] w-full max-w-lg p-8 space-y-6 shadow-2xl overflow-y-auto max-h-[90vh]"
-            >
-              <div className="flex justify-between items-center">
-                <h3 className="text-xl font-bold text-[var(--text-primary)]">{t("Relatório de Rateio IA", "IA Split Report")}</h3>
-                <button onClick={() => setShowReport(false)} className="text-[var(--text-muted)] hover:text-[var(--text-primary)]">
-                  <X size={24} />
-                </button>
-              </div>
-
-              <div className="space-y-6">
-                <div className="p-6 bg-[var(--bg-app)] rounded-3xl border border-[var(--border-card)] space-y-4">
-                  <div className="flex justify-between items-center">
-                    <span className="text-xs text-[var(--text-muted)] uppercase font-bold tracking-widest">Total da Fatura</span>
-                    <span className="text-2xl font-mono font-bold text-[var(--text-primary)]">
-                      {selectedProposal.value.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
-                    </span>
-                  </div>
-                  <div className="h-px bg-[var(--border-card)] w-full" />
-                  <div className="flex justify-between items-center">
-                    <span className="text-xs text-[var(--text-muted)] uppercase font-bold tracking-widest">Participantes</span>
-                    <span className="text-sm font-bold text-[var(--accent)]">{selectedParticipants.length}</span>
-                  </div>
-                  <div className="flex justify-between items-center">
-                    <span className="text-xs text-[var(--text-muted)] uppercase font-bold tracking-widest">Custo Individual</span>
-                    <span className="text-lg font-mono font-bold text-[var(--accent)]">
-                      {(selectedProposal.value / selectedParticipants.length).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
-                    </span>
-                  </div>
-                </div>
-
-                <div className="space-y-3">
-                  <h4 className="text-[10px] uppercase font-black text-[var(--text-muted)] tracking-[0.2em] px-1">Detalhamento por Integrante</h4>
-                  <div className="space-y-2">
-                    {selectedParticipants.map(pUid => {
-                      const u = allAvailableParticipants.find((p: any) => p.uid === pUid);
-                      const personaName = u?.displayName?.split(' ')[0];
-                      const persona = PERFIS[personaName as keyof typeof PERFIS];
-                      return (
-                        <div key={`report-participant-${pUid}`} className="p-4 bg-[var(--bg-app)]/50 rounded-2xl border border-[var(--border-card)] flex justify-between items-center">
-                          <div className="flex items-center gap-3">
-                            <img src={u?.photoURL} className="w-8 h-8 rounded-lg object-cover" alt="" />
-                            <div>
-                              <p className="text-[11px] font-bold text-[var(--text-primary)]">{u?.displayName}</p>
-                              <p className="text-[8px] text-[var(--accent)] font-bold uppercase tracking-widest">{persona?.area || 'Familiar'}</p>
-                            </div>
-                          </div>
-                          <p className="text-xs font-mono font-bold text-[var(--text-primary)]">
-                            {(selectedProposal.value / selectedParticipants.length).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
-                          </p>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-
-                <div className="p-4 bg-[var(--accent)]/5 rounded-2xl border border-[var(--accent)]/20 flex items-start gap-3">
-                  <Sparkles size={18} className="text-[var(--accent)] shrink-0 mt-1" />
-                  <p className="text-[10px] text-[var(--text-secondary)] leading-relaxed italic">
-                    "Zenith IA: Este rateio mantém o equilíbrio do fluxo de caixa familiar entre os participantes selecionados."
-                  </p>
-                </div>
-              </div>
-
-              <button 
-                onClick={() => setShowReport(false)}
-                className="w-full py-4 bg-[var(--accent)] text-[var(--bg-app)] rounded-2xl text-xs font-bold uppercase tracking-widest hover:bg-[var(--accent)]/80 transition-all"
-              >
-                {t("Voltar para Configuração", "Back to Configuration")}
-              </button>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
-
-      {/* SEÇÃO DE RELATÓRIOS MENSAIS */}
-      <section className="space-y-4">
-        <div className="flex justify-between items-center px-1">
-          <div>
-            <h3 className="text-sm font-bold text-[var(--text-primary)] uppercase tracking-widest">{t("Relatórios de Rateio", "Split Reports")}</h3>
-            <p className="text-[9px] text-[var(--text-muted)] uppercase tracking-widest mt-1">Gestão Mensal Consolidada</p>
-          </div>
-          <button 
-            onClick={generateMonthlyReport}
-            disabled={isProcessing}
-            className="flex items-center gap-2 px-4 py-2 bg-[var(--accent)] text-[var(--bg-app)] rounded-xl text-[10px] font-bold uppercase tracking-widest hover:bg-[var(--accent)]/80 transition-all disabled:opacity-50"
-          >
-            <FileText size={14} />
-            {t("Gerar Relatório do Mês", "Generate Monthly Report")}
-          </button>
-        </div>
-
-        {reports.length === 0 ? (
-          <div className="bg-[var(--bg-card)] border border-dashed border-[var(--border-card)] rounded-[32px] p-12 text-center">
-            <div className="w-12 h-12 bg-[var(--accent)]/5 rounded-full flex items-center justify-center mx-auto mb-4">
-              <ClipboardCheck size={24} className="text-[var(--accent)]/30" />
-            </div>
-            <p className="text-xs text-[var(--text-muted)] font-medium">Nenhum relatório mensal gerado.</p>
-          </div>
-        ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {reports.map((report: any, idx: number) => (
-              <motion.div 
-                key={`report-${report.id}-${idx}`}
-                layout
-                className="bg-[var(--bg-card)] border border-[var(--border-card)] rounded-[28px] p-5 space-y-4 relative overflow-hidden group"
-              >
-                <div className="flex justify-between items-start">
-                  <div>
-                    <h4 className="text-[10px] font-bold text-[var(--text-muted)] uppercase tracking-widest mb-1">
-                      {t(
-                        `${new Intl.DateTimeFormat('pt-BR', { month: 'long' }).format(new Date(report.year, report.month))} ${report.year}`,
-                        `${new Intl.DateTimeFormat('en-US', { month: 'long' }).format(new Date(report.year, report.month))} ${report.year}`
-                      )}
-                    </h4>
-                    <div className="text-xl font-bold text-[var(--text-primary)]">
-                      R$ {report.totalConsolidated.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
-                    </div>
-                  </div>
-                  <div className={`px-2 py-1 rounded-lg text-[9px] font-bold uppercase tracking-widest ${
-                    report.status === 'approved' ? 'bg-[var(--trend-up)]/10 text-[var(--trend-up)]' :
-                    report.status === 'rejected' ? 'bg-[var(--trend-down)]/10 text-[var(--trend-down)]' :
-                    'bg-yellow-500/10 text-yellow-500'
-                  }`}>
-                    {report.status}
-                  </div>
-                </div>
-
-                <div className="space-y-2 max-h-[120px] overflow-y-auto custom-scrollbar pr-1">
-                  {report.participantsSummary.map((p: any, pIdx: number) => (
-                    <div key={`p-summary-${p.uid}-${pIdx}`} className="flex justify-between items-center text-[11px] py-1 border-b border-[var(--border-card)] last:border-0 border-dashed">
-                      <span className="text-[var(--text-secondary)]">{p.displayName}</span>
-                      <span className="font-bold text-[var(--text-primary)]">R$ {p.totalToPay.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span>
-                    </div>
-                  ))}
-                </div>
-
-                {report.iaFeedback && (
-                  <div className="p-3 bg-[var(--accent)]/5 rounded-xl border border-[var(--accent)]/10">
-                    <div className="flex items-center gap-1.5 mb-1.5">
-                      <Sparkles size={12} className="text-[var(--accent)]" />
-                      <span className="text-[9px] font-bold text-[var(--accent)] uppercase tracking-widest">Suporte Zenith IA</span>
-                    </div>
-                    <p className="text-[10px] text-[var(--text-muted)] italic leading-relaxed">
-                      "{report.iaFeedback}"
-                    </p>
-                  </div>
-                )}
-
-                {report.status === 'pending' && (
-                  <div className="flex gap-2 pt-2 border-t border-[var(--border-card)]">
-                    <button 
-                      onClick={() => approveReport(report.id)}
-                      className="flex-1 py-2.5 bg-[var(--trend-up)] text-[var(--bg-app)] rounded-xl text-[10px] font-bold uppercase tracking-widest hover:bg-[var(--trend-up)]/90 transition-all flex items-center justify-center gap-2"
-                    >
-                      <Check size={14} /> {t("Aprovar", "Approve")}
-                    </button>
-                    <button 
-                      onClick={() => rejectReport(report.id)}
-                      className="flex-1 py-2.5 bg-[var(--trend-down)] text-[var(--bg-app)] rounded-xl text-[10px] font-bold uppercase tracking-widest hover:bg-[var(--trend-down)]/90 transition-all flex items-center justify-center gap-2"
-                    >
-                      <X size={14} /> {t("Rejeitar", "Reject")}
-                    </button>
-                  </div>
-                )}
-              </motion.div>
-            ))}
-          </div>
-        )}
-      </section>
-
-      <div className="h-px bg-[var(--border-card)] w-full opacity-50" />
-
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        {consolidatedData.map((item: any, idx: number) => {
-          const personaName = item.user.displayName.split(' ')[0];
-          const persona = PERFIS[personaName as keyof typeof PERFIS];
-          
-          return (
-            <motion.div 
-              key={`${item.user.uid}-${idx}`}
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              className="bg-[var(--bg-card)] border border-[var(--border-card)] rounded-[32px] p-6 space-y-4 relative overflow-hidden group"
-            >
-              <div className="flex justify-between items-start">
-                <div className="flex items-center gap-4">
-                  <div className="w-14 h-14 rounded-2xl overflow-hidden border-2 border-[var(--accent)]/20">
-                    <img src={item.user.photoURL} alt="" className="w-full h-full object-cover" />
-                  </div>
-                  <div>
-                    <h4 className="text-lg font-bold text-[var(--text-primary)] flex items-center gap-2">
-                      {item.user.displayName} {persona?.emoji}
-                    </h4>
-                    <p className="text-[10px] text-[var(--text-muted)] uppercase font-black tracking-widest">{persona?.area || 'Familiar'}</p>
-                  </div>
-                </div>
-                <div className="text-right">
-                  <p className="text-xl font-mono font-bold text-[var(--accent)]">
-                    {privacyMode ? '••••••' : item.totalOwed.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
-                  </p>
-                  <p className="text-[10px] text-[var(--text-muted)] font-bold uppercase tracking-widest">Saldo a Recuperar</p>
-                </div>
-              </div>
-
-              {item.totalOwed > 0 && (
-                <>
-                  <div className="space-y-1.5 px-1 max-h-[100px] overflow-y-auto custom-scrollbar">
-                    {item.pendingSplits.map((s: any, sIdx: number) => (
-                      <div key={`sd-${s.id}-${sIdx}`} className="flex justify-between items-center text-[9px] py-1 border-b border-white/5 last:border-0">
-                        <span className="text-[var(--text-muted)] truncate max-w-[140px] uppercase font-bold tracking-wider">{s.transactionLabel || 'Fatura'}</span>
-                        <span className="text-[var(--text-primary)] font-mono font-black">
-                          {s.shareValue.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-
-                  <div className="p-4 bg-[var(--bg-app)]/50 rounded-2xl border border-[var(--border-card)] italic text-xs text-[var(--text-secondary)] leading-relaxed">
-                    "{persona?.saudacao || 'Sinais vitais financeiros estáveis.'}"
-                  </div>
-
-                  <div className="flex gap-2">
-                    <button 
-                      className="flex-1 py-3 bg-[var(--accent)] text-[var(--bg-app)] rounded-2xl text-[10px] font-bold uppercase tracking-widest hover:bg-[var(--accent)]/80 transition-all flex items-center justify-center gap-2"
-                      onClick={() => {
-                        const message = gerarMensagemPersona(item, persona);
-                        navigator.clipboard.writeText(message);
-                        alert(t('Mensagem Pix copiada!', 'Pix message copied!'));
-                      }}
-                    >
-                      <Copy size={14} />
-                      {t("Copiar Mensagem Pix", "Copy Pix Message")}
-                    </button>
-                    <button className="w-12 h-12 bg-[var(--bg-card)] border border-[var(--border-card)] rounded-2xl flex items-center justify-center text-[var(--text-muted)] hover:text-[var(--accent)] transition-colors">
-                      <QrCode size={20} />
-                    </button>
-                  </div>
-                </>
-              )}
-              {item.totalOwed === 0 && item.user.uid === profile?.uid && (
-                <div className="py-2 text-center text-[8px] text-[var(--text-muted)] uppercase tracking-widest font-bold">
-                  Dono da Conta (Sem saldo a recuperar de si mesmo)
-                </div>
-              )}
-            </motion.div>
-          );
-        })}
-        {consolidatedData.length === 0 && (
-          <div className="col-span-full py-20 text-center border border-dashed border-[var(--border-card)] rounded-[40px]">
-            <Users size={40} className="mx-auto text-[var(--text-muted)] opacity-20 mb-4" />
-            <p className="text-[var(--text-muted)] text-sm">{t("Nenhum integrante ou rateio encontrado.", "No family members or splits found.")}</p>
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function ParcelasView({ installments, language, user }: any) {
-  const t = (pt: string, en: string) => (language === 'en-US' ? en : pt);
-  const [isModalOpen, setIsModalOpen] = useState(false);
-  const [editingItem, setEditingItem] = useState<any>(null);
-  const [filters, setFilters] = useState({ person: '', institution: '', status: '' });
-  const [formData, setFormData] = useState({
-    person: '',
-    institution: '',
-    label: '',
-    value: 0,
-    totalValue: 0,
-    currentInstallment: 1,
-    totalInstallments: 1,
-    status: 'Pendente',
-    dueDate: new Date().toISOString().split('T')[0],
-    notes: ''
-  });
-
-  const filtered = installments.filter((item: any) => {
-    return (
-      (!filters.person || item.person?.toLowerCase().includes(filters.person.toLowerCase())) &&
-      (!filters.institution || item.institution?.toLowerCase().includes(filters.institution.toLowerCase())) &&
-      (!filters.status || item.status === filters.status)
-    );
-  });
-
-  const handleSave = async () => {
-    if (!formData.label || formData.value <= 0) {
-      alert(t('Preencha os campos obrigatórios.', 'Fill in the required fields.'));
-      return;
-    }
-
-    const payload = {
-      ...formData,
-      uid: user.uid,
-      dueDate: Timestamp.fromDate(new Date(formData.dueDate)),
-      createdAt: editingItem ? editingItem.createdAt : serverTimestamp()
-    };
-
-    try {
-      if (editingItem) {
-        await updateDoc(doc(db, 'installments', editingItem.id), payload);
-      } else {
-        await addDoc(collection(db, 'installments'), payload);
-      }
-      setIsModalOpen(false);
-      setEditingItem(null);
-    } catch (e) {
-      handleFirestoreError(e, OperationType.WRITE, 'installments');
-    }
-  };
-
-  const handleDelete = async (id: string) => {
-    if (!confirm(t('Excluir este registro?', 'Delete this record?'))) return;
-    try {
-      await deleteDoc(doc(db, 'installments', id));
-    } catch (e) {
-      handleFirestoreError(e, OperationType.DELETE, 'installments');
-    }
-  };
-
-  const exportToCSV = () => {
-    const headers = ['Pessoa', 'Instituição', 'Compromisso', 'Valor Parcela', 'Valor Total', 'Parcela', 'Status', 'Vencimento', 'Notas'];
-    const rows = filtered.map((item: any) => [
-      item.person,
-      item.institution,
-      item.label,
-      item.value,
-      item.totalValue,
-      `${item.currentInstallment}/${item.totalInstallments}`,
-      item.status,
-      item.dueDate?.toLocaleDateString(),
-      item.notes
-    ]);
-
-    const csvContent = [headers, ...rows].map(e => e.join(',')).join('\n');
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.setAttribute('href', url);
-    link.setAttribute('download', 'parcelas.csv');
-    link.click();
-  };
-
-  return (
-    <div className="space-y-6">
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-        <div className="flex flex-wrap gap-2">
-          <input 
-            type="text" 
-            placeholder={t('Filtrar Pessoa', 'Filter Person')}
-            className="bg-[var(--bg-card)] border border-[var(--border-card)] rounded-xl px-4 py-2 text-sm text-white outline-none focus:border-[var(--accent)] transition-colors"
-            value={filters.person}
-            onChange={(e) => setFilters({...filters, person: e.target.value})}
-          />
-          <input 
-            type="text" 
-            placeholder={t('Filtrar Instituição', 'Filter Institution')}
-            className="bg-[var(--bg-card)] border border-[var(--border-card)] rounded-xl px-4 py-2 text-sm text-white outline-none focus:border-[var(--accent)] transition-colors"
-            value={filters.institution}
-            onChange={(e) => setFilters({...filters, institution: e.target.value})}
-          />
-          <select 
-            className="bg-[var(--bg-card)] border border-[var(--border-card)] rounded-xl px-4 py-2 text-sm text-white outline-none focus:border-[var(--accent)] transition-colors"
-            value={filters.status}
-            onChange={(e) => setFilters({...filters, status: e.target.value})}
-          >
-            <option value="">{t('Todos Status', 'All Status')}</option>
-            <option value="Pendente">{t('Pendente', 'Pending')}</option>
-            <option value="Quitado">{t('Quitado', 'Paid')}</option>
-            <option value="Atrasado">{t('Atrasado', 'Overdue')}</option>
-            <option value="Adiantado">{t('Adiantado', 'Advanced')}</option>
-          </select>
-        </div>
-        <div className="flex gap-2">
-          <button 
-            onClick={exportToCSV}
-            className="flex items-center gap-2 bg-[var(--bg-card)] border border-[var(--border-card)] px-4 py-2 rounded-xl text-sm font-medium text-white hover:bg-[var(--accent)]/10 transition-colors"
-          >
-            <Download size={16} />
-            {t('Exportar', 'Export')}
-          </button>
-          <button 
-            onClick={() => {
-              setEditingItem(null);
-              setFormData({
-                person: '',
-                institution: '',
-                label: '',
-                value: 0,
-                totalValue: 0,
-                currentInstallment: 1,
-                totalInstallments: 1,
-                status: 'Pendente',
-                dueDate: new Date().toISOString().split('T')[0],
-                notes: ''
-              });
-              setIsModalOpen(true);
-            }}
-            className="flex items-center gap-2 bg-[var(--accent)] text-[var(--bg-app)] px-4 py-2 rounded-xl text-sm font-bold shadow-lg shadow-[var(--accent)]/20 hover:scale-105 transition-all"
-          >
-            <Plus size={16} />
-            {t('Novo Registro', 'New Record')}
-          </button>
-        </div>
-      </div>
-
-      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
-        <AnimatePresence mode="popLayout">
-          {filtered.map((item: any) => (
-            <motion.div 
-              key={item.id}
-              layout
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.95 }}
-              className="bg-[var(--bg-card)] border border-[var(--border-card)] rounded-[32px] p-6 hover:border-[var(--accent)]/30 transition-all group relative overflow-hidden"
-            >
-              <div className="absolute top-0 right-0 p-4 opacity-0 group-hover:opacity-100 transition-opacity flex gap-2">
-                <button 
-                  onClick={() => {
-                    setEditingItem(item);
-                    setFormData({
-                      person: item.person || '',
-                      institution: item.institution || '',
-                      label: item.label,
-                      value: item.value,
-                      totalValue: item.totalValue || 0,
-                      currentInstallment: item.currentInstallment || 1,
-                      totalInstallments: item.totalInstallments || 1,
-                      status: item.status,
-                      dueDate: item.dueDate?.toISOString().split('T')[0] || new Date().toISOString().split('T')[0],
-                      notes: item.notes || ''
-                    });
-                    setIsModalOpen(true);
-                  }}
-                  className="w-8 h-8 rounded-full bg-white/10 flex items-center justify-center text-white hover:bg-white/20"
-                >
-                  <Edit3 size={14} />
-                </button>
-                <button 
-                  onClick={() => handleDelete(item.id)}
-                  className="w-8 h-8 rounded-full bg-red-500/10 flex items-center justify-center text-red-500 hover:bg-red-500/20"
-                >
-                  <Trash2 size={14} />
-                </button>
-              </div>
-
-              <div className="space-y-4">
-                <div className="flex items-start justify-between">
-                  <div>
-                    <h4 className="text-lg font-bold text-white">{item.label}</h4>
-                    <p className="text-sm text-[var(--text-muted)]">{item.institution} • {item.person}</p>
-                  </div>
-                  <span className={`px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider ${
-                    item.status === 'Quitado' ? 'bg-green-500/10 text-green-500' :
-                    item.status === 'Atrasado' ? 'bg-red-500/10 text-red-500' :
-                    item.status === 'Adiantado' ? 'bg-blue-500/10 text-blue-500' :
-                    'bg-yellow-500/10 text-yellow-500'
-                  }`}>
-                    {item.status}
-                  </span>
-                </div>
-
-                <div className="p-4 bg-white/5 rounded-2xl border border-white/5">
-                  <div className="flex justify-between items-end mb-2">
-                    <span className="text-xs text-[var(--text-muted)] uppercase tracking-widest">{t('Valor Parcela', 'Installment Value')}</span>
-                    <span className="text-xl font-bold text-white">
-                      {item.value.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
-                    </span>
-                  </div>
-                  <div className="flex justify-between text-[10px] text-[var(--text-muted)]">
-                    <span>{t('Total:', 'Total:')} {item.totalValue?.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</span>
-                    <span>{item.currentInstallment}/{item.totalInstallments}</span>
-                  </div>
-                </div>
-
-                <div className="flex items-center gap-2 text-xs text-[var(--text-muted)]">
-                  <Calendar size={14} />
-                  <span>{t('Vencimento:', 'Due Date:')} {item.dueDate?.toLocaleDateString()}</span>
-                </div>
-
-                {item.notes && (
-                  <p className="text-xs text-[var(--text-muted)] italic line-clamp-2">
-                    "{item.notes}"
-                  </p>
-                )}
-              </div>
-            </motion.div>
-          ))}
-        </AnimatePresence>
-      </div>
-
-      {isModalOpen && (
-        <div className="fixed inset-0 z-[110] flex items-center justify-center p-6 bg-black/60 backdrop-blur-sm">
-          <motion.div 
-            initial={{ opacity: 0, scale: 0.95, y: 20 }}
-            animate={{ opacity: 1, scale: 1, y: 0 }}
-            className="bg-[var(--bg-card)] border border-[var(--border-card)] rounded-[40px] p-8 max-w-xl w-full max-h-[90vh] overflow-y-auto space-y-6 shadow-2xl"
-          >
-            <div className="flex justify-between items-center">
-              <h3 className="text-2xl font-bold text-white">
-                {editingItem ? t('Editar Parcelamento', 'Edit Installment') : t('Novo Parcelamento', 'New Installment')}
-              </h3>
-              <button 
-                onClick={() => setIsModalOpen(false)}
-                className="w-10 h-10 rounded-full bg-white/5 flex items-center justify-center text-white hover:bg-white/10"
-              >
-                <X size={20} />
-              </button>
-            </div>
-
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <label className="text-xs font-bold text-[var(--text-muted)] uppercase tracking-widest">{t('Compromisso', 'Commitment')}</label>
-                <input 
-                  type="text" 
-                  className="w-full bg-white/5 border border-white/10 rounded-2xl px-4 py-3 text-white outline-none focus:border-[var(--accent)] transition-colors"
-                  value={formData.label}
-                  onChange={(e) => setFormData({...formData, label: e.target.value})}
-                />
-              </div>
-              <div className="space-y-2">
-                <label className="text-xs font-bold text-[var(--text-muted)] uppercase tracking-widest">{t('Instituição', 'Institution')}</label>
-                <input 
-                  type="text" 
-                  className="w-full bg-white/5 border border-white/10 rounded-2xl px-4 py-3 text-white outline-none focus:border-[var(--accent)] transition-colors"
-                  value={formData.institution}
-                  onChange={(e) => setFormData({...formData, institution: e.target.value})}
-                />
-              </div>
-              <div className="space-y-2">
-                <label className="text-xs font-bold text-[var(--text-muted)] uppercase tracking-widest">{t('Responsável', 'Responsible')}</label>
-                <input 
-                  type="text" 
-                  className="w-full bg-white/5 border border-white/10 rounded-2xl px-4 py-3 text-white outline-none focus:border-[var(--accent)] transition-colors"
-                  value={formData.person}
-                  onChange={(e) => setFormData({...formData, person: e.target.value})}
-                />
-              </div>
-              <div className="space-y-2">
-                <label className="text-xs font-bold text-[var(--text-muted)] uppercase tracking-widest">{t('Valor Parcela', 'Installment Value')}</label>
-                <input 
-                  type="number" 
-                  className="w-full bg-white/5 border border-white/10 rounded-2xl px-4 py-3 text-white outline-none focus:border-[var(--accent)] transition-colors"
-                  value={formData.value}
-                  onChange={(e) => setFormData({...formData, value: parseFloat(e.target.value) || 0})}
-                />
-              </div>
-              <div className="space-y-2">
-                <label className="text-xs font-bold text-[var(--text-muted)] uppercase tracking-widest">{t('Valor Total', 'Total Value')}</label>
-                <input 
-                  type="number" 
-                  className="w-full bg-white/5 border border-white/10 rounded-2xl px-4 py-3 text-white outline-none focus:border-[var(--accent)] transition-colors"
-                  value={formData.totalValue}
-                  onChange={(e) => setFormData({...formData, totalValue: parseFloat(e.target.value) || 0})}
-                />
-              </div>
-              <div className="space-y-2">
-                <label className="text-xs font-bold text-[var(--text-muted)] uppercase tracking-widest">{t('Vencimento', 'Due Date')}</label>
-                <input 
-                  type="date" 
-                  className="w-full bg-white/5 border border-white/10 rounded-2xl px-4 py-3 text-white outline-none focus:border-[var(--accent)] transition-colors"
-                  value={formData.dueDate}
-                  onChange={(e) => setFormData({...formData, dueDate: e.target.value})}
-                />
-              </div>
-              <div className="space-y-2">
-                <label className="text-xs font-bold text-[var(--text-muted)] uppercase tracking-widest">{t('Parcela Atual', 'Current Installment')}</label>
-                <input 
-                  type="number" 
-                  className="w-full bg-white/5 border border-white/10 rounded-2xl px-4 py-3 text-white outline-none focus:border-[var(--accent)] transition-colors"
-                  value={formData.currentInstallment}
-                  onChange={(e) => setFormData({...formData, currentInstallment: parseInt(e.target.value) || 1})}
-                />
-              </div>
-              <div className="space-y-2">
-                <label className="text-xs font-bold text-[var(--text-muted)] uppercase tracking-widest">{t('Total de Parcelas', 'Total Installments')}</label>
-                <input 
-                  type="number" 
-                  className="w-full bg-white/5 border border-white/10 rounded-2xl px-4 py-3 text-white outline-none focus:border-[var(--accent)] transition-colors"
-                  value={formData.totalInstallments}
-                  onChange={(e) => setFormData({...formData, totalInstallments: parseInt(e.target.value) || 1})}
-                />
-              </div>
-              <div className="space-y-2 col-span-2">
-                <label className="text-xs font-bold text-[var(--text-muted)] uppercase tracking-widest">{t('Status', 'Status')}</label>
-                <select 
-                  className="w-full bg-white/5 border border-white/10 rounded-2xl px-4 py-3 text-white outline-none focus:border-[var(--accent)] transition-colors appearance-none"
-                  value={formData.status}
-                  onChange={(e) => setFormData({...formData, status: e.target.value})}
-                >
-                  <option value="Pendente">{t('Pendente', 'Pending')}</option>
-                  <option value="Quitado">{t('Quitado', 'Paid')}</option>
-                  <option value="Atrasado">{t('Atrasado', 'Overdue')}</option>
-                  <option value="Adiantado">{t('Adiantado', 'Advanced')}</option>
-                </select>
-              </div>
-              <div className="space-y-2 col-span-2">
-                <label className="text-xs font-bold text-[var(--text-muted)] uppercase tracking-widest">{t('Observações', 'Notes')}</label>
-                <textarea 
-                  className="w-full bg-white/5 border border-white/10 rounded-2xl px-4 py-3 text-white outline-none focus:border-[var(--accent)] transition-colors h-24 resize-none"
-                  value={formData.notes}
-                  onChange={(e) => setFormData({...formData, notes: e.target.value})}
-                />
-              </div>
-            </div>
-
-            <button 
-              onClick={handleSave}
-              className="w-full py-4 bg-[var(--accent)] text-[var(--bg-app)] rounded-2xl font-bold text-lg shadow-xl shadow-[var(--accent)]/20 hover:scale-[1.02] active:scale-95 transition-all"
-            >
-              {editingItem ? t('Atualizar Registro', 'Update Record') : t('Salvar Registro', 'Save Record')}
-            </button>
-          </motion.div>
-        </div>
-      )}
-    </div>
-  );
-}
-
 export default function ZenithApp() {
   const [user, setUser] = useState<User | null>(null);
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [assets, setAssets] = useState<Asset[]>([]);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [ddas, setDdas] = useState<DDA[]>([]);
-  const [splitProposals, setSplitProposals] = useState<SplitProposal[]>([]);
   const [settings, setSettings] = useState<Settings | null>(null);
   const [privacyMode, setPrivacyMode] = useState(false);
   const [selectedAsset, setSelectedAsset] = useState<Asset | null>(null);
   const [isAuthReady, setIsAuthReady] = useState(false);
-  const [isEditingProfile, setIsEditingProfile] = useState(false);
-  const [showChartMenu, setShowChartMenu] = useState(false);
-  const [chartFilter, setChartFilter] = useState({ year: '2026', month: 'Todos', day: 'Todos' });
+  const [chartFilter, setChartFilter] = useState({ period: 'Meses', month: 'Atual', day: 'Todos' });
   const [isAddingAsset, setIsAddingAsset] = useState(false);
   const [isAddingTransaction, setIsAddingTransaction] = useState(false);
   const [isEditingTransaction, setIsEditingTransaction] = useState(false);
   const [selectedTransaction, setSelectedTransaction] = useState<any>(null);
-  const [reports, setReports] = useState<Report[]>([]);
   const [userRules, setUserRules] = useState<any[]>([]);
-  const [isHeritageSettingsOpen, setIsHeritageSettingsOpen] = useState(false);
-  const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
-  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  const [isProfileDrawerOpen, setIsProfileDrawerOpen] = useState(false);
+  const [drawerPageRequest, setDrawerPageRequest] = useState<'menu' | 'profile' | 'notifications' | 'settings' | 'ai_key' | 'trash'>('menu');
   const [notifications, setNotifications] = useState<any[]>([]);
   const [isIngestionHubOpen, setIsIngestionHubOpen] = useState(false);
   const [isReviewModalOpen, setIsReviewModalOpen] = useState(false);
@@ -1678,17 +499,13 @@ export default function ZenithApp() {
   const filteredRecentTransactions = useMemo(() => {
     let filtered = [...transactions];
     if (chartFilterValue.type === 'category' && chartFilterValue.value) {
-      filtered = filtered.filter(t => (t.categoria_primaria || 'Outros') === chartFilterValue.value);
+      filtered = filtered.filter(t => getTransactionCategory(t) === chartFilterValue.value);
     }
     return filtered.slice(0, 5);
   }, [transactions, chartFilterValue]);
   const [isCategoryDetailsOpen, setIsCategoryDetailsOpen] = useState(false);
   const [activeCategoryDetail, setActiveCategoryDetail] = useState<string | null>(null);
   const [timeFilter, setTimeFilter] = useState<'7' | '15' | '30'>('30');
-  const [users, setUsers] = useState<UserProfile[]>([]);
-  const [familyMembers, setFamilyMembers] = useState<any[]>([]);
-  const [splits, setSplits] = useState<any[]>([]);
-  const [installments, setInstallments] = useState<any[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [firestoreIssues, setFirestoreIssues] = useState<{ id: string; code: string; operationType: string; path: string | null; timestamp: string }[]>([]);
   const [geminiApiKey, setGeminiApiKey] = useState(() => {
@@ -1698,63 +515,13 @@ export default function ZenithApp() {
       return '';
     }
   });
-  const [isApiKeyModalOpen, setIsApiKeyModalOpen] = useState(false);
-  const [apiKeyDraft, setApiKeyDraft] = useState('');
   const [apiKeyError, setApiKeyError] = useState<string | null>(null);
   const isSeedingRef = useRef(false);
 
-  // Current User Listener (only the signed-in user's document).
-  // The users collection is no longer listable by regular users.
-  useEffect(() => {
-    if (!user) {
-      setUsers([]);
-      return;
-    }
-    const unsub = onSnapshot(doc(db, 'users', user.uid), (snap) => {
-      setUsers(snap.exists() ? [{ uid: snap.id, ...snap.data() } as UserProfile] : []);
-    }, (e) => handleFirestoreError(e, OperationType.GET, `users/${user.uid}`));
-    return unsub;
-  }, [user]);
-
-  // Family Members Listener
-  useEffect(() => {
-    if (!user) {
-      setFamilyMembers([]);
-      return;
-    }
-    const q = query(collection(db, 'family_members'), where('ownerUid', '==', user.uid));
-    const unsub = onSnapshot(q, (snap) => {
-      setFamilyMembers(snap.docs.map(d => ({ id: d.id, ...d.data() })));
-    }, (e) => handleFirestoreError(e, OperationType.LIST, 'family_members'));
-    return unsub;
-  }, [user]);
-
-  // Splits Listener (to track amounts to receive)
-  useEffect(() => {
-    if (!user) {
-      setSplits([]);
-      return;
-    }
-    const q = query(collection(db, 'splits'), where('ownerUid', '==', user.uid), where('status', '==', 'pending'));
-    const unsub = onSnapshot(q, (snap) => {
-      const docs = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-      setSplits(docs);
-    }, (e) => handleFirestoreError(e, OperationType.LIST, 'splits'));
-    return unsub;
-  }, [user]);
-
-  // Installments Listener
-  useEffect(() => {
-    if (!user) {
-      setInstallments([]);
-      return;
-    }
-    const q = query(collection(db, 'installments'), where('uid', '==', user.uid));
-    const unsub = onSnapshot(q, (snap) => {
-      setInstallments(snap.docs.map(doc => ({ id: doc.id, ...doc.data(), dueDate: (doc.data() as any).dueDate?.toDate() })));
-    }, (e) => handleFirestoreError(e, OperationType.LIST, 'installments'));
-    return unsub;
-  }, [user]);
+  const openDrawer = useCallback((page: 'menu' | 'profile' | 'notifications' | 'settings' | 'ai_key' | 'trash' = 'menu') => {
+    setDrawerPageRequest(page);
+    setIsProfileDrawerOpen(true);
+  }, []);
 
   const metrics = useMemo(() => {
     const now = new Date();
@@ -1763,93 +530,61 @@ export default function ZenithApp() {
     const prevMonth = currentMonth === 0 ? 11 : currentMonth - 1;
     const prevYear = currentMonth === 0 ? currentYear - 1 : currentYear;
 
-    const currentTotals = calculateTotals(transactions, currentMonth, currentYear, splits, assets);
-    const pendingSplits = splits.filter(s => s.status === 'pending');
-    const pendingToReceive = Math.round(
-      pendingSplits.reduce((acc, s) => acc + (s.shareValue ?? 0), 0) * 100
-    ) / 100;
+    const currentTotals = calculateTotals(transactions, currentMonth, currentYear, assets);
+    const prevTotals = calculateTotals(transactions, prevMonth, prevYear, assets);
 
-    const previousMonthSplits = splits.filter(s => {
-      if (s.status !== 'pending') return false;
-      const date = s.createdAt?.toDate ? s.createdAt.toDate() : (s.createdAt ? new Date(s.createdAt) : null);
-      return date && !isNaN(date.getTime()) &&
-        date.getMonth() === prevMonth && date.getFullYear() === prevYear;
-    });
-    const prevTotals = calculateTotals(transactions, prevMonth, prevYear, previousMonthSplits, assets);
+    const monthBalance = calculateMonthBalance(transactions, currentMonth, currentYear);
+    const netWorth = calculateNetWorth(assets, transactions, currentMonth, currentYear);
+    const previousNetWorth = calculateNetWorth(assets, transactions, prevMonth, prevYear);
 
     const investmentAssets = assets.filter(a => a.type === 'investment');
     const investedCost = investmentAssets.reduce((acc, a) => acc + (a.valorInvestido ?? a.value ?? 0), 0);
 
     return {
-      in: { 
-        total: currentTotals.in, 
+      in: {
+        total: currentTotals.in,
         var: calculateVariation(currentTotals.in, prevTotals.in),
         trend: currentTotals.in >= prevTotals.in ? 'up' : 'down',
-        data: getMiniChartData(transactions, 'in', MINI_CHART_DATA) 
+        data: getMiniChartData(transactions, 'in')
       },
-      out: { 
-        total: currentTotals.out, 
+      out: {
+        total: currentTotals.out,
         var: calculateVariation(currentTotals.out, prevTotals.out),
         trend: currentTotals.out >= prevTotals.out ? 'up' : 'down',
-        data: getMiniChartData(transactions, 'out', MINI_CHART_DATA) 
+        data: getMiniChartData(transactions, 'out')
       },
-      yield: { 
-        total: currentTotals.yield, 
+      yield: {
+        total: currentTotals.yield,
         var: calculateVariation(currentTotals.yield, prevTotals.yield),
         trend: currentTotals.yield >= prevTotals.yield ? 'up' : 'down',
-        data: getMiniChartData(transactions, 'yield', MINI_CHART_DATA) 
+        data: getMiniChartData(transactions, 'yield')
       },
-      toReceive: {
-        total: pendingToReceive,
-        var: calculateVariation(pendingToReceive, prevTotals.toReceive),
-        trend: pendingToReceive >= prevTotals.toReceive ? 'up' : 'down',
-        data: pendingSplits.map(s => ({ v: s.shareValue ?? 0 }))
-      },
+      monthBalance,
+      netWorth,
+      netWorthVar: calculateVariation(netWorth, previousNetWorth),
+      netWorthTrend: netWorth >= previousNetWorth ? 'up' : 'down',
       investments: currentTotals.investments,
       investmentsVar: calculateVariation(currentTotals.investments, investedCost),
       investmentsTrend: currentTotals.investments >= investedCost ? 'up' : 'down',
       investmentsData: investmentAssets.map(a => ({ v: a.value ?? 0 }))
     };
-  }, [transactions, splits, assets]);
+  }, [transactions, assets]);
 
-  const chartData = useMemo(() => calculateEvolutionData(assets, transactions), [assets, transactions]);
+  const chartData = useMemo(() => calculateEvolutionData(assets, transactions, chartFilter), [assets, transactions, chartFilter]);
+
+  const portfolioAllocationPercent = useMemo(() => {
+    const total = assets.reduce((acc, asset) => acc + (Number(asset?.value) || 0), 0);
+    if (total <= 0) return 0;
+    return Math.max(0, Math.min(100, Math.round((metrics.investments / total) * 100)));
+  }, [assets, metrics.investments]);
 
   const [investorProfile, setInvestorProfile] = useState<'Conservador' | 'Sofisticado' | 'Arrojado'>('Conservador');
   const [selectedAssetForDeepDive, setSelectedAssetForDeepDive] = useState<Asset | null>(null);
   const [investmentTab, setInvestmentTab] = useState<'Ativos' | 'Subcategorias' | 'Estratégias'>('Ativos');
 
   const cashFlowData = useMemo(() => calculateCashFlowData(transactions), [transactions]);
-  const [currentTab, setCurrentTab] = useState<'Início' | 'Carteira' | 'Investimentos' | 'IA' | 'Armazenamento' | 'Lixeira' | 'Parcelas'>('Início');
+  const [currentTab, setCurrentTab] = useState<'Início' | 'Carteira' | 'Investimentos' | 'IA' | 'Armazenamento'>('Início');
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
-
-  // Split participants: the signed-in user plus the family members stored
-  // under their own user scope. The global users collection is never read.
-  const allAvailableParticipants = useMemo(() => {
-    const list: any[] = [];
-    const self = users[0] || profile;
-
-    if (self) {
-      list.push({
-        uid: self.uid,
-        displayName: self.displayName,
-        photoURL: self.photoURL,
-        type: 'self'
-      });
-    }
-
-    familyMembers.forEach((m: any) => {
-      if (!list.find(u => u.uid === m.id)) {
-        list.push({ 
-          uid: m.id, 
-          displayName: m.name, 
-          photoURL: m.photoURL || `https://picsum.photos/seed/${m.id}/100/100`,
-          type: 'member'
-        });
-      }
-    });
-
-    return fixDuplicates(list, 'uid');
-  }, [users, profile, familyMembers]);
 
   // Auth Listener
   useEffect(() => {
@@ -2055,11 +790,8 @@ export default function ZenithApp() {
               "cashflow": createDefaultCategory("cashflow", "Fluxo de Caixa", "#FF9500"),
             },
             dashboard_order: [
-              'METRIC_SALDO',
               'METRIC_ENTRADAS',
               'METRIC_SAIDAS',
-              'METRIC_ARECEBER',
-              'METRIC_INVESTIMENTOS',
               'METRIC_RENDIMENTOS',
               'CHART_ALOC_ATIV',
               'CHART_FLUXO_CAIXA',
@@ -2089,6 +821,7 @@ export default function ZenithApp() {
     setError(null);
 
     try {
+      const { read, utils } = await import('xlsx');
       const workbook = read(new Uint8Array(await file.arrayBuffer()), { type: 'array', cellDates: true });
       const rawRows: { row: number; data: Record<string, unknown> }[] = [];
 
@@ -2142,7 +875,6 @@ export default function ZenithApp() {
         const finalValidation = TransactionSchema.safeParse({
           ...parsed.data,
           uid: user.uid,
-          participants: [],
           date: parsed.data.date,
           createdAt: new Date()
         });
@@ -2341,25 +1073,6 @@ export default function ZenithApp() {
 
       batch.set(newTxRef, finalTxData);
 
-      // Handle Splits if participants exist
-      if (finalTxData.participants && finalTxData.participants.length > 0) {
-        const totalParticipants = finalTxData.participants.length + 1;
-        const shareValue = Math.round((finalTxData.value / totalParticipants) * 100) / 100;
-        
-        finalTxData.participants.forEach(participantUid => {
-          const splitRef = doc(collection(db, 'splits'));
-          batch.set(splitRef, {
-            uid: participantUid,
-            ownerUid: user.uid,
-            transactionId: newTxRef.id,
-            transactionLabel: finalTxData.label,
-            shareValue: shareValue,
-            status: 'pending',
-            createdAt: serverTimestamp()
-          });
-        });
-      }
-
       // Atomic Balance Recalculation - Limit to 450 to stay within 500 batch limit
       const q = query(
         collection(db, 'transactions'), 
@@ -2458,34 +1171,6 @@ export default function ZenithApp() {
     return unsub;
   }, [user]);
 
-  // Split Proposals Listener
-  useEffect(() => {
-    if (!user) {
-      setSplitProposals([]);
-      return;
-    }
-    const q = query(collection(db, 'split_proposals'), where('uid', '==', user.uid));
-    const unsub = onSnapshot(q, (snap) => {
-      const docs = snap.docs.map(d => ({ id: d.id, ...d.data() } as SplitProposal));
-      setSplitProposals(docs);
-    }, (e) => handleFirestoreError(e, OperationType.LIST, 'split_proposals'));
-    return unsub;
-  }, [user]);
-
-  // Reports Listener
-  useEffect(() => {
-    if (!user) {
-      setReports([]);
-      return;
-    }
-    const q = query(collection(db, 'reports'), where('uid', '==', user.uid), orderBy('createdAt', 'desc'));
-    const unsub = onSnapshot(q, (snap) => {
-      const docs = snap.docs.map(d => ({ id: d.id, ...d.data() } as Report));
-      setReports(docs);
-    }, (e) => handleFirestoreError(e, OperationType.LIST, 'reports'));
-    return unsub;
-  }, [user]);
-
   const t = useCallback((pt: string, en: string) => {
     return settings?.language === 'en-US' ? en : pt;
   }, [settings?.language]);
@@ -2548,25 +1233,23 @@ export default function ZenithApp() {
 
     const key = stored.trim();
     if (!key) {
-      setApiKeyDraft('');
       setApiKeyError(null);
-      setIsApiKeyModalOpen(true);
+      openDrawer('ai_key');
       return null;
     }
 
     return key;
-  }, [geminiApiKey]);
+  }, [geminiApiKey, openDrawer]);
 
   const handleAiError = useCallback((e: unknown) => {
     const message = getAiErrorMessage(e, settings?.language);
     setError(message);
 
     if (e instanceof MissingApiKeyError || e instanceof InvalidApiKeyError) {
-      setApiKeyDraft(geminiApiKey);
       setApiKeyError(message);
-      setIsApiKeyModalOpen(true);
+      openDrawer('ai_key');
     }
-  }, [geminiApiKey, settings?.language]);
+  }, [geminiApiKey, settings?.language, openDrawer]);
 
   const resolveStyle = useCallback((catId: string, propertyName: string, defaultValue?: any) => {
     const config = settings?.zenith_config;
@@ -2610,22 +1293,14 @@ export default function ZenithApp() {
     return assets.filter(a => a.type === categoryMap[selectedCategory]);
   }, [assets, selectedCategory]);
 
-  const totalNetWorth = useMemo(() => {
-    const assetsTotal = assets.reduce((acc, curr) => acc + (curr.value ?? 0), 0);
-    return Math.round((assetsTotal + metrics.toReceive.total) * 100) / 100;
-  }, [assets, metrics.toReceive.total]);
-
   const orderedDashboardItems = useMemo(() => {
     const order = settings?.zenith_config?.dashboard_order || [];
     const chartsConfig = settings?.zenith_config?.charts || {};
     const metricsConfig = settings?.zenith_config?.metrics || {};
     
     const defaultOrder = [
-      'METRIC_SALDO',
       'METRIC_ENTRADAS',
       'METRIC_SAIDAS',
-      'METRIC_ARECEBER',
-      'METRIC_INVESTIMENTOS',
       'METRIC_RENDIMENTOS',
       'CHART_ALOC_ATIV',
       'CHART_FLUXO_CAIXA',
@@ -2635,7 +1310,12 @@ export default function ZenithApp() {
       'CHART_METAS_PROG'
     ];
 
-    const finalOrder = [...new Set(order)].filter(id => id !== 'CHART_EVOL_PATRIMONIO');
+    const finalOrder = [...new Set(order)].filter(id =>
+      id !== 'CHART_EVOL_PATRIMONIO' &&
+      id !== 'METRIC_ARECEBER' &&
+      id !== 'METRIC_SALDO' &&
+      id !== 'METRIC_INVESTIMENTOS'
+    );
     defaultOrder.forEach(id => {
       if (!finalOrder.includes(id)) finalOrder.push(id);
     });
@@ -2653,7 +1333,6 @@ export default function ZenithApp() {
     const mainColor = metricConfig.color || (
       id === 'METRIC_ENTRADAS' ? 'var(--trend-up)' :
       id === 'METRIC_SAIDAS' ? 'var(--trend-down)' :
-      id === 'METRIC_ARECEBER' ? 'var(--accent)' :
       id === 'METRIC_INVESTIMENTOS' ? 'var(--trend-up)' :
       'var(--trend-yield)'
     );
@@ -2666,14 +1345,14 @@ export default function ZenithApp() {
             key={id}
             id="net-worth"
             label={metricConfig.label || t("Patrimônio Total", "Net Worth")} 
-            value={(metrics.investments + metrics.in.total - metrics.out.total).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })} 
-            percent="+2.4%" 
-            trend="up" 
-            data={generateDailyData(metrics.investments + metrics.in.total - metrics.out.total).slice(-10).map(d => ({ v: d.value }))} 
+            value={(metrics.netWorth ?? 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })} 
+            percent={metrics.netWorthVar} 
+            trend={metrics.netWorthTrend} 
+            data={chartData.filter((point) => typeof point.value === 'number').slice(-10).map((point) => ({ v: point.value as number }))} 
             color={mainColor}
             opacity={opacity}
             privacy={privacyMode}
-            onSettings={() => setIsHeritageSettingsOpen(true)}
+            onSettings={() => openDrawer('settings')}
             resolveStyle={resolveStyle}
           />
         );
@@ -2690,7 +1369,7 @@ export default function ZenithApp() {
             color={mainColor}
             opacity={opacity}
             privacy={privacyMode}
-            onSettings={() => setIsHeritageSettingsOpen(true)}
+            onSettings={() => openDrawer('settings')}
             resolveStyle={resolveStyle}
           />
         );
@@ -2707,26 +1386,9 @@ export default function ZenithApp() {
             color={mainColor}
             opacity={opacity}
             privacy={privacyMode}
-            onSettings={() => setIsHeritageSettingsOpen(true)}
+            onSettings={() => openDrawer('settings')}
             resolveStyle={resolveStyle}
             isExpense={true}
-          />
-        );
-      case 'METRIC_ARECEBER':
-        return (
-          <MiniMetricCard 
-            key={id}
-            id="to-receive"
-            label={metricConfig.label || t("A Receber", "To Receive")} 
-            value={(metrics.toReceive.total ?? 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })} 
-            percent={metrics.toReceive.var} 
-            trend={metrics.toReceive.trend} 
-            data={metrics.toReceive.data} 
-            color={mainColor}
-            opacity={opacity}
-            privacy={privacyMode}
-            onSettings={() => setIsHeritageSettingsOpen(true)}
-            resolveStyle={resolveStyle}
           />
         );
       case 'METRIC_RENDIMENTOS':
@@ -2742,7 +1404,7 @@ export default function ZenithApp() {
             color={mainColor}
             opacity={opacity}
             privacy={privacyMode}
-            onSettings={() => setIsHeritageSettingsOpen(true)}
+            onSettings={() => openDrawer('settings')}
             resolveStyle={resolveStyle}
           />
         );
@@ -2759,7 +1421,7 @@ export default function ZenithApp() {
             color={mainColor}
             opacity={opacity}
             privacy={privacyMode}
-            onSettings={() => setIsHeritageSettingsOpen(true)}
+            onSettings={() => openDrawer('settings')}
             resolveStyle={resolveStyle}
           />
         );
@@ -2803,7 +1465,7 @@ export default function ZenithApp() {
                     tickLine={false} 
                     tick={{ fill: 'var(--text-primary)', fontSize: 8, opacity: 0.6 }} 
                     hide={!resolveStyle('evolution', 'show_values', true)}
-                    tickFormatter={(value) => value.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL', maximumFractionDigits: 0 })}
+                    tickFormatter={(value) => formatBRL(Number(value))}
                   />
                   {tooltipsEnabled && (
                     <Tooltip 
@@ -2811,15 +1473,16 @@ export default function ZenithApp() {
                       content={({ active, payload }) => {
                         if (active && payload && payload.length) {
                           const data = payload[0].payload;
+                          const pointValue = data.value ?? data.predicted ?? 0;
                           return (
                             <div className="bg-[var(--bg-card)] border border-[var(--border-card)] p-3 rounded-xl shadow-2xl backdrop-blur-md bg-opacity-90">
                               <p className="text-[10px] uppercase font-bold text-[var(--text-secondary)] tracking-widest mb-1">{data.date}</p>
                               <p className="text-base font-mono font-bold text-[var(--text-primary)]">
-                                {privacyMode ? '••••••' : (data.value ?? 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                                {privacyMode ? '••••••' : pointValue.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
                               </p>
-                              {predictiveEnabled && (
+                              {predictiveEnabled && data.predicted != null && (
                                 <p className="mt-2 text-[8px] text-[var(--accent)] font-bold italic">
-                                  ✨ IA: {data.value > 15000 ? "Seu patrimônio está 15% acima da projeção." : "Tendência de alta mantida para o próximo mês."}
+                                  ✨ {t('Projeção baseada na tendência recente', 'Projection based on recent trend')}
                                 </p>
                               )}
                             </div>
@@ -2901,7 +1564,7 @@ export default function ZenithApp() {
                   <Sparkles size={14} className="group-hover:animate-pulse" />
                   <span className="text-[10px] font-black uppercase tracking-widest">Zenith IA</span>
                 </button>
-                <button onClick={() => setIsHeritageSettingsOpen(true)} className="text-[var(--text-muted)] hover:text-[var(--accent)] transition-colors">
+                <button onClick={() => openDrawer('settings')} className="text-[var(--text-muted)] hover:text-[var(--accent)] transition-colors">
                   <SettingsIcon size={16} />
                 </button>
               </div>
@@ -2959,6 +1622,7 @@ export default function ZenithApp() {
                 saldoTotal={metrics.investments}
                 perfilAtual={investorProfile}
                 privacyMode={privacyMode}
+                allocatedPercent={portfolioAllocationPercent}
                 onClick={() => setCurrentTab('Carteira')}
               />
               <div className="grid grid-cols-2 gap-3">
@@ -2981,7 +1645,7 @@ export default function ZenithApp() {
           <section key={id} className="bg-[var(--bg-card)] border border-[var(--border-card)] rounded-[32px] p-6">
             <div className="flex justify-between items-center mb-6">
               <span className="text-xs font-medium text-[var(--text-muted)]">{t("Fluxo de Caixa / Predição", "Cash Flow / Prediction")}</span>
-              <button onClick={() => setIsHeritageSettingsOpen(true)} className="text-[var(--text-muted)] hover:text-[var(--accent)] transition-colors">
+              <button onClick={() => openDrawer('settings')} className="text-[var(--text-muted)] hover:text-[var(--accent)] transition-colors">
                 <SettingsIcon size={16} />
               </button>
             </div>
@@ -2995,9 +1659,11 @@ export default function ZenithApp() {
                     tickLine={false} 
                     tick={{ fill: 'var(--text-primary)', fontSize: 8, opacity: 0.6 }} 
                     hide={!resolveStyle('cashflow', 'show_values', true)}
-                    tickFormatter={(value) => value.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL', maximumFractionDigits: 0 })}
+                    tickFormatter={(value) => formatBRL(Number(value))}
                   />
-                  {tooltipsEnabled && <Tooltip />}
+                  {tooltipsEnabled && (
+                    <Tooltip formatter={(value) => formatBRL(Number(value))} />
+                  )}
                   <Bar dataKey="value" radius={[4, 4, 0, 0]}>
                     {cashFlowData.map((entry, idx) => (
                       <Cell 
@@ -3026,7 +1692,7 @@ export default function ZenithApp() {
         });
 
         const categoryData = monthExpenses.reduce((acc: any[], t: any) => {
-          const catName = t.categoria_primaria || t.category || 'Outros';
+          const catName = getTransactionCategory(t);
           const existing = acc.find((item: any) => item.name === catName);
           if (existing) {
             existing.value += t.value;
@@ -3079,7 +1745,7 @@ export default function ZenithApp() {
                   <Sparkles size={14} className="group-hover:animate-pulse" />
                   <span className="text-[10px] font-black uppercase tracking-widest">Zenith IA</span>
                 </button>
-                <button onClick={() => setIsHeritageSettingsOpen(true)} className="text-[var(--text-muted)] hover:text-[var(--accent)] transition-colors">
+                <button onClick={() => openDrawer('settings')} className="text-[var(--text-muted)] hover:text-[var(--accent)] transition-colors">
                   <SettingsIcon size={16} />
                 </button>
               </div>
@@ -3131,20 +1797,8 @@ export default function ZenithApp() {
               </div>
             </div>
 
-            {/* Nested A Receber & Recent Transactions */}
+            {/* Transações Recentes */}
             <div className="mt-8 space-y-6">
-              <div className="bg-[var(--bg-app)] border border-[var(--border-card)] rounded-2xl p-4 flex justify-between items-center">
-                <div>
-                  <p className="text-[10px] font-bold text-[var(--text-muted)] uppercase tracking-widest">{t("A Receber", "To Receive")}</p>
-                  <p className="text-xl font-mono font-bold text-[var(--accent)] mt-1">
-                    {privacyMode ? '••••••' : (metrics.toReceive.total ?? 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
-                  </p>
-                </div>
-                <div className="w-10 h-10 rounded-xl bg-[var(--accent)]/10 flex items-center justify-center text-[var(--accent)]">
-                  <TrendingUp size={20} />
-                </div>
-              </div>
-
               <div className="space-y-3">
                 <p className="text-[10px] font-bold text-[var(--text-muted)] uppercase tracking-widest px-1">{t("Transações Recentes", "Recent Transactions")}</p>
                 {filteredRecentTransactions.slice(0, 3).map((tx, idx) => (
@@ -3155,7 +1809,7 @@ export default function ZenithApp() {
                       </div>
                       <div>
                         <p className="text-[11px] font-medium text-[var(--text-primary)]">{tx.label}</p>
-                        <p className="text-[8px] text-[var(--text-muted)] uppercase font-bold">{tx.category}</p>
+                        <p className="text-[8px] text-[var(--text-muted)] uppercase font-bold">{getTransactionCategory(tx)}</p>
                       </div>
                     </div>
                     <p className={`text-xs font-mono font-bold ${tx.type === 'in' ? 'text-[var(--trend-up)]' : 'text-[var(--trend-down)]'}`}>
@@ -3342,6 +1996,26 @@ export default function ZenithApp() {
     }
   };
 
+  const handleSaveProfile = useCallback(async (data: any) => {
+    if (!user) return;
+    const { uid: _uid, pix_key: _pixKey, ...updateData } = data;
+    await updateDoc(doc(db, 'users', user.uid), updateData)
+      .catch(e => handleFirestoreError(e, OperationType.UPDATE, `users/${user.uid}`));
+  }, [user]);
+
+  const handleSaveApiKey = useCallback((key: string) => {
+    const trimmed = key.trim();
+    if (!trimmed) return;
+    try {
+      localStorage.setItem(GEMINI_API_KEY_STORAGE, trimmed);
+    } catch {
+      // Private mode/storage blocked: keep the key in memory for this session.
+    }
+    setGeminiApiKey(trimmed);
+    setApiKeyError(null);
+    setError(null);
+  }, []);
+
   const moveToTrash = async (item: any, collectionName: string) => {
     try {
       if (!user) return;
@@ -3355,14 +2029,6 @@ export default function ZenithApp() {
         uid: user.uid
       });
       batch.delete(doc(db, collectionName, item.id));
-
-      // Se for uma transação, buscar e deletar rateios associados para evitar resíduo/soma fantasma
-      if (collectionName === 'transactions') {
-        const splitsToDel = splits.filter((s: any) => s.transactionId === item.id);
-        splitsToDel.forEach((s: any) => {
-          batch.delete(doc(db, 'splits', s.id));
-        });
-      }
 
       await batch.commit();
     } catch (e) {
@@ -3496,14 +2162,14 @@ export default function ZenithApp() {
     if (isSeedingRef.current) return;
 
     const warnExistingData = () => {
-      console.warn('Seed ignorado: o usuário já possui ativos ou familiares cadastrados.');
+      console.warn('Seed ignorado: o usuário já possui ativos cadastrados.');
       alert(t(
         'Já existem dados neste perfil. O seed não será executado novamente.',
         'This profile already has data. The seed will not run again.'
       ));
     };
 
-    if (assets.length > 0 || familyMembers.length > 0) {
+    if (assets.length > 0) {
       warnExistingData();
       return;
     }
@@ -3511,12 +2177,9 @@ export default function ZenithApp() {
     isSeedingRef.current = true;
 
     try {
-      const [assetSnap, familySnap] = await Promise.all([
-        getDocs(query(collection(db, 'assets'), where('uid', '==', user.uid), limit(1))),
-        getDocs(query(collection(db, 'family_members'), where('ownerUid', '==', user.uid), limit(1)))
-      ]);
+      const assetSnap = await getDocs(query(collection(db, 'assets'), where('uid', '==', user.uid), limit(1)));
 
-      if (!assetSnap.empty || !familySnap.empty) {
+      if (!assetSnap.empty) {
         warnExistingData();
         return;
       }
@@ -3536,26 +2199,6 @@ export default function ZenithApp() {
         batch.set(newDoc, { ...a, uid: user.uid, createdAt: serverTimestamp() });
       });
 
-      // 2. Seed Family Members (Local Management)
-      const membersToSeed = [
-        { name: 'Rafael Knazh', email: 'rafael@zenith.com', photoURL: 'https://picsum.photos/seed/rafael/100/100' },
-        { name: 'Alexandre Knazh', email: 'alexandre@zenith.com', photoURL: 'https://picsum.photos/seed/alexandre/100/100' },
-        { name: 'Linda Knazh', email: 'linda@zenith.com', photoURL: 'https://picsum.photos/seed/linda/100/100' },
-        { name: 'Patrícia Knazh', email: 'patricia@zenith.com', photoURL: 'https://picsum.photos/seed/patricia/100/100' },
-        { name: 'Valdemar Knazh', email: 'valdemar@zenith.com', photoURL: 'https://picsum.photos/seed/valdemar/100/100' },
-      ];
-
-      membersToSeed.forEach(m => {
-        const memberRef = doc(collection(db, 'family_members'));
-        batch.set(memberRef, {
-          name: m.name,
-          email: m.email,
-          photoURL: m.photoURL,
-          ownerUid: user.uid,
-          createdAt: serverTimestamp()
-        });
-      });
-
       await batch.commit();
     } catch (e) {
       handleFirestoreError(e, OperationType.WRITE, 'sync_family_batch');
@@ -3566,55 +2209,29 @@ export default function ZenithApp() {
 
   return (
     <ErrorBoundary>
-      <HeritageSettings 
-        opened={isHeritageSettingsOpen}
-        onClose={() => setIsHeritageSettingsOpen(false)}
-        userId={user.uid}
-        currentConfig={settings?.zenith_config}
-        language={settings?.zenith_config?.master_states?.idioma === 'English (US)' ? 'en-US' : 'pt-BR'}
-      />
       <div className="min-h-screen bg-[var(--bg-app)] text-[var(--text-primary)] font-sans selection:bg-[var(--accent)]/30 pb-32 overflow-x-hidden">
         
         {/* --- HEADER --- */}
-        <header className="px-6 py-6 sm:py-8 flex justify-between items-start max-w-7xl mx-auto">
-          <div className="flex items-center gap-4 flex-1">
-            <button 
-              onClick={() => setIsSidebarOpen(true)}
-              className="w-10 h-10 bg-[var(--bg-card)] border border-[var(--border-card)] rounded-xl flex items-center justify-center hover:border-[var(--accent)] transition-colors"
-            >
-              <Menu size={20} className="text-[var(--text-secondary)]" />
-            </button>
-            <div className="flex-1">
-              <h1 className="text-xl sm:text-2xl font-medium text-[var(--text-primary)] truncate">
-                {getGreeting()}, {(profile?.displayName || user.displayName || 'Juliano').split(' ')[0]}
-              </h1>
-              <p className="text-xs sm:text-sm text-[var(--text-secondary)] mt-1 max-w-[280px] leading-tight">
-                {t("Sua evolução patrimonial começa com a próxima decisão inteligente.", "Your net worth evolution starts with the next smart decision.")}
-              </p>
-            </div>
-          </div>
-          <div className="flex gap-3 items-center">
-            <button 
-              onClick={() => setIsHeritageSettingsOpen(true)}
-              className="w-10 h-10 bg-[var(--bg-card)] border border-[var(--border-card)] rounded-xl flex items-center justify-center hover:border-[var(--accent)] transition-colors"
-            >
-              <SettingsIcon size={18} className="text-[var(--text-secondary)]" />
-            </button>
-            <div className="w-10 h-10 bg-[var(--bg-card)] border border-[var(--border-card)] rounded-xl flex items-center justify-center relative cursor-pointer hover:border-[var(--accent)] transition-colors" onClick={() => setIsNotificationsOpen(true)}>
-              <Bell size={18} className="text-[var(--text-secondary)]" />
-              {notifications.length > 0 && <div className="absolute top-2.5 right-2.5 w-1.5 h-1.5 bg-[var(--accent)] rounded-full shadow-[0_0_10px_rgba(0,255,163,0.8)]" />}
-            </div>
-            <button 
-              onClick={() => setIsEditingProfile(true)}
-              className="w-10 h-10 rounded-xl border border-[var(--border-card)] overflow-hidden hover:border-[var(--accent)] transition-colors"
-            >
-              <img 
-                src={profile?.photoURL || user.photoURL || `https://picsum.photos/seed/${user.uid}/100/100`} 
-                alt="Perfil" 
-                className="w-full h-full object-cover"
-                referrerPolicy="no-referrer"
-              />
-            </button>
+        <header className="px-6 py-6 sm:py-8 flex items-center gap-4 max-w-7xl mx-auto">
+          <button
+            onClick={() => setIsProfileDrawerOpen(true)}
+            className="w-11 h-11 shrink-0 rounded-full border border-[var(--border-card)] overflow-hidden hover:border-[var(--accent)] transition-colors"
+            aria-label={t('Abrir menu do perfil', 'Open profile menu')}
+          >
+            <img
+              src={profile?.photoURL || user.photoURL || `https://picsum.photos/seed/${user.uid}/100/100`}
+              alt="Perfil"
+              className="w-full h-full object-cover"
+              referrerPolicy="no-referrer"
+            />
+          </button>
+          <div className="min-w-0 flex-1">
+            <h1 className="text-xl sm:text-2xl font-medium text-[var(--text-primary)] truncate">
+              {getGreeting()}, {(profile?.displayName || user.displayName || 'Juliano').split(' ')[0]}
+            </h1>
+            <p className="text-xs sm:text-sm text-[var(--text-secondary)] mt-1 max-w-[280px] leading-tight">
+              {t("Sua evolução patrimonial começa com a próxima decisão inteligente.", "Your net worth evolution starts with the next smart decision.")}
+            </p>
           </div>
         </header>
 
@@ -3671,17 +2288,7 @@ export default function ZenithApp() {
           )}
 
           {currentTab === 'Armazenamento' && (
-            <StorageView transactions={transactions} assets={assets} reports={reports} language={settings?.language} />
-          )}
-
-          {currentTab === 'Lixeira' && (
-            <div className="space-y-6">
-              <header>
-                <h2 className="text-2xl font-bold text-white">{t('Lixeira', 'Trash')}</h2>
-                <p className="text-[var(--text-muted)] text-sm">{t('Itens excluídos permanecem aqui por 30 dias.', 'Deleted items remain here for 30 days.')}</p>
-              </header>
-              <TrashView language={settings?.language} user={user} />
-            </div>
+            <StorageTrashView user={user} language={settings?.language} />
           )}
 
           {currentTab === 'Início' && (
@@ -3702,111 +2309,12 @@ export default function ZenithApp() {
 
               {/* CARD PATRIMÔNIO TOTAL */}
               <section className="bg-[var(--bg-card)] border border-[var(--border-card)] rounded-[32px] p-5 sm:p-6 relative overflow-hidden">
-                <div className="flex justify-between items-start mb-1">
-                  <div className="space-y-1">
-                    <span className="text-xs font-medium text-[var(--text-secondary)]">{settings?.customTerms['Saldo'] || t("Evolução do Patrimônio", "Net Worth Evolution")}</span>
-                    <div className="flex items-center gap-2">
-                    </div>
-                  </div>
-                  <div className="flex gap-2 relative">
-                    <button 
-                      onClick={() => setIsAddingAsset(true)}
-                      className="w-8 h-8 border border-[var(--accent)]/30 rounded-lg flex items-center justify-center text-[var(--accent)] hover:bg-[var(--accent)]/10 transition-colors"
-                    >
-                      <Plus size={16} />
-                    </button>
-                    <button 
-                      onClick={() => setIsHeritageSettingsOpen(true)}
-                      className="w-8 h-8 border border-[var(--border-card)] rounded-lg flex items-center justify-center text-[var(--text-muted)] hover:text-[var(--accent)] transition-colors"
-                    >
-                      <SettingsIcon size={16} />
-                    </button>
-                    <button 
-                      onClick={() => setShowChartMenu(!showChartMenu)}
-                      className={`w-8 h-8 border rounded-lg flex items-center justify-center transition-colors z-50 ${showChartMenu ? 'bg-[var(--accent)] border-[var(--accent)] text-[var(--bg-app)]' : 'border-[var(--border-card)] text-[var(--text-muted)] hover:border-[var(--text-secondary)]'}`}
-                    >
-                      <MoreVertical size={16} />
-                    </button>
-
-                    <AnimatePresence>
-                      {showChartMenu && (
-                        <>
-                          <motion.div 
-                            initial={{ opacity: 0 }}
-                            animate={{ opacity: 1 }}
-                            exit={{ opacity: 0 }}
-                            onClick={() => setShowChartMenu(false)}
-                            className="fixed inset-0 z-40 bg-black/20 backdrop-blur-[2px] sm:hidden"
-                          />
-                          <motion.div 
-                            initial={{ opacity: 0, scale: 0.95, y: 10 }}
-                            animate={{ opacity: 1, scale: 1, y: 0 }}
-                            exit={{ opacity: 0, scale: 0.95, y: 10 }}
-                            className="absolute right-0 top-10 w-48 bg-[var(--bg-card)] border border-[var(--border-card)] rounded-2xl p-4 shadow-2xl z-50 space-y-4"
-                          >
-                            <div className="space-y-2">
-                              <label className="text-[10px] uppercase font-bold text-[var(--text-muted)] tracking-widest">{t("Período", "Period")}</label>
-                              <select 
-                                value={chartFilter.month} 
-                                onChange={(e) => setChartFilter({...chartFilter, month: e.target.value})}
-                                className="w-full bg-[var(--bg-app)] border border-[var(--border-card)] rounded-lg p-2 text-xs text-[var(--text-primary)] outline-none cursor-pointer"
-                              >
-                                <option value="Semanas">{t("Semanas", "Weeks")}</option>
-                                <option value="Meses">{t("Meses", "Months")}</option>
-                                <option value="Anos">{t("Anos", "Years")}</option>
-                              </select>
-                            </div>
-                            <div className="space-y-2">
-                              <label className="text-[10px] uppercase font-bold text-[var(--text-muted)] tracking-widest">{t("Mês", "Month")}</label>
-                              <select 
-                                value={chartFilter.month} 
-                                onChange={(e) => setChartFilter({...chartFilter, month: e.target.value})}
-                                className="w-full bg-[var(--bg-app)] border border-[var(--border-card)] rounded-lg p-2 text-xs text-[var(--text-primary)] outline-none cursor-pointer"
-                              >
-                                <option value="Todos">{t("Todos", "All")}</option>
-                                <option value="Janeiro">{t("Janeiro", "January")}</option>
-                                <option value="Fevereiro">{t("Fevereiro", "February")}</option>
-                                <option value="Março">{t("Março", "March")}</option>
-                                <option value="Abril">{t("Abril", "April")}</option>
-                                <option value="Maio">{t("Maio", "May")}</option>
-                                <option value="Junho">{t("Junho", "June")}</option>
-                                <option value="Julho">{t("Julho", "July")}</option>
-                                <option value="Agosto">{t("Agosto", "August")}</option>
-                                <option value="Setembro">{t("Setembro", "September")}</option>
-                                <option value="Outubro">{t("Outubro", "October")}</option>
-                                <option value="Novembro">{t("Novembro", "November")}</option>
-                                <option value="Dezembro">{t("Dezembro", "December")}</option>
-                              </select>
-                            </div>
-                            <div className="space-y-2">
-                              <label className="text-[10px] uppercase font-bold text-[var(--text-muted)] tracking-widest">{t("Dia", "Day")}</label>
-                              <select 
-                                value={chartFilter.day} 
-                                onChange={(e) => setChartFilter({...chartFilter, day: e.target.value})}
-                                className="w-full bg-[var(--bg-app)] border border-[var(--border-card)] rounded-lg p-2 text-xs text-[var(--text-primary)] outline-none cursor-pointer"
-                              >
-                                <option value="Todos">{t("Todos", "All")}</option>
-                                <option>01-10</option>
-                                <option>11-20</option>
-                                <option>21-31</option>
-                              </select>
-                            </div>
-                            <button 
-                              onClick={() => setShowChartMenu(false)}
-                              className="w-full py-2 bg-[var(--accent)] text-[var(--bg-app)] rounded-lg text-[10px] font-bold uppercase tracking-widest hover:bg-[var(--accent)]/80 transition-colors"
-                            >
-                              {t("Aplicar Filtros", "Apply Filters")}
-                            </button>
-                          </motion.div>
-                        </>
-                      )}
-                    </AnimatePresence>
-                  </div>
+                <div className="space-y-1 mb-1">
+                  <span className="text-xs font-medium text-[var(--text-secondary)]">{settings?.customTerms['Saldo'] || t("Evolução do Patrimônio", "Net Worth Evolution")}</span>
                 </div>
-                
                 <div className="flex items-center gap-3 mb-2">
                   <h2 className="text-3xl font-mono tracking-tighter font-medium text-[var(--text-primary)]">
-                    {privacyMode ? '••••••••' : (totalNetWorth ?? 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                    {privacyMode ? '••••••••' : (metrics.netWorth ?? 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
                   </h2>
                   <button 
                     onClick={() => {
@@ -3840,7 +2348,6 @@ export default function ZenithApp() {
           {currentTab === 'Carteira' && (
             <DetalhesGastosPage 
               transactions={transactions}
-              splits={splits}
               language={settings?.language}
               onEdit={(tx: any) => {
                 setSelectedTransaction(tx);
@@ -3871,34 +2378,42 @@ export default function ZenithApp() {
           )}
 
           {currentTab === 'IA' && (
-            <ZenithIAView 
-              language={settings?.language}
-              transactions={transactions}
-              assets={assets}
-            />
-          )}
-
-          {currentTab === 'Parcelas' && (
-            <ParcelasView 
-              installments={installments}
-              language={settings?.language}
-              user={user}
-            />
+            <Suspense fallback={<LoadingSpinner />}>
+              <ZenithIAView
+                language={settings?.language}
+                transactions={transactions}
+                assets={assets}
+              />
+            </Suspense>
           )}
 
         </main>
 
         {/* --- MODALS --- */}
         <AnimatePresence>
-          {/* Sidebar */}
-          <Sidebar 
-            isOpen={isSidebarOpen} 
-            onClose={() => setIsSidebarOpen(false)} 
-            currentTab={currentTab}
-            onTabChange={setCurrentTab}
-            onOpenSettings={() => setIsHeritageSettingsOpen(true)}
-            onLogout={handleLogout}
+          {/* Profile Drawer */}
+          <ProfileDrawer
+            isOpen={isProfileDrawerOpen}
+            onClose={() => {
+              setIsProfileDrawerOpen(false);
+              setDrawerPageRequest('menu');
+            }}
+            initialPage={drawerPageRequest}
+            profile={profile}
+            user={user}
+            notifications={notifications}
             language={settings?.language}
+            apiKey={geminiApiKey}
+            apiKeyError={apiKeyError}
+            chartFilter={chartFilter}
+            onChartFilterChange={setChartFilter}
+            onClearApiKeyError={() => setApiKeyError(null)}
+            onSaveApiKey={handleSaveApiKey}
+            onSaveProfile={handleSaveProfile}
+            userId={user.uid}
+            currentConfig={settings?.zenith_config}
+            settingsLanguage={settings?.zenith_config?.master_states?.idioma === 'English (US)' ? 'en-US' : 'pt-BR'}
+            onLogout={handleLogout}
           />
 
           {/* Asset Detail / Edit Modal */}
@@ -3943,91 +2458,6 @@ export default function ZenithApp() {
                 setIsAddingAsset(false);
               }}
             />
-          )}
-
-          {/* Gemini API Key (BYOK) Modal */}
-          {isApiKeyModalOpen && (
-            <div className="fixed inset-0 z-[150] flex items-center justify-center p-6 bg-black/60 backdrop-blur-sm">
-              <motion.div
-                initial={{ opacity: 0, scale: 0.9 }}
-                animate={{ opacity: 1, scale: 1 }}
-                className="bg-[var(--bg-card)] border border-[var(--border-card)] rounded-[32px] p-8 max-w-md w-full space-y-5 shadow-2xl"
-              >
-                <div className="w-16 h-16 bg-[var(--accent)]/10 rounded-2xl flex items-center justify-center mx-auto text-[var(--accent)]">
-                  <KeyRound size={32} />
-                </div>
-
-                <div className="space-y-2 text-center">
-                  <h3 className="text-xl font-bold text-[var(--text-primary)]">
-                    {t('Chave da API Gemini', 'Gemini API Key')}
-                  </h3>
-                  <p className="text-xs text-[var(--text-secondary)] leading-relaxed">
-                    {t(
-                      'Para usar os recursos de IA, informe sua própria chave do Google AI Studio. Ela fica salva apenas neste navegador.',
-                      'To use AI features, enter your own Google AI Studio key. It is stored only in this browser.'
-                    )}
-                  </p>
-                </div>
-
-                <input
-                  type="password"
-                  autoFocus
-                  value={apiKeyDraft}
-                  onChange={(e) => {
-                    setApiKeyDraft(e.target.value);
-                    setApiKeyError(null);
-                  }}
-                  placeholder="AIza..."
-                  className="w-full bg-[var(--bg-app)] border border-[var(--border-card)] rounded-xl p-3 text-[var(--text-primary)] text-sm focus:border-[var(--accent)] outline-none font-mono"
-                />
-
-                {apiKeyError && (
-                  <p className="text-xs text-red-500 font-medium">{apiKeyError}</p>
-                )}
-
-                <p className="text-[10px] text-[var(--text-muted)] text-center leading-relaxed">
-                  {t('Obtenha uma chave em', 'Get a key at')}{' '}
-                  <a
-                    href="https://aistudio.google.com/app/apikey"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-[var(--accent)] underline"
-                  >
-                    aistudio.google.com/app/apikey
-                  </a>
-                </p>
-
-                <div className="grid grid-cols-2 gap-3">
-                  <button
-                    onClick={() => setIsApiKeyModalOpen(false)}
-                    className="py-3 rounded-xl border border-[var(--border-card)] text-[var(--text-secondary)] text-[10px] font-bold uppercase tracking-widest hover:bg-white/5 transition-colors"
-                  >
-                    {t('Agora não', 'Not now')}
-                  </button>
-                  <button
-                    onClick={() => {
-                      const key = apiKeyDraft.trim();
-                      if (!key) {
-                        setApiKeyError(t('Informe uma chave válida.', 'Enter a valid key.'));
-                        return;
-                      }
-                      try {
-                        localStorage.setItem(GEMINI_API_KEY_STORAGE, key);
-                      } catch {
-                        // Private mode/storage blocked: keep the key in memory for this session.
-                      }
-                      setGeminiApiKey(key);
-                      setIsApiKeyModalOpen(false);
-                      setApiKeyError(null);
-                      setError(null);
-                    }}
-                    className="py-3 rounded-xl bg-[var(--accent)] text-[var(--bg-app)] text-[10px] font-black uppercase tracking-widest hover:bg-[var(--accent)]/80 transition-colors"
-                  >
-                    {t('Salvar chave', 'Save key')}
-                  </button>
-                </div>
-              </motion.div>
-            </div>
           )}
 
           {/* Profile Edit Modal */}
@@ -4090,6 +2520,7 @@ export default function ZenithApp() {
                           <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fill: 'var(--text-primary)', fontSize: 10 }} />
                           <YAxis hide />
                           <Tooltip 
+                            formatter={(value) => formatBRL(Number(value))}
                             contentStyle={{ backgroundColor: 'var(--bg-card)', border: '1px solid var(--border-card)', borderRadius: '12px' }}
                             cursor={{ fill: 'var(--accent)', opacity: 0.05 }}
                           />
@@ -4236,21 +2667,6 @@ export default function ZenithApp() {
             </div>
           )}
 
-          {/* Profile Edit Modal */}
-          {isEditingProfile && (
-            <ProfileModal 
-              profile={profile!} 
-              onClose={() => setIsEditingProfile(false)}
-              language={settings.language}
-              onSave={async (data) => {
-                const { uid, ...updateData } = data;
-                await updateDoc(doc(db, 'users', user.uid), updateData).catch(e => handleFirestoreError(e, OperationType.UPDATE, `users/${user.uid}`));
-                setIsEditingProfile(false);
-              }}
-              onLogout={handleLogout}
-            />
-          )}
-
           {/* Ingestion Hub */}
           <IngestionHub 
             isOpen={isIngestionHubOpen} 
@@ -4264,9 +2680,6 @@ export default function ZenithApp() {
             <ReviewModal 
               transaction={pendingTransaction}
               isProcessing={isProcessingIA}
-              users={allAvailableParticipants.filter((u: any) => u.uid !== user?.uid)}
-              ownerName={profile?.displayName || user?.displayName || user?.email}
-              ownerPhoto={profile?.photoURL || user?.photoURL}
               onConfirm={confirmPendingTransaction}
               onCancel={() => {
                 setIsReviewModalOpen(false);
@@ -4276,13 +2689,6 @@ export default function ZenithApp() {
             />
           )}
 
-          {/* Notification Center */}
-          <NotificationCenter 
-            isOpen={isNotificationsOpen} 
-            onClose={() => setIsNotificationsOpen(false)} 
-            notifications={notifications} 
-            language={settings.language} 
-          />
         </AnimatePresence>
 
         {/* --- NAV DOCK --- */}
@@ -4311,82 +2717,178 @@ export default function ZenithApp() {
   );
 }
 
-function Sidebar({ isOpen, onClose, currentTab, onTabChange, onOpenSettings, onLogout, language }: any) {
+type DrawerPage = 'menu' | 'profile' | 'notifications' | 'settings' | 'ai_key' | 'trash';
+
+function ProfileDrawer({
+  isOpen,
+  onClose,
+  initialPage = 'menu',
+  profile,
+  user,
+  notifications = [],
+  language,
+  apiKey,
+  chartFilter,
+  onChartFilterChange,
+  apiKeyError,
+  onClearApiKeyError,
+  onSaveApiKey,
+  onSaveProfile,
+  userId,
+  currentConfig,
+  settingsLanguage,
+  onLogout
+}: any) {
   const t = (pt: string, en: string) => (language === 'en-US' ? en : pt);
+  const [activeDrawerPage, setActiveDrawerPage] = useState<DrawerPage>('menu');
+
+  useEffect(() => {
+    setActiveDrawerPage(isOpen ? initialPage : 'menu');
+  }, [isOpen, initialPage]);
+
   if (!isOpen) return null;
 
-  const menuItems = [
-    { id: 'Início', icon: <LayoutGrid size={20} />, label: t('Home', 'Home') },
-    { id: 'Carteira', icon: <CreditCard size={20} />, label: t('Carteira', 'Wallet') },
-    { id: 'Investimentos', icon: <TrendingUp size={20} />, label: t('Investimentos', 'Investments') },
-    { id: 'IA', icon: <Sparkles size={20} />, label: t('Zenith IA', 'Zenith AI') },
-    { id: 'Parcelas', icon: <Calendar size={20} />, label: t('Parcelas', 'Installments') },
-    { type: 'divider' },
-    { id: 'Armazenamento', icon: <HardDrive size={20} />, label: t('Armazenamento', 'Storage') },
-    { id: 'Lixeira', icon: <Trash size={20} />, label: t('Lixeira', 'Trash') },
-    { type: 'divider' },
-    { id: 'Configurações', icon: <SettingsIcon size={20} />, label: t('Configurações', 'Settings') },
+  const displayName = profile?.displayName || user?.displayName || t('Usuário', 'User');
+  const email = profile?.email || user?.email || '';
+  const photoURL = profile?.photoURL || user?.photoURL || (user?.uid ? `https://picsum.photos/seed/${user.uid}/100/100` : '');
+
+  const pageTitles: Record<DrawerPage, string> = {
+    menu: t('Menu', 'Menu'),
+    profile: t('Meu Perfil', 'My Profile'),
+    notifications: t('Notificações', 'Notifications'),
+    settings: t('Configurações', 'Settings'),
+    ai_key: t('Chave da IA', 'AI Key'),
+    trash: t('Armazenamento e Lixeira', 'Storage & Trash')
+  };
+
+  const menuItems: { id: DrawerPage; label: string; icon: React.ReactNode; badge?: boolean }[] = [
+    { id: 'profile', label: t('Meu Perfil', 'My Profile'), icon: <UserIcon size={20} /> },
+    { id: 'notifications', label: t('Notificações', 'Notifications'), icon: <Bell size={20} />, badge: notifications.length > 0 },
+    { id: 'settings', label: t('Configurações', 'Settings'), icon: <SettingsIcon size={20} /> },
+    { id: 'ai_key', label: t('Chave da IA', 'AI Key'), icon: <KeyRound size={20} /> },
+    { id: 'trash', label: t('Armazenamento e Lixeira', 'Storage & Trash'), icon: <HardDrive size={20} /> },
   ];
+
+  const goBack = () => setActiveDrawerPage('menu');
 
   return (
     <div className="fixed inset-0 z-[120]">
-      <motion.div 
+      <motion.div
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
         exit={{ opacity: 0 }}
         onClick={onClose}
         className="absolute inset-0 bg-black/60 backdrop-blur-sm"
       />
-      <motion.aside 
+      <motion.aside
         initial={{ x: '-100%' }}
         animate={{ x: 0 }}
         exit={{ x: '-100%' }}
         transition={{ type: 'spring', damping: 25, stiffness: 200 }}
-        className="absolute left-0 top-0 bottom-0 w-[280px] bg-[var(--bg-card)] border-r border-[var(--border-card)] p-6 shadow-2xl flex flex-col"
+        className="absolute left-0 top-0 bottom-0 w-[340px] max-w-[92vw] bg-[var(--bg-card)] border-r border-[var(--border-card)] p-5 shadow-2xl flex flex-col"
       >
-        <div className="flex items-center justify-between mb-8">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 bg-[var(--accent)] rounded-xl flex items-center justify-center text-[var(--bg-app)]">
-              <TrendingUp size={24} />
-            </div>
-            <h2 className="text-xl font-bold text-white tracking-tighter">Zenith <span className="text-[var(--accent)] text-xs">AI</span></h2>
+        <div className="flex items-center justify-between gap-3 mb-6">
+          <div className="flex items-center gap-3 min-w-0">
+            {activeDrawerPage !== 'menu' && (
+              <button
+                onClick={goBack}
+                className="p-2 -ml-2 shrink-0 text-[var(--text-muted)] hover:text-[var(--text-primary)] transition-colors"
+                aria-label={t('Voltar', 'Back')}
+              >
+                <ArrowLeft size={20} />
+              </button>
+            )}
+            <h2 className="text-lg font-bold text-[var(--text-primary)] truncate">{pageTitles[activeDrawerPage]}</h2>
           </div>
-          <button onClick={onClose} className="p-2 text-[var(--text-muted)] hover:text-white transition-colors">
-            <X size={20} />
-          </button>
+          {activeDrawerPage === 'menu' && (
+            <button onClick={onClose} className="p-2 shrink-0 text-[var(--text-muted)] hover:text-[var(--text-primary)] transition-colors" aria-label={t('Fechar', 'Close')}>
+              <X size={20} />
+            </button>
+          )}
         </div>
 
-        <nav className="flex-1 space-y-1">
-          {menuItems.map((item, idx) => (
-            item.type === 'divider' ? (
-              <div key={`divider-${idx}`} className="h-px bg-[var(--border-card)] my-4 mx-2" />
-            ) : (
-              <button 
-                key={item.id}
-                onClick={() => {
-                  if (item.id === 'Configurações') {
-                    onOpenSettings();
-                  } else {
-                    onTabChange(item.id);
-                  }
-                  onClose();
-                }}
-                className={`w-full flex items-center gap-4 p-4 rounded-2xl transition-all ${currentTab === item.id ? 'bg-[var(--accent)] text-[var(--bg-app)] shadow-lg shadow-[var(--accent)]/20' : 'text-[var(--text-secondary)] hover:bg-white/5 hover:text-white'}`}
-              >
-                {item.icon}
-                <span className="text-sm font-bold uppercase tracking-widest">{item.label}</span>
-              </button>
-            )
-          ))}
-        </nav>
+        <div className="flex-1 min-h-0 overflow-y-auto pr-1">
+          {activeDrawerPage === 'menu' && (
+            <div className="space-y-5">
+              <div className="flex items-center gap-3 p-4 bg-[var(--bg-app)] border border-[var(--border-card)] rounded-2xl">
+                <div className="w-12 h-12 shrink-0 rounded-2xl border border-[var(--border-card)] overflow-hidden">
+                  {photoURL && <img src={photoURL} alt={displayName} className="w-full h-full object-cover" referrerPolicy="no-referrer" />}
+                </div>
+                <div className="min-w-0">
+                  <h3 className="text-sm font-bold text-[var(--text-primary)] truncate">{displayName}</h3>
+                  <p className="text-[11px] text-[var(--text-muted)] truncate">{email}</p>
+                </div>
+              </div>
 
-        <div className="pt-6 border-t border-[var(--border-card)]">
-          <button 
-            onClick={onLogout}
+              <nav className="space-y-1">
+                {menuItems.map((item) => (
+                  <button
+                    key={item.id}
+                    onClick={() => setActiveDrawerPage(item.id)}
+                    className="w-full flex items-center gap-4 p-4 rounded-2xl text-[var(--text-secondary)] hover:bg-[var(--bg-app)] hover:text-[var(--text-primary)] transition-all"
+                  >
+                    <span className="relative">
+                      {item.icon}
+                      {item.badge && <span className="absolute -top-1 -right-1 w-1.5 h-1.5 bg-[var(--accent)] rounded-full" />}
+                    </span>
+                    <span className="text-xs font-bold uppercase tracking-widest text-left">{item.label}</span>
+                  </button>
+                ))}
+              </nav>
+            </div>
+          )}
+
+          {activeDrawerPage === 'profile' && (
+            <ProfileSection
+              profile={profile}
+              language={language}
+              onSave={onSaveProfile}
+              onDone={goBack}
+            />
+          )}
+
+          {activeDrawerPage === 'notifications' && (
+            <NotificationsSection notifications={notifications} language={language} />
+          )}
+
+          {activeDrawerPage === 'settings' && (
+            <Suspense fallback={<LoadingSpinner />}>
+              <HeritageSettings
+                onClose={goBack}
+                userId={userId}
+                currentConfig={currentConfig}
+                language={settingsLanguage}
+                chartFilter={chartFilter}
+                onChartFilterChange={onChartFilterChange}
+              />
+            </Suspense>
+          )}
+
+          {activeDrawerPage === 'ai_key' && (
+            <AiKeySection
+              apiKey={apiKey}
+              error={apiKeyError}
+              language={language}
+              onClearError={onClearApiKeyError}
+              onSave={onSaveApiKey}
+            />
+          )}
+
+          {activeDrawerPage === 'trash' && (
+            <StorageTrashView user={user} language={language} embedded />
+          )}
+        </div>
+
+        <div className="pt-4 mt-4 border-t border-[var(--border-card)]">
+          <button
+            onClick={() => {
+              onLogout();
+              onClose();
+            }}
             className="w-full flex items-center gap-4 p-4 rounded-2xl text-[var(--destructive)] hover:bg-[var(--destructive)]/10 transition-all font-bold uppercase tracking-widest text-xs"
           >
             <LogOut size={20} />
-            {t('Sair', 'Logout')}
+            {t('Sair da Conta', 'Log Out')}
           </button>
         </div>
       </motion.aside>
@@ -4394,163 +2896,235 @@ function Sidebar({ isOpen, onClose, currentTab, onTabChange, onOpenSettings, onL
   );
 }
 
-function StorageView({ transactions, assets, reports, language }: any) {
-  const t = (pt: string, en: string) => (language === 'en-US' ? en : pt);
-  
-  const stats = [
-    { label: t('Transações', 'Transactions'), count: transactions.length, icon: <ArrowRightLeft className="text-[var(--accent)]" /> },
-    { label: t('Ativos', 'Assets'), count: assets.length, icon: <Landmark className="text-blue-400" /> },
-    { label: t('Relatórios', 'Reports'), count: reports.length, icon: <FileText className="text-purple-400" /> },
-  ];
-
-  return (
-    <div className="space-y-6">
-      <header>
-        <h2 className="text-2xl font-bold text-white">{t('Armazenamento', 'Storage')}</h2>
-        <p className="text-[var(--text-muted)] text-sm">{t('Resumo de dados processados pelo Zenith Financial.', 'Summary of data processed by Zenith Financial.')}</p>
-      </header>
-
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
-        {stats.map((stat, idx) => (
-          <div key={idx} className="bg-[var(--bg-card)] border border-[var(--border-card)] p-6 rounded-[32px] flex items-center justify-between">
-            <div className="space-y-1">
-              <p className="text-[10px] font-bold text-[var(--text-muted)] uppercase tracking-widest">{stat.label}</p>
-              <h4 className="text-2xl font-mono font-bold text-white">{stat.count}</h4>
-            </div>
-            <div className="w-12 h-12 bg-white/5 rounded-2xl flex items-center justify-center">
-              {stat.icon}
-            </div>
-          </div>
-        ))}
-      </div>
-
-      <div className="bg-[var(--bg-card)] border border-[var(--border-card)] p-6 rounded-[32px] space-y-4">
-        <div className="flex items-center gap-3">
-          <Database size={20} className="text-[var(--accent)]" />
-          <h3 className="text-lg font-bold text-white">{t('Otimização de Espaço', 'Space Optimization')}</h3>
-        </div>
-        <p className="text-sm text-[var(--text-muted)] leading-relaxed">
-          {t('A Zenith utiliza Firestore Enterprise para garantir persistência e segurança. O espaço ocupado é proporcional ao número de registros. Para liberar espaço, você pode gerenciar itens na lixeira ou remover ativos antigos.', 'Zenith uses Firestore Enterprise to ensure persistence and security. Occupied space is proportional to the number of records. To free up space, you can manage items in the trash or remove old assets.')}
-        </p>
-      </div>
-    </div>
-  );
+function imageFileToAvatar(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    if (!file.type.startsWith('image/')) {
+      reject(new Error('invalid-type'));
+      return;
+    }
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('read-error'));
+    reader.onload = () => {
+      const image = new Image();
+      image.onerror = () => reject(new Error('decode-error'));
+      image.onload = () => {
+        const size = 320;
+        const side = Math.min(image.width, image.height);
+        const sx = (image.width - side) / 2;
+        const sy = (image.height - side) / 2;
+        const canvas = document.createElement('canvas');
+        canvas.width = size;
+        canvas.height = size;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          reject(new Error('canvas-error'));
+          return;
+        }
+        ctx.drawImage(image, sx, sy, side, side, 0, 0, size, size);
+        resolve(canvas.toDataURL('image/jpeg', 0.82));
+      };
+      image.src = reader.result as string;
+    };
+    reader.readAsDataURL(file);
+  });
 }
 
-function TrashView({ language, user }: any) {
+function ProfileSection({ profile, onSave, onDone, language }: any) {
   const t = (pt: string, en: string) => (language === 'en-US' ? en : pt);
-  const [trashItems, setTrashItems] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [formData, setFormData] = useState({ ...profile });
+  const [saving, setSaving] = useState(false);
+  const [photoLoading, setPhotoLoading] = useState(false);
+  const [photoError, setPhotoError] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
-  useEffect(() => {
-    if (!user) return;
-    const q = query(
-      collection(db, 'trash'),
-      where('uid', '==', user.uid),
-      orderBy('deletedAt', 'desc')
-    );
-    const unsub = onSnapshot(q, (snapshot) => {
-      setTrashItems(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
-      setLoading(false);
-    });
-    return unsub;
-  }, [user]);
-
-  const restoreItem = async (item: any) => {
+  const handlePhotoChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+    if (file.size > 12 * 1024 * 1024) {
+      setPhotoError(t('A imagem deve ter no máximo 12 MB.', 'The image must be at most 12 MB.'));
+      return;
+    }
+    setPhotoError(null);
+    setPhotoLoading(true);
     try {
-      const batch = writeBatch(db);
-      const originalRef = doc(db, item.originalCollection, item.originalId);
-      batch.set(originalRef, item.data);
-      batch.delete(doc(db, 'trash', item.id));
-      await batch.commit();
-    } catch (e) {
-      handleFirestoreError(e, OperationType.WRITE, `restore/${item.id}`);
+      const dataUrl = await imageFileToAvatar(file);
+      setFormData((current: any) => ({ ...current, photoURL: dataUrl }));
+    } catch {
+      setPhotoError(t('Não foi possível carregar esta imagem.', 'Could not load this image.'));
+    } finally {
+      setPhotoLoading(false);
     }
   };
 
-  const permanentDelete = async (id: string) => {
-    if (!confirm(t('Excluir permanentemente?', 'Delete permanently?'))) return;
-    await deleteDoc(doc(db, 'trash', id)).catch(e => handleFirestoreError(e, OperationType.DELETE, `trash/${id}`));
+  const handleSave = async () => {
+    if (!formData.displayName?.trim()) {
+      alert(t('O nome não pode estar vazio.', 'The name cannot be empty.'));
+      return;
+    }
+    setSaving(true);
+    try {
+      await onSave(formData);
+      onDone();
+    } finally {
+      setSaving(false);
+    }
   };
 
-  if (loading) return <div className="py-20 text-center"><Loader2 className="animate-spin mx-auto text-[var(--accent)]" /></div>;
-
   return (
-    <div className="grid grid-cols-1 gap-4">
-      {trashItems.length === 0 ? (
-        <div className="py-20 text-center border border-dashed border-[var(--border-card)] rounded-[40px]">
-          <Trash2 size={40} className="mx-auto text-[var(--text-muted)] mb-4 opacity-20" />
-          <p className="text-[var(--text-muted)] text-sm font-bold uppercase tracking-widest">{t('Lixeira Vazia', 'Trash Empty')}</p>
+    <div className="space-y-5 pb-2">
+      <div className="flex flex-col items-center gap-3 text-center">
+        <button
+          type="button"
+          onClick={() => fileInputRef.current?.click()}
+          className="relative w-20 h-20 rounded-3xl border-2 border-[var(--accent)] overflow-hidden group"
+        >
+          {formData.photoURL ? (
+            <img src={formData.photoURL} alt={t('Perfil', 'Profile')} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+          ) : (
+            <span className="w-full h-full flex items-center justify-center text-[var(--text-muted)]">
+              <UserIcon size={30} />
+            </span>
+          )}
+          <span className={`absolute inset-0 bg-black/50 flex items-center justify-center text-white transition-opacity ${photoLoading ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}>
+            {photoLoading ? <Loader2 size={20} className="animate-spin" /> : <Camera size={20} />}
+          </span>
+        </button>
+        <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={handlePhotoChange} />
+        {photoError && <p className="text-[10px] text-[var(--destructive)]">{photoError}</p>}
+        <div>
+          <h3 className="text-sm font-bold text-[var(--text-primary)]">{profile?.displayName}</h3>
+          <p className="text-[10px] text-[var(--text-muted)]">{profile?.email}</p>
         </div>
-      ) : (
-        trashItems.map((item, idx) => (
-          <div key={`trash-${item.id}-${idx}`} className="bg-[var(--bg-card)] border border-[var(--border-card)] p-6 rounded-[32px] flex items-center justify-between group">
-            <div className="flex items-center gap-4">
-              <div className="w-10 h-10 bg-white/5 rounded-xl flex items-center justify-center text-[var(--text-muted)]">
-                <History size={20} />
-              </div>
-              <div>
-                <h4 className="text-sm font-medium text-white">{item.data.label || item.data.name || t('Sem título', 'Untitled')}</h4>
-                <p className="text-[10px] text-[var(--text-muted)] uppercase font-bold tracking-widest">
-                  {item.originalCollection} • {item.deletedAt?.toDate ? item.deletedAt.toDate().toLocaleDateString() : ''}
-                </p>
-              </div>
-            </div>
-            <div className="flex gap-2">
-              <button 
-                onClick={() => restoreItem(item)}
-                className="p-3 bg-[var(--accent)]/10 text-[var(--accent)] rounded-xl hover:bg-[var(--accent)] hover:text-[var(--bg-app)] transition-all"
-                title={t('Restaurar', 'Restore')}
-              >
-                <ArrowUpRight size={18} />
-              </button>
-              <button 
-                onClick={() => permanentDelete(item.id)}
-                className="p-3 bg-red-500/10 text-red-500 rounded-xl hover:bg-red-500 hover:text-white transition-all"
-                title={t('Excluir', 'Delete')}
-              >
-                <Trash2 size={18} />
-              </button>
-            </div>
-          </div>
-        ))
-      )}
+      </div>
+
+      <div>
+        <label className="text-[10px] uppercase font-bold text-[var(--text-muted)] tracking-widest">{t('Nome de Exibição', 'Display Name')}</label>
+        <input value={formData.displayName || ''} onChange={e => setFormData({ ...formData, displayName: e.target.value })} className="mt-1 w-full bg-[var(--bg-app)] border border-[var(--border-card)] rounded-xl p-3 text-[var(--text-primary)] text-sm focus:border-[var(--accent)] outline-none" />
+      </div>
+      <div>
+        <label className="text-[10px] uppercase font-bold text-[var(--text-muted)] tracking-widest">{t('Perfil de Investidor', 'Investor Profile')}</label>
+        <select
+          value={formData.investor_profile || 'Conservador'}
+          onChange={e => setFormData({ ...formData, investor_profile: e.target.value })}
+          className="mt-1 w-full bg-[var(--bg-app)] border border-[var(--border-card)] rounded-xl p-3 text-[var(--text-primary)] text-sm focus:border-[var(--accent)] outline-none"
+        >
+          <option value="Conservador">Conservador</option>
+          <option value="Sofisticado">Sofisticado</option>
+          <option value="Arrojado">Arrojado</option>
+        </select>
+      </div>
+
+      <button
+        onClick={handleSave}
+        disabled={saving}
+        className="w-full py-4 bg-[var(--accent)] text-[var(--bg-app)] rounded-2xl font-bold text-xs uppercase tracking-widest hover:bg-[var(--accent)]/80 transition-colors flex items-center justify-center gap-2 disabled:opacity-50"
+      >
+        <Save size={16} /> {t('Salvar Alterações', 'Save Changes')}
+      </button>
     </div>
   );
 }
 
-function NotificationCenter({ isOpen, onClose, notifications, language }: any) {
+function NotificationsSection({ notifications = [], language }: any) {
   const t = (pt: string, en: string) => (language === 'en-US' ? en : pt);
-  if (!isOpen) return null;
+
+  if (notifications.length === 0) {
+    return (
+      <div className="py-16 text-center">
+        <BellOff size={40} className="mx-auto text-[var(--text-muted)] mb-4 opacity-20" />
+        <p className="text-[var(--text-muted)] text-xs uppercase font-bold tracking-widest">{t('Tudo limpo por aqui', 'All clear here')}</p>
+      </div>
+    );
+  }
 
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center p-6">
-      <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={onClose} className="absolute inset-0 bg-black/80 backdrop-blur-md" />
-      <motion.div initial={{ opacity: 0, scale: 0.9, y: 30 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.9, y: 30 }} className="relative w-full max-w-sm bg-[var(--bg-card)] border border-[var(--border-card)] rounded-[40px] p-8 shadow-2xl overflow-hidden max-h-[80vh] flex flex-col">
-        <div className="flex justify-between items-center mb-6">
-          <h3 className="text-xl font-bold text-white">{t('Notificações', 'Notifications')}</h3>
-          <button onClick={onClose} className="text-[var(--text-muted)] hover:text-white"><X size={24} /></button>
+    <div className="space-y-3 pb-2">
+      {notifications.map((n: any, i: number) => (
+        <div key={`notif-${i}-${n.time}`} className="p-4 bg-[var(--bg-app)] border border-[var(--border-card)] rounded-2xl space-y-1">
+          <div className="flex justify-between items-start">
+            <span className="text-[10px] font-black text-[var(--accent)] uppercase tracking-widest">{n.type}</span>
+            <span className="text-[8px] text-[var(--text-muted)] font-bold">{n.time}</span>
+          </div>
+          <p className="text-sm font-medium text-[var(--text-primary)]">{n.title}</p>
+          <p className="text-[10px] text-[var(--text-muted)] leading-relaxed">{n.message}</p>
         </div>
-        <div className="flex-1 overflow-y-auto space-y-4 pr-2 custom-scrollbar">
-          {notifications.length === 0 ? (
-            <div className="py-12 text-center">
-              <BellOff size={40} className="mx-auto text-[var(--text-muted)] mb-4 opacity-20" />
-              <p className="text-[var(--text-muted)] text-xs uppercase font-bold tracking-widest">{t('Tudo limpo por aqui', 'All clear here')}</p>
-            </div>
-          ) : (
-            notifications.map((n, i) => (
-              <div key={`notif-${i}-${n.time}`} className="p-4 bg-white/5 border border-white/10 rounded-2xl space-y-1">
-                <div className="flex justify-between items-start">
-                  <span className="text-[10px] font-black text-[var(--accent)] uppercase tracking-widest">{n.type}</span>
-                  <span className="text-[8px] text-[var(--text-muted)] font-bold">{n.time}</span>
-                </div>
-                <p className="text-sm font-medium text-white">{n.title}</p>
-                <p className="text-[10px] text-[var(--text-muted)] leading-relaxed">{n.message}</p>
-              </div>
-            ))
+      ))}
+    </div>
+  );
+}
+
+function AiKeySection({ apiKey, error, onSave, onClearError, language }: any) {
+  const t = (pt: string, en: string) => (language === 'en-US' ? en : pt);
+  const [draft, setDraft] = useState(apiKey || '');
+  const [localError, setLocalError] = useState<string | null>(null);
+  const [saved, setSaved] = useState(false);
+
+  const handleSave = () => {
+    if (!draft.trim()) {
+      setLocalError(t('Informe uma chave válida.', 'Enter a valid key.'));
+      return;
+    }
+    onSave(draft);
+    setLocalError(null);
+    setSaved(true);
+  };
+
+  return (
+    <div className="space-y-5 pb-2">
+      <div className="w-14 h-14 bg-[var(--accent)]/10 rounded-2xl flex items-center justify-center text-[var(--accent)]">
+        <KeyRound size={28} />
+      </div>
+
+      <div className="space-y-2">
+        <h3 className="text-sm font-bold text-[var(--text-primary)]">{t('Chave da API Gemini', 'Gemini API Key')}</h3>
+        <p className="text-[11px] text-[var(--text-secondary)] leading-relaxed">
+          {t(
+            'Informe sua própria chave do Google AI Studio. Ela fica salva apenas neste navegador.',
+            'Enter your own Google AI Studio key. It is stored only in this browser.'
           )}
-        </div>
-      </motion.div>
+        </p>
+      </div>
+
+      <input
+        type="password"
+        value={draft}
+        onChange={(e) => {
+          setDraft(e.target.value);
+          setLocalError(null);
+          setSaved(false);
+          onClearError?.();
+        }}
+        placeholder="AIza..."
+        className="w-full bg-[var(--bg-app)] border border-[var(--border-card)] rounded-xl p-3 text-[var(--text-primary)] text-sm focus:border-[var(--accent)] outline-none font-mono"
+      />
+
+      {(localError || error) && (
+        <p className="text-xs text-[var(--destructive)] font-medium">{localError || error}</p>
+      )}
+
+      {saved && (
+        <p className="text-xs text-[var(--accent)] font-medium">{t('Chave salva neste navegador.', 'Key saved in this browser.')}</p>
+      )}
+
+      <p className="text-[10px] text-[var(--text-muted)] leading-relaxed">
+        {t('Obtenha uma chave em', 'Get a key at')}{' '}
+        <a
+          href="https://aistudio.google.com/app/apikey"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-[var(--accent)] underline break-all"
+        >
+          aistudio.google.com/app/apikey
+        </a>
+      </p>
+
+      <button
+        onClick={handleSave}
+        className="w-full py-4 bg-[var(--accent)] text-[var(--bg-app)] rounded-2xl font-black text-[10px] uppercase tracking-widest hover:bg-[var(--accent)]/80 transition-colors"
+      >
+        {t('Salvar chave', 'Save key')}
+      </button>
     </div>
   );
 }
@@ -4576,83 +3150,84 @@ function AssetModal({ asset, onClose, privacyMode, onDelete, onSave, language }:
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-6">
-      <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={onClose} className="absolute inset-0 bg-black/80 backdrop-blur-md" />
-      <motion.div initial={{ opacity: 0, scale: 0.9, y: 30 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.9, y: 30 }} className="relative w-full max-w-sm bg-[var(--bg-card)] border border-[var(--border-card)] rounded-[40px] p-8 shadow-2xl overflow-hidden">
-        <div className="absolute top-0 right-0 p-6 flex gap-2">
-          <button onClick={() => setIsEditing(!isEditing)} className="text-[var(--text-muted)] hover:text-[var(--accent)] p-2 transition-colors">
-            {isEditing ? <X size={24} /> : <Edit2 size={20} />}
-          </button>
-          <button onClick={onClose} className="text-[var(--text-muted)] hover:text-[var(--text-primary)] p-2">
-            <X size={24} />
-          </button>
-        </div>
-        
-        <div className="mt-4 space-y-6">
-          {isEditing ? (
-            <div className="space-y-4">
-              <div>
-                <label className="text-[10px] uppercase font-bold text-[var(--text-muted)] tracking-widest">{t("Nome", "Name")}</label>
-                <input value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} className="w-full bg-[var(--bg-app)] border border-[var(--border-card)] rounded-xl p-3 text-[var(--text-primary)] text-sm focus:border-[var(--accent)] outline-none" />
-              </div>
-              <div>
-                <label className="text-[10px] uppercase font-bold text-[var(--text-muted)] tracking-widest">{t("Valor (R$)", "Value (R$)")}</label>
-                <div className="relative">
-                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--text-muted)] text-xs font-bold">R$</span>
-                  <input 
-                    type="text" 
-                    value={(formData.value ?? 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} 
-                    onChange={e => {
-                      const val = e.target.value.replace(/\D/g, '');
-                      setFormData({...formData, value: parseInt(val || '0') / 100});
-                    }} 
-                    className="w-full bg-[var(--bg-app)] border border-[var(--border-card)] rounded-xl p-3 pl-10 text-[var(--text-primary)] text-sm focus:border-[var(--accent)] outline-none font-mono" 
-                  />
-                </div>
-              </div>
-              <div>
-                <label className="text-[10px] uppercase font-bold text-[var(--text-muted)] tracking-widest">{t("Tipo", "Type")}</label>
-                <select value={formData.type} onChange={e => setFormData({...formData, type: e.target.value})} className="w-full bg-[var(--bg-app)] border border-[var(--border-card)] rounded-xl p-3 text-[var(--text-primary)] text-sm focus:border-[var(--accent)] outline-none">
-                  <option value="liquidity">{t("Liquidez", "Liquidity")}</option>
-                  <option value="investment">{t("Investimento", "Investment")}</option>
-                  <option value="physical">{t("Bem Físico", "Physical Asset")}</option>
-                </select>
-              </div>
-              <div>
-                <label className="text-[10px] uppercase font-bold text-[var(--text-muted)] tracking-widest">{t("Detalhes", "Details")}</label>
-                <textarea value={formData.detail} onChange={e => setFormData({...formData, detail: e.target.value})} className="w-full bg-[var(--bg-app)] border border-[var(--border-card)] rounded-xl p-3 text-[var(--text-primary)] text-sm focus:border-[var(--accent)] outline-none h-24" />
-              </div>
-              <div className="flex gap-3 pt-4">
-                <button onClick={() => onDelete(asset.id)} className="flex-1 py-4 bg-[var(--destructive)]/10 text-[var(--destructive)] rounded-2xl font-bold text-xs uppercase tracking-widest hover:bg-[var(--destructive)]/20 transition-colors flex items-center justify-center gap-2">
-                  <Trash2 size={16} /> {t("Excluir", "Delete")}
-                </button>
-                <button onClick={handleSave} className="flex-1 py-4 bg-[var(--accent)] text-[var(--bg-app)] rounded-2xl font-bold text-xs uppercase tracking-widest hover:bg-[var(--accent)]/80 transition-colors flex items-center justify-center gap-2">
-                  <Save size={16} /> {t("Salvar", "Save")}
-                </button>
+    <Modal
+      open
+      onClose={onClose}
+      variant="center"
+      title={isEditing ? t("Editar Ativo", "Edit Asset") : asset.name}
+      subtitle={isEditing ? undefined : asset.type}
+      ariaLabel={asset.name}
+      headerAction={
+        <button
+          type="button"
+          onClick={() => setIsEditing(!isEditing)}
+          className="rounded-full p-2 text-[var(--text-muted)] transition-colors hover:bg-[var(--bg-app)] hover:text-[var(--accent)]"
+          aria-label={isEditing ? t("Cancelar edição", "Cancel editing") : t("Editar ativo", "Edit asset")}
+        >
+          {isEditing ? <ArrowLeft size={20} /> : <Edit2 size={20} />}
+        </button>
+      }
+    >
+      <div className="space-y-6">
+        {isEditing ? (
+          <div className="space-y-4">
+            <div>
+              <label className="text-[10px] uppercase font-bold text-[var(--text-muted)] tracking-widest">{t("Nome", "Name")}</label>
+              <input value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} className="mt-1 w-full bg-[var(--bg-app)] border border-[var(--border-card)] rounded-xl p-3 text-[var(--text-primary)] text-base sm:text-sm focus:border-[var(--accent)] outline-none" />
+            </div>
+            <div>
+              <label className="text-[10px] uppercase font-bold text-[var(--text-muted)] tracking-widest">{t("Valor (R$)", "Value (R$)")}</label>
+              <div className="relative mt-1">
+                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--text-muted)] text-xs font-bold">R$</span>
+                <input
+                  type="text"
+                  value={(formData.value ?? 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  onChange={e => {
+                    const val = e.target.value.replace(/\D/g, '');
+                    setFormData({...formData, value: parseInt(val || '0') / 100});
+                  }}
+                  className="w-full bg-[var(--bg-app)] border border-[var(--border-card)] rounded-xl p-3 pl-10 text-[var(--text-primary)] text-base sm:text-sm focus:border-[var(--accent)] outline-none font-mono"
+                />
               </div>
             </div>
-          ) : (
-            <>
-              <div>
-                <span className="text-[10px] font-black text-[var(--accent)] uppercase tracking-[0.3em]">{asset.type}</span>
-                <h3 className="text-2xl font-medium text-[var(--text-primary)] mt-1">{asset.name}</h3>
-              </div>
-              <div className="space-y-1">
-                <p className="text-4xl font-mono tracking-tighter">
-                  {privacyMode ? '••••••' : (asset.value ?? 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
-                </p>
-                {asset.change && <p className="text-[var(--accent)] text-xs font-bold">{asset.change} {t("no período", "in period")}</p>}
-              </div>
-              <div className="h-px bg-[var(--border-card)] my-4" />
-              <p className="text-[var(--text-secondary)] text-sm leading-relaxed">{asset.detail}</p>
-              <button onClick={() => setIsEditing(true)} className="w-full py-5 bg-[var(--text-primary)] text-[var(--bg-app)] rounded-2xl font-black text-[10px] uppercase tracking-widest hover:bg-[var(--accent)] transition-colors">
-                {t("Editar Ativo", "Edit Asset")}
+            <div>
+              <label className="text-[10px] uppercase font-bold text-[var(--text-muted)] tracking-widest">{t("Tipo", "Type")}</label>
+              <select value={formData.type} onChange={e => setFormData({...formData, type: e.target.value})} className="mt-1 w-full bg-[var(--bg-app)] border border-[var(--border-card)] rounded-xl p-3 text-[var(--text-primary)] text-base sm:text-sm focus:border-[var(--accent)] outline-none">
+                <option value="liquidity">{t("Liquidez", "Liquidity")}</option>
+                <option value="investment">{t("Investimento", "Investment")}</option>
+                <option value="physical">{t("Bem Físico", "Physical Asset")}</option>
+              </select>
+            </div>
+            <div>
+              <label className="text-[10px] uppercase font-bold text-[var(--text-muted)] tracking-widest">{t("Detalhes", "Details")}</label>
+              <textarea value={formData.detail} onChange={e => setFormData({...formData, detail: e.target.value})} className="mt-1 w-full bg-[var(--bg-app)] border border-[var(--border-card)] rounded-xl p-3 text-[var(--text-primary)] text-base sm:text-sm focus:border-[var(--accent)] outline-none h-24" />
+            </div>
+            <div className="flex flex-col gap-3 pt-2 sm:flex-row">
+              <button onClick={() => onDelete(asset.id)} className="flex flex-1 items-center justify-center gap-2 rounded-2xl bg-[var(--trend-down)]/10 py-4 text-xs font-bold uppercase tracking-widest text-[var(--trend-down)] transition-colors hover:bg-[var(--trend-down)]/20">
+                <Trash2 size={16} /> {t("Excluir", "Delete")}
               </button>
-            </>
-          )}
-        </div>
-      </motion.div>
-    </div>
+              <button onClick={handleSave} className="flex flex-1 items-center justify-center gap-2 rounded-2xl bg-[var(--accent)] py-4 text-xs font-bold uppercase tracking-widest text-[var(--bg-app)] transition-colors hover:bg-[var(--accent)]/80">
+                <Save size={16} /> {t("Salvar", "Save")}
+              </button>
+            </div>
+          </div>
+        ) : (
+          <>
+            <div className="space-y-1">
+              <p className="text-3xl font-mono tracking-tighter text-[var(--text-primary)] sm:text-4xl">
+                {privacyMode ? '••••••' : (asset.value ?? 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+              </p>
+              {asset.change && <p className="text-xs font-bold text-[var(--accent)]">{asset.change} {t("no período", "in period")}</p>}
+            </div>
+            <div className="h-px bg-[var(--border-card)]" />
+            <p className="text-sm leading-relaxed text-[var(--text-secondary)]">{asset.detail}</p>
+            <button onClick={() => setIsEditing(true)} className="w-full rounded-2xl bg-[var(--text-primary)] py-4 text-[10px] font-black uppercase tracking-widest text-[var(--bg-app)] transition-colors hover:bg-[var(--accent)] sm:py-5">
+              {t("Editar Ativo", "Edit Asset")}
+            </button>
+          </>
+        )}
+      </div>
+    </Modal>
   );
 }
 
@@ -4760,6 +3335,7 @@ function AddAssetModal({ onClose, onAdd, language, investorProfile, user, getApi
         let documentInput: { data?: string; text?: string; mimeType?: string };
 
         if (isSpreadsheet) {
+          const { read, utils } = await import('xlsx');
           const data = new Uint8Array(e.target?.result as ArrayBuffer);
           const workbook = read(data, { type: 'array' });
           let content = "";
@@ -4854,176 +3430,100 @@ function AddAssetModal({ onClose, onAdd, language, investorProfile, user, getApi
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-6">
-      <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={onClose} className="absolute inset-0 bg-black/80 backdrop-blur-md" />
-      <motion.div initial={{ opacity: 0, scale: 0.9, y: 30 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.9, y: 30 }} className="relative w-full max-w-sm bg-[var(--bg-card)] border border-[var(--border-card)] rounded-[40px] p-8 shadow-2xl overflow-hidden max-h-[90vh] overflow-y-auto">
-        <div className="absolute top-0 right-0 p-6">
-          <button onClick={onClose} className="text-[var(--text-muted)] hover:text-[var(--text-primary)] p-2"><X size={24} /></button>
-        </div>
-        <div className="mt-4 space-y-6">
-          <h3 className="text-2xl font-medium text-[var(--text-primary)]">{t("Novo Ativo", "New Asset")}</h3>
-          
-          <AnimatePresence>
-            {isExtracting && (
-              <ProcessingOverlay 
-                language={language} 
-                stage={extractionStage} 
-                progress={extractionProgress} 
-              />
-            )}
-          </AnimatePresence>
-
-          {/* ÁREA DE UPLOAD IA */}
-          <div 
-            onDragEnter={handleDrag}
-            onDragLeave={handleDrag}
-            onDragOver={handleDrag}
-            onDrop={handleDrop}
-            className={`relative border-2 border-dashed rounded-2xl p-6 transition-all flex flex-col items-center justify-center gap-3 text-center ${dragActive ? 'border-[var(--accent)] bg-[var(--accent)]/5' : 'border-[var(--border-card)] hover:border-[var(--text-muted)]'}`}
-          >
-            {isExtracting ? (
-              <>
-                <Loader2 size={32} className="text-[var(--accent)] animate-spin" />
-                <p className="text-xs font-bold text-[var(--accent)] uppercase tracking-widest">{t("Extraindo dados com IA...", "Extracting data with AI...")}</p>
-              </>
-            ) : (
-              <>
-                <div className="w-10 h-10 rounded-full bg-[var(--bg-app)] flex items-center justify-center text-[var(--text-muted)]">
-                  <FileUp size={20} />
-                </div>
-                <div>
-                  <p className="text-xs font-bold text-[var(--text-primary)] uppercase tracking-widest mb-1">{t("Extração Automática", "Automatic Extraction")}</p>
-                  <p className="text-[10px] text-[var(--text-muted)] leading-relaxed">{t("Arraste seu extrato ou comprovante aqui para preencher os dados automaticamente.", "Drag your statement or receipt here to fill in data automatically.")}</p>
-                </div>
-                <input 
-                  type="file" 
-                  className="absolute inset-0 opacity-0 cursor-pointer" 
-                  accept="image/*,application/pdf,.csv,.xlsx,.tsv"
-                  onChange={(e) => e.target.files && handleFileUpload(e.target.files[0])}
-                />
-              </>
-            )}
-          </div>
-
-          {extractionError && (
-            <p className="text-[10px] text-red-500 font-medium leading-relaxed">{extractionError}</p>
+    <Modal
+      open
+      onClose={onClose}
+      variant="center"
+      title={t("Novo Ativo", "New Asset")}
+      closeLabel={t("Fechar", "Close")}
+    >
+      <div className="space-y-5">
+        <AnimatePresence>
+          {isExtracting && (
+            <ProcessingOverlay
+              language={language}
+              stage={extractionStage}
+              progress={extractionProgress}
+            />
           )}
+        </AnimatePresence>
 
-          <div className="space-y-4">
-            <div>
-              <label className="text-[10px] uppercase font-bold text-[var(--text-muted)] tracking-widest">{t("Nome", "Name")}</label>
-              <input placeholder={t("Ex: Carteira de Ações", "Ex: Stock Wallet")} value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} className="w-full bg-[var(--bg-app)] border border-[var(--border-card)] rounded-xl p-3 text-[var(--text-primary)] text-sm focus:border-[var(--accent)] outline-none" />
-            </div>
-            <div>
-              <label className="text-[10px] uppercase font-bold text-[var(--text-muted)] tracking-widest">{t("Valor (R$)", "Value (R$)")}</label>
-              <div className="relative">
-                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--text-muted)] text-xs font-bold">R$</span>
-                <input 
-                  type="text" 
-                  value={(formData.value ?? 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} 
-                  onChange={e => {
-                    const val = e.target.value.replace(/\D/g, '');
-                    setFormData({...formData, value: parseInt(val || '0') / 100});
-                  }} 
-                  className="w-full bg-[var(--bg-app)] border border-[var(--border-card)] rounded-xl p-3 pl-10 text-[var(--text-primary)] text-sm focus:border-[var(--accent)] outline-none font-mono" 
-                />
+        <div
+          onDragEnter={handleDrag}
+          onDragLeave={handleDrag}
+          onDragOver={handleDrag}
+          onDrop={handleDrop}
+          className={`relative flex flex-col items-center justify-center gap-3 rounded-2xl border-2 border-dashed p-4 text-center transition-all sm:p-6 ${dragActive ? 'border-[var(--accent)] bg-[var(--accent)]/5' : 'border-[var(--border-card)] hover:border-[var(--text-muted)]'}`}
+        >
+          {isExtracting ? (
+            <>
+              <Loader2 size={32} className="text-[var(--accent)] animate-spin" />
+              <p className="text-xs font-bold text-[var(--accent)] uppercase tracking-widest">{t("Extraindo dados com IA...", "Extracting data with AI...")}</p>
+            </>
+          ) : (
+            <>
+              <div className="flex h-10 w-10 items-center justify-center rounded-full bg-[var(--bg-app)] text-[var(--text-muted)]">
+                <FileUp size={20} />
               </div>
-            </div>
-            <div>
-              <label className="text-[10px] uppercase font-bold text-[var(--text-muted)] tracking-widest">{t("Tipo", "Type")}</label>
-              <select value={formData.type} onChange={e => setFormData({...formData, type: e.target.value})} className="w-full bg-[var(--bg-app)] border border-[var(--border-card)] rounded-xl p-3 text-[var(--text-primary)] text-sm focus:border-[var(--accent)] outline-none">
-                <option value="liquidity">{t("Liquidez", "Liquidity")}</option>
-                <option value="investment">{t("Investimento", "Investment")}</option>
-                <option value="physical">{t("Bem Físico", "Physical Asset")}</option>
-              </select>
-            </div>
-            <div>
-              <label className="text-[10px] uppercase font-bold text-[var(--text-muted)] tracking-widest">{t("Detalhes", "Details")}</label>
-              <textarea placeholder={t("Descrição curta...", "Short description...")} value={formData.detail} onChange={e => setFormData({...formData, detail: e.target.value})} className="w-full bg-[var(--bg-app)] border border-[var(--border-card)] rounded-xl p-3 text-[var(--text-primary)] text-sm focus:border-[var(--accent)] outline-none h-24" />
-            </div>
-            <button onClick={handleAdd} className="w-full py-5 bg-[var(--accent)] text-[var(--bg-app)] rounded-2xl font-black text-[10px] uppercase tracking-widest hover:bg-[var(--accent)]/80 transition-colors mt-4">
-              {t("Adicionar Ativo", "Add Asset")}
-            </button>
-          </div>
+              <div>
+                <p className="mb-1 text-xs font-bold uppercase tracking-widest text-[var(--text-primary)]">{t("Extração Automática", "Automatic Extraction")}</p>
+                <p className="text-[10px] leading-relaxed text-[var(--text-muted)]">{t("Arraste seu extrato ou comprovante aqui para preencher os dados automaticamente.", "Drag your statement or receipt here to fill in data automatically.")}</p>
+              </div>
+              <input
+                type="file"
+                className="absolute inset-0 cursor-pointer opacity-0"
+                accept="image/*,application/pdf,.csv,.xlsx,.tsv"
+                onChange={(e) => e.target.files && handleFileUpload(e.target.files[0])}
+              />
+            </>
+          )}
         </div>
-      </motion.div>
-    </div>
-  );
-}
 
-function ProfileModal({ profile, onClose, onSave, onLogout, language }: any) {
-  const t = (pt: string, en: string) => (language === 'en-US' ? en : pt);
-  const [formData, setFormData] = useState({ ...profile });
+        {extractionError && (
+          <p className="text-[10px] font-medium leading-relaxed text-[var(--trend-down)]">{extractionError}</p>
+        )}
 
-  const handleSave = () => {
-    if (!formData.displayName.trim()) {
-      alert(t('O nome não pode estar vazio.', 'The name cannot be empty.'));
-      return;
-    }
-    onSave(formData);
-  };
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-6">
-      <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={onClose} className="absolute inset-0 bg-black/80 backdrop-blur-md" />
-      <motion.div initial={{ opacity: 0, scale: 0.9, y: 30 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.9, y: 30 }} className="relative w-full max-w-sm bg-[var(--bg-card)] border border-[var(--border-card)] rounded-[40px] p-8 shadow-2xl overflow-hidden">
-        <div className="absolute top-0 right-0 p-6">
-          <button onClick={onClose} className="text-[var(--text-muted)] hover:text-[var(--text-primary)] p-2"><X size={24} /></button>
-        </div>
-        <div className="mt-4 space-y-8">
-          <div className="flex flex-col items-center gap-4">
-            <div className="w-24 h-24 rounded-3xl border-2 border-[var(--accent)] overflow-hidden">
-              <img src={formData.photoURL} alt={t("Perfil", "Profile")} className="w-full h-full object-cover" />
-            </div>
-            <div className="text-center">
-              <h3 className="text-xl font-medium text-[var(--text-primary)]">{profile.displayName}</h3>
-              <p className="text-[var(--text-muted)] text-xs">{profile.email}</p>
-            </div>
+        <div className="space-y-4">
+          <div>
+            <label className="text-[10px] uppercase font-bold text-[var(--text-muted)] tracking-widest">{t("Nome", "Name")}</label>
+            <input placeholder={t("Ex: Carteira de Ações", "Ex: Stock Wallet")} value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} className="mt-1 w-full bg-[var(--bg-app)] border border-[var(--border-card)] rounded-xl p-3 text-[var(--text-primary)] text-base sm:text-sm focus:border-[var(--accent)] outline-none" />
           </div>
-          <div className="space-y-4">
-            <div>
-              <label className="text-[10px] uppercase font-bold text-[var(--text-muted)] tracking-widest">{t("Nome de Exibição", "Display Name")}</label>
-              <input value={formData.displayName} onChange={e => setFormData({...formData, displayName: e.target.value})} className="w-full bg-[var(--bg-app)] border border-[var(--border-card)] rounded-xl p-3 text-[var(--text-primary)] text-sm focus:border-[var(--accent)] outline-none" />
-            </div>
-            <div>
-              <label className="text-[10px] uppercase font-bold text-[var(--text-muted)] tracking-widest">{t("URL da Foto", "Photo URL")}</label>
-              <input value={formData.photoURL} onChange={e => setFormData({...formData, photoURL: e.target.value})} className="w-full bg-[var(--bg-app)] border border-[var(--border-card)] rounded-xl p-3 text-[var(--text-primary)] text-sm focus:border-[var(--accent)] outline-none" />
-            </div>
-            <div>
-              <label className="text-[10px] uppercase font-bold text-[var(--text-muted)] tracking-widest">{t("Chave Pix", "Pix Key")}</label>
-              <input 
-                value={formData.pix_key || ''} 
-                placeholder={t("E-mail, CPF, Telefone ou Chave Aleatória", "Email, CPF, Phone or Random Key")}
-                onChange={e => setFormData({...formData, pix_key: e.target.value})} 
-                className="w-full bg-[var(--bg-app)] border border-[var(--border-card)] rounded-xl p-3 text-[var(--text-primary)] text-sm focus:border-[var(--accent)] outline-none" 
+          <div>
+            <label className="text-[10px] uppercase font-bold text-[var(--text-muted)] tracking-widest">{t("Valor (R$)", "Value (R$)")}</label>
+            <div className="relative mt-1">
+              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--text-muted)] text-xs font-bold">R$</span>
+              <input
+                type="text"
+                value={(formData.value ?? 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                onChange={e => {
+                  const val = e.target.value.replace(/\D/g, '');
+                  setFormData({...formData, value: parseInt(val || '0') / 100});
+                }}
+                className="w-full bg-[var(--bg-app)] border border-[var(--border-card)] rounded-xl p-3 pl-10 text-[var(--text-primary)] text-base sm:text-sm focus:border-[var(--accent)] outline-none font-mono"
               />
             </div>
-            <div>
-              <label className="text-[10px] uppercase font-bold text-[var(--text-muted)] tracking-widest">{t("Perfil de Investidor", "Investor Profile")}</label>
-              <select 
-                value={formData.investor_profile || 'Conservador'} 
-                onChange={e => setFormData({...formData, investor_profile: e.target.value as any})} 
-                className="w-full bg-[var(--bg-app)] border border-[var(--border-card)] rounded-xl p-3 text-[var(--text-primary)] text-sm focus:border-[var(--accent)] outline-none"
-              >
-                <option value="Conservador">Conservador</option>
-                <option value="Sofisticado">Sofisticado</option>
-                <option value="Arrojado">Arrojado</option>
-              </select>
-            </div>
-            <div className="flex flex-col gap-3 pt-4">
-              <button onClick={handleSave} className="w-full py-4 bg-[var(--accent)] text-[var(--bg-app)] rounded-2xl font-bold text-xs uppercase tracking-widest hover:bg-[var(--accent)]/80 transition-colors flex items-center justify-center gap-2">
-                <Save size={16} /> {t("Salvar Alterações", "Save Changes")}
-              </button>
-              <button onClick={onLogout} className="w-full py-4 bg-[var(--destructive)]/10 text-[var(--destructive)] rounded-2xl font-bold text-xs uppercase tracking-widest hover:bg-[var(--destructive)]/20 transition-colors flex items-center justify-center gap-2">
-                <LogOut size={16} /> {t("Sair da Conta", "Log Out")}
-              </button>
-            </div>
           </div>
+          <div>
+            <label className="text-[10px] uppercase font-bold text-[var(--text-muted)] tracking-widest">{t("Tipo", "Type")}</label>
+            <select value={formData.type} onChange={e => setFormData({...formData, type: e.target.value})} className="mt-1 w-full bg-[var(--bg-app)] border border-[var(--border-card)] rounded-xl p-3 text-[var(--text-primary)] text-base sm:text-sm focus:border-[var(--accent)] outline-none">
+              <option value="liquidity">{t("Liquidez", "Liquidity")}</option>
+              <option value="investment">{t("Investimento", "Investment")}</option>
+              <option value="physical">{t("Bem Físico", "Physical Asset")}</option>
+            </select>
+          </div>
+          <div>
+            <label className="text-[10px] uppercase font-bold text-[var(--text-muted)] tracking-widest">{t("Detalhes", "Details")}</label>
+            <textarea placeholder={t("Descrição curta...", "Short description...")} value={formData.detail} onChange={e => setFormData({...formData, detail: e.target.value})} className="mt-1 h-24 w-full bg-[var(--bg-app)] border border-[var(--border-card)] rounded-xl p-3 text-[var(--text-primary)] text-base sm:text-sm focus:border-[var(--accent)] outline-none" />
+          </div>
+          <button onClick={handleAdd} className="mt-2 w-full rounded-2xl bg-[var(--accent)] py-4 text-[10px] font-black uppercase tracking-widest text-[var(--bg-app)] transition-colors hover:bg-[var(--accent)]/80">
+            {t("Adicionar Ativo", "Add Asset")}
+          </button>
         </div>
-      </motion.div>
-    </div>
+      </div>
+    </Modal>
   );
 }
+
 
 // --- SUB-COMPONENTS ---
 
@@ -5047,274 +3547,150 @@ function NavItem({ icon, label, active = false, onClick }: { icon: React.ReactNo
 
 function Shimmer({ className }: { className?: string }) {
   return (
-    <div className={`animate-pulse bg-white/5 rounded-xl ${className}`} />
+    <div className={`animate-pulse bg-[var(--bg-card-hover)] rounded-xl ${className}`} />
   );
 }
 
 function IngestionHub({ isOpen, onClose, onProcess, language }: any) {
   const t = (pt: string, en: string) => (language === 'en-US' ? en : pt);
-  
-  if (!isOpen) return null;
 
   const options = [
-    { id: 'scanner', icon: <QrCode size={24} />, label: t('Scanner QR/Boleto', 'QR/Boleto Scanner'), color: '#00FFA3' },
-    { id: 'upload', icon: <FileText size={24} />, label: t('Upload de Documentos', 'Document Upload'), color: '#007AFF' },
-    { id: 'spreadsheet', icon: <Table size={24} />, label: t('Importar Planilha', 'Import Spreadsheet'), color: '#FF9500' },
-    { id: 'manual', icon: <Edit3 size={24} />, label: t('Lançamento Manual', 'Manual Entry'), color: '#FF2D55' },
+    { id: 'scanner', icon: <QrCode size={20} />, label: t('Scanner QR/Boleto', 'QR/Boleto Scanner'), color: '#00FFA3' },
+    { id: 'upload', icon: <FileText size={20} />, label: t('Upload de Documentos', 'Document Upload'), color: '#007AFF' },
+    { id: 'spreadsheet', icon: <Table size={20} />, label: t('Importar Planilha', 'Import Spreadsheet'), color: '#FF9500' },
+    { id: 'manual', icon: <Edit3 size={20} />, label: t('Lançamento Manual', 'Manual Entry'), color: '#FF2D55' },
   ];
 
   return (
-    <div className="fixed inset-0 z-[60] flex items-end justify-center">
-      <motion.div 
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        exit={{ opacity: 0 }}
-        onClick={onClose}
-        className="absolute inset-0 bg-black/60 backdrop-blur-sm"
-      />
-      <motion.div 
-        initial={{ y: "100%" }}
-        animate={{ y: 0 }}
-        exit={{ y: "100%" }}
-        className="relative w-full max-w-md bg-[#121212] border-t border-[var(--border-card)] rounded-t-[40px] p-8 pb-12 shadow-2xl"
-      >
-        <div className="w-12 h-1.5 bg-[var(--border-card)] rounded-full mx-auto mb-8" />
-        
-        <div className="flex justify-between items-center mb-8">
-          <h2 className="text-2xl font-bold text-white tracking-tight">{t('Hub de Ingestão', 'Ingestion Hub')}</h2>
-          <button onClick={onClose} className="w-10 h-10 bg-white/5 rounded-full flex items-center justify-center text-white/40 hover:text-white transition-colors">
-            <X size={20} />
-          </button>
-        </div>
-
-        <div className="grid grid-cols-2 gap-4">
-          {options.map((opt, idx) => (
-            <button 
-              key={`ingest-item-${opt.id}-${idx}`}
-              onClick={() => onProcess(opt.id)}
-              className="flex flex-col items-center justify-center p-6 bg-white/5 border border-white/10 rounded-[32px] hover:bg-white/10 transition-all group"
+    <Modal
+      open={isOpen}
+      onClose={onClose}
+      variant="sheet"
+      showHandle
+      title={t('Hub de Ingestão', 'Ingestion Hub')}
+      closeLabel={t('Fechar', 'Close')}
+    >
+      <div className="grid grid-cols-2 gap-3 pb-1">
+        {options.map((opt, idx) => (
+          <button
+            key={`ingest-item-${opt.id}-${idx}`}
+            onClick={() => onProcess(opt.id)}
+            className="group flex flex-col items-center justify-center rounded-2xl border border-[var(--border-card)] bg-[var(--bg-app)] p-3 transition-all hover:bg-[var(--bg-card-hover)] sm:p-5"
+          >
+            <div
+              className="mb-3 flex h-11 w-11 items-center justify-center rounded-xl transition-transform group-hover:scale-110 sm:h-12 sm:w-12"
+              style={{ backgroundColor: `${opt.color}20`, color: opt.color }}
             >
-              <div className="w-14 h-14 rounded-2xl flex items-center justify-center mb-4 transition-transform group-hover:scale-110" style={{ backgroundColor: `${opt.color}20`, color: opt.color }}>
-                {opt.icon}
-              </div>
-              <span className="text-xs font-bold text-white/80 text-center tracking-tight">{opt.label}</span>
-            </button>
-          ))}
-        </div>
-      </motion.div>
-    </div>
+              {opt.icon}
+            </div>
+            <span className="text-center text-[11px] font-bold leading-tight tracking-tight text-[var(--text-secondary)] sm:text-xs">
+              {opt.label}
+            </span>
+          </button>
+        ))}
+      </div>
+    </Modal>
   );
 }
 
-function ReviewModal({ transaction, onConfirm, onCancel, language, isProcessing, users, ownerName, ownerPhoto }: any) {
+function ReviewModal({ transaction, onConfirm, onCancel, language, isProcessing }: any) {
   const t = (pt: string, en: string) => (language === 'en-US' ? en : pt);
-  const [selectedParticipants, setSelectedParticipants] = useState<string[]>(transaction?.participants || []);
   const [formData, setFormData] = useState({ ...transaction });
 
-  const shareValue = transaction ? transaction.value / (selectedParticipants.length + 1) : 0;
-
   useEffect(() => {
-    if (transaction) {
-      setFormData({ ...transaction });
-      // Smart Auto-selection based on Category
-      if (transaction.categoria_primaria === 'Moradia' || transaction.category === 'Moradia') {
-        setSelectedParticipants(users.map((u: any) => u.uid));
-      }
-    }
-  }, [transaction, users]);
-
-  // Handle category change auto-selection
-  useEffect(() => {
-    if (formData.categoria_primaria === 'Moradia' || formData.category === 'Moradia') {
-      setSelectedParticipants(users.map((u: any) => u.uid));
-    }
-  }, [formData.categoria_primaria, formData.category, users]);
+    if (transaction) setFormData({ ...transaction });
+  }, [transaction]);
 
   if (!transaction && !isProcessing) return null;
 
-  const toggleParticipant = (uid: string) => {
-    setSelectedParticipants(prev => 
-      prev.includes(uid) ? prev.filter(id => id !== uid) : [...prev, uid]
-    );
-  };
-
   const handleConfirm = () => {
-    onConfirm({ ...formData, participants: selectedParticipants });
+    onConfirm(formData);
   };
 
   return (
-    <div className="fixed inset-0 z-[70] flex items-center justify-center p-6">
-      <motion.div 
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        exit={{ opacity: 0 }}
-        className="absolute inset-0 bg-black/80 backdrop-blur-md"
-      />
-      <motion.div 
-        initial={{ scale: 0.9, opacity: 0 }}
-        animate={{ scale: 1, opacity: 1 }}
-        exit={{ scale: 0.9, opacity: 0 }}
-        className="relative w-full max-w-sm bg-[#121212] border border-white/10 rounded-[40px] p-8 shadow-2xl overflow-hidden max-h-[90vh] overflow-y-auto"
-      >
-        {isProcessing ? (
-          <div className="space-y-6 py-4">
-            <div className="w-20 h-20 bg-[var(--accent)]/10 rounded-3xl flex items-center justify-center mx-auto relative">
-              <Sparkles size={40} className="text-[var(--accent)] animate-pulse" />
-              <div className="absolute inset-0 border-4 border-[var(--accent)] border-t-transparent rounded-3xl animate-spin" />
+    <Modal
+      open={Boolean(transaction || isProcessing)}
+      onClose={onCancel}
+      variant="center"
+      icon={isProcessing ? <Sparkles size={26} /> : <Zap size={26} />}
+      eyebrow={isProcessing ? t('Analisando Documento', 'Analyzing Document') : t('IA Detectou', 'AI Detected')}
+      title={isProcessing ? t('Processando IA...', 'Processing AI...') : t('Revisar Lançamento', 'Review Entry')}
+      closeOnBackdrop={!isProcessing}
+      closeOnEscape={!isProcessing}
+      showClose={!isProcessing}
+      closeLabel={t('Fechar', 'Close')}
+    >
+      {isProcessing ? (
+        <div className="space-y-6 py-2">
+          <div className="relative mx-auto h-20 w-20 rounded-3xl bg-[var(--accent)]/10 flex items-center justify-center">
+            <Sparkles size={40} className="text-[var(--accent)] animate-pulse" />
+            <div className="absolute inset-0 border-4 border-[var(--accent)] border-t-transparent rounded-3xl animate-spin" />
+          </div>
+          <div className="space-y-3">
+            <Shimmer className="h-12 w-full" />
+            <Shimmer className="h-12 w-3/4 mx-auto" />
+          </div>
+        </div>
+      ) : (
+        <div className="space-y-6">
+          <div className="space-y-4 rounded-3xl border border-[var(--border-card)] bg-[var(--bg-app)] p-4 sm:p-6">
+            <div className="flex justify-between items-center gap-3">
+              <span className="text-[10px] font-bold text-[var(--text-muted)] uppercase tracking-widest">{t('Título', 'Title')}</span>
+              <span className="text-sm font-medium text-[var(--text-primary)] text-right">{transaction.label}</span>
             </div>
-            <div className="text-center space-y-2">
-              <h3 className="text-xl font-bold text-white">{t('Processando IA...', 'Processing AI...')}</h3>
-              <p className="text-white/40 text-xs font-medium uppercase tracking-widest">{t('Analisando Documento', 'Analyzing Document')}</p>
+            <div className="flex justify-between items-center gap-3">
+              <span className="text-[10px] font-bold text-[var(--text-muted)] uppercase tracking-widest">{t('Data', 'Date')}</span>
+              <span className="text-sm font-medium text-[var(--text-primary)] text-right">
+                {transaction.date?.toDate
+                  ? transaction.date.toDate().toLocaleDateString('pt-BR')
+                  : transaction.date
+                    ? new Date(transaction.date).toLocaleDateString('pt-BR')
+                    : '—'}
+              </span>
             </div>
-            <div className="space-y-3">
-              <Shimmer className="h-12 w-full" />
-              <Shimmer className="h-12 w-3/4 mx-auto" />
+            <div className="flex justify-between items-center gap-3">
+              <span className="text-[10px] font-bold text-[var(--text-muted)] uppercase tracking-widest">{t('Valor', 'Value')}</span>
+              <span className="text-base font-mono font-bold text-[var(--accent)] sm:text-lg">R$ {transaction.value.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span>
+            </div>
+            <div className="flex justify-between items-center gap-3">
+              <span className="text-[10px] font-bold text-[var(--text-muted)] uppercase tracking-widest">{t('Categoria', 'Category')}</span>
+              <select
+                className="max-w-[60%] bg-transparent text-base font-medium text-[var(--text-primary)] outline-none border-b border-[var(--border-card)] focus:border-[var(--accent)] transition-colors cursor-pointer sm:text-sm"
+                value={formData.categoria_primaria || formData.category}
+                onChange={(e) => {
+                  const newCat = e.target.value;
+                  setFormData({ ...formData, categoria_primaria: newCat, category: newCat });
+                }}
+              >
+                <option value="Moradia">Moradia</option>
+                <option value="Alimentação">Alimentação</option>
+                <option value="Energia">Energia</option>
+                <option value="Água">Água</option>
+                <option value="Transporte">Transporte</option>
+                <option value="Lazer">Lazer</option>
+                <option value="Investimentos">Investimentos</option>
+                <option value="Outros">Outros</option>
+              </select>
             </div>
           </div>
-        ) : (
-          <>
-            <div className="flex items-center gap-4 mb-8">
-              <div className="w-14 h-14 bg-[var(--accent)]/10 rounded-2xl flex items-center justify-center text-[var(--accent)]">
-                <Zap size={28} />
-              </div>
-              <div>
-                <p className="text-[10px] font-black text-[var(--accent)] uppercase tracking-[0.3em]">{t('IA Detectou', 'AI Detected')}</p>
-                <h3 className="text-xl font-bold text-white">{t('Revisar Lançamento', 'Review Entry')}</h3>
-              </div>
-            </div>
 
-            <div className="bg-white/5 border border-white/10 rounded-3xl p-6 space-y-4 mb-6">
-              <div className="flex justify-between items-center">
-                <span className="text-xs font-bold text-white/40 uppercase tracking-widest">{t('Título', 'Title')}</span>
-                <span className="text-sm font-medium text-white">{transaction.label}</span>
-              </div>
-              <div className="flex justify-between items-center">
-                <span className="text-xs font-bold text-white/40 uppercase tracking-widest">{t('Valor', 'Value')}</span>
-                <span className="text-lg font-mono font-bold text-[var(--accent)]">R$ {transaction.value.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span>
-              </div>
-              <div className="flex justify-between items-center">
-                <span className="text-xs font-bold text-white/40 uppercase tracking-widest">{t('Categoria', 'Category')}</span>
-                <select 
-                  className="bg-transparent text-sm font-medium text-white outline-none border-b border-white/10 focus:border-[var(--accent)] transition-colors cursor-pointer"
-                  value={formData.categoria_primaria || formData.category}
-                  onChange={(e) => {
-                    const newCat = e.target.value;
-                    setFormData({ ...formData, categoria_primaria: newCat, category: newCat });
-                    if (newCat === 'Moradia') {
-                      setSelectedParticipants(users.map((u: any) => u.uid));
-                    }
-                  }}
-                >
-                  <option value="Moradia">Moradia</option>
-                  <option value="Alimentação">Alimentação</option>
-                  <option value="Energia">Energia</option>
-                  <option value="Água">Água</option>
-                  <option value="Transporte">Transporte</option>
-                  <option value="Lazer">Lazer</option>
-                  <option value="Investimentos">Investimentos</option>
-                  <option value="Outros">Outros</option>
-                </select>
-              </div>
-            </div>
-
-            {/* SPLIT SECTION */}
-            <div className="space-y-4 mb-8">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <span className="text-[10px] font-bold text-white/40 uppercase tracking-widest">{t('Dividir com', 'Split with')}</span>
-                  <div className="flex gap-1">
-                    <button 
-                      onClick={() => setSelectedParticipants(users.map((u: any) => u.uid))}
-                      className="px-2 py-0.5 bg-[var(--accent)]/10 text-[var(--accent)] text-[8px] font-black uppercase rounded-md hover:bg-[var(--accent)]/20 transition-all border border-[var(--accent)]/20 shadow-sm"
-                    >
-                      {t('Todos', 'All')}
-                    </button>
-                    <button 
-                      onClick={() => setSelectedParticipants([])}
-                      className="px-2 py-0.5 bg-white/5 text-white/40 text-[8px] font-black uppercase rounded-md hover:bg-white/10 transition-all border border-white/10 shadow-sm"
-                    >
-                      {t('Nenhum', 'None')}
-                    </button>
-                  </div>
-                </div>
-                <span className="text-[10px] font-bold text-[var(--accent)] uppercase tracking-widest">
-                  {selectedParticipants.length > 0 ? `${selectedParticipants.length + 1} ${t('Pessoas', 'People')} (1/N)` : t('Apenas eu', 'Just me')}
-                </span>
-              </div>
-              
-              <div className="grid grid-cols-4 gap-3 bg-white/5 p-4 rounded-3xl border border-white/10 shadow-inner">
-                {/* OWNER (YOU) - ALWAYS SELECTED */}
-                <div className="flex flex-col items-center gap-2 transition-all">
-                  <div className="w-12 h-12 rounded-2xl border-2 border-[var(--accent)] scale-110 shadow-[0_0_15px_rgba(0,255,163,0.3)] overflow-hidden relative">
-                    <img src={ownerPhoto} alt={ownerName} className="w-full h-full object-cover" />
-                    <div className="absolute inset-0 bg-[var(--accent)]/10" />
-                  </div>
-                  <div className="space-y-0.5 text-center w-full">
-                    <span className="text-[8px] font-black uppercase text-[var(--accent)] block truncate">
-                      {ownerName?.split(' ')[0]}
-                    </span>
-                    <span className="text-[7px] font-mono font-bold text-white/60 block">
-                      {shareValue.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
-                    </span>
-                  </div>
-                </div>
-
-                {users.map((u: any, idx: number) => {
-                  const isSelected = selectedParticipants.includes(u.uid);
-                  return (
-                    <button 
-                      key={`user-sel-${u.uid}-${idx}`}
-                      onClick={() => toggleParticipant(u.uid)}
-                      className="flex flex-col items-center gap-2 group transition-all"
-                    >
-                      <div className={`w-12 h-12 rounded-2xl border-2 transition-all overflow-hidden ${isSelected ? 'border-[var(--accent)] scale-110 shadow-[0_0_15px_rgba(0,255,163,0.3)]' : 'border-white/10 grayscale opacity-40 hover:opacity-100 hover:grayscale-0'}`}>
-                        <img src={u.photoURL} alt={u.displayName} className="w-full h-full object-cover" />
-                      </div>
-                      <div className="space-y-0.5 text-center w-full">
-                        <span className={`text-[8px] font-bold truncate block ${isSelected ? 'text-[var(--accent)]' : 'text-white/40'}`}>
-                          {u.displayName.split(' ')[0]}
-                        </span>
-                        {isSelected && (
-                          <span className="text-[7px] font-mono font-bold text-white/60 block animate-in fade-in zoom-in duration-300">
-                            {shareValue.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
-                          </span>
-                        )}
-                      </div>
-                    </button>
-                  );
-                })}
-              </div>
-
-              {selectedParticipants.length > 0 && (
-                <div className="bg-[var(--accent)]/5 border border-[var(--accent)]/20 rounded-2xl p-4">
-                  <div className="flex justify-between items-center">
-                    <span className="text-[10px] font-bold text-[var(--accent)] uppercase tracking-widest">{t('Sua Cota', 'Your Share')}</span>
-                    <span className="text-sm font-mono font-bold text-[var(--accent)]">
-                      R$ {(transaction.value / (selectedParticipants.length + 1)).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
-                    </span>
-                  </div>
-                </div>
-              )}
-            </div>
-
-            <div className="grid grid-cols-2 gap-4">
-              <button 
-                onClick={onCancel}
-                className="py-4 bg-white/5 text-white/60 rounded-2xl font-bold text-xs uppercase tracking-widest hover:bg-white/10 transition-colors"
-              >
-                {t('Descartar', 'Discard')}
-              </button>
-              <button 
-                onClick={handleConfirm}
-                className="py-4 bg-[var(--accent)] text-[var(--bg-app)] rounded-2xl font-black text-xs uppercase tracking-widest hover:scale-105 transition-all shadow-[0_0_20px_rgba(0,255,163,0.3)]"
-              >
-                {t('Confirmar', 'Confirm')}
-              </button>
-            </div>
-          </>
-        )}
-      </motion.div>
-    </div>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <button
+              onClick={onCancel}
+              className="rounded-2xl bg-[var(--bg-app)] py-4 text-xs font-bold uppercase tracking-widest text-[var(--text-primary)]/60 transition-colors hover:bg-[var(--bg-card-hover)]"
+            >
+              {t('Descartar', 'Discard')}
+            </button>
+            <button
+              onClick={handleConfirm}
+              className="rounded-2xl bg-[var(--accent)] py-4 text-xs font-black uppercase tracking-widest text-[var(--bg-app)] shadow-[0_0_20px_color-mix(in_srgb,var(--accent)_30%,transparent)] transition-all hover:scale-[1.02]"
+            >
+              {t('Confirmar', 'Confirm')}
+            </button>
+          </div>
+        </div>
+      )}
+    </Modal>
   );
 }
 
@@ -5346,6 +3722,7 @@ function MiniMetricCard({ id, label, value, percent, trend, data, color, opacity
 
   // For expenses, trend 'up' (increase) is bad (red)
   const isBadTrend = isExpense ? trend === 'up' : trend === 'down';
+  const hasChartData = Array.isArray(data) && data.length > 0;
 
   return (
     <div 
@@ -5373,33 +3750,39 @@ function MiniMetricCard({ id, label, value, percent, trend, data, color, opacity
       </div>
       
       <div className="h-8 sm:h-12 w-full mt-1 sm:mt-2">
-        <ResponsiveContainer width="100%" height="100%">
-          <AreaChart data={data} margin={{ top: marginTop, right: 0, left: 0, bottom: 0 }}>
-            <CartesianGrid 
-              vertical={gridStyle === 'vertical' || gridStyle === 'both'} 
-              horizontal={gridStyle === 'horizontal' || gridStyle === 'both'} 
-              stroke="var(--border-card)" 
-              strokeDasharray="3 3"
-              opacity={0.2}
-            />
-            <defs>
-              <linearGradient id={`color-${label}`} x1="0" y1="0" x2="0" y2="1">
-                <stop offset="5%" stopColor={mainColor} stopOpacity={0.4}/>
-                <stop offset="95%" stopColor={mainColor} stopOpacity={0}/>
-              </linearGradient>
-            </defs>
-            <Area 
-              type="monotone" 
-              dataKey="v" 
-              stroke={mainColor} 
-              strokeWidth={2.5} 
-              fillOpacity={1} 
-              fill={`url(#color-${label})`} 
-              animationDuration={2000}
-              hide={!showValues}
-            />
-          </AreaChart>
-        </ResponsiveContainer>
+        {hasChartData ? (
+          <ResponsiveContainer width="100%" height="100%">
+            <AreaChart data={data} margin={{ top: marginTop, right: 0, left: 0, bottom: 0 }}>
+              <CartesianGrid 
+                vertical={gridStyle === 'vertical' || gridStyle === 'both'} 
+                horizontal={gridStyle === 'horizontal' || gridStyle === 'both'} 
+                stroke="var(--border-card)" 
+                strokeDasharray="3 3"
+                opacity={0.2}
+              />
+              <defs>
+                <linearGradient id={`color-${label}`} x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="5%" stopColor={mainColor} stopOpacity={0.4}/>
+                  <stop offset="95%" stopColor={mainColor} stopOpacity={0}/>
+                </linearGradient>
+              </defs>
+              <Area 
+                type="monotone" 
+                dataKey="v" 
+                stroke={mainColor} 
+                strokeWidth={2.5} 
+                fillOpacity={1} 
+                fill={`url(#color-${label})`} 
+                animationDuration={2000}
+                hide={!showValues}
+              />
+            </AreaChart>
+          </ResponsiveContainer>
+        ) : (
+          <div className="h-full w-full flex items-center justify-center">
+            <div className="w-2/3 border-t border-dashed border-[var(--border-card)]" />
+          </div>
+        )}
       </div>
 
       {children}
@@ -5448,7 +3831,9 @@ function DDASuggestion({ dda, onAccept, onReject, privacy, language }: { dda: DD
   );
 }
 
-function HomeInvestmentCard({ saldoTotal, perfilAtual, privacyMode, onClick }: any) {
+function HomeInvestmentCard({ saldoTotal, perfilAtual, privacyMode, allocatedPercent, onClick }: any) {
+  const allocation = Math.max(0, Math.min(100, Number(allocatedPercent) || 0));
+
   return (
     <motion.div 
       whileHover={{ scale: 1.02 }}
@@ -5471,12 +3856,12 @@ function HomeInvestmentCard({ saldoTotal, perfilAtual, privacyMode, onClick }: a
       <div className="space-y-2">
         <div className="flex justify-between items-center">
           <span className="text-[10px] text-[var(--text-muted)] font-bold uppercase">Foco: {perfilAtual}</span>
-          <span className="text-[10px] text-[var(--accent)] font-bold">70% Alocado</span>
+          <span className="text-[10px] text-[var(--accent)] font-bold">{allocation}% do patrimônio</span>
         </div>
         <div className="h-2 w-full bg-[var(--bg-app)] rounded-full overflow-hidden">
           <motion.div 
             initial={{ width: 0 }}
-            animate={{ width: '70%' }}
+            animate={{ width: `${allocation}%` }}
             className="h-full bg-[var(--accent)]"
           />
         </div>
@@ -5487,14 +3872,40 @@ function HomeInvestmentCard({ saldoTotal, perfilAtual, privacyMode, onClick }: a
 
 function DetalhesGastosPage({ 
   transactions, 
-  splits, 
   language, 
   onEdit, 
   onDelete 
 }: any) {
   const t = (pt: string, en: string) => (language === 'en-US' ? en : pt);
-  
-  const totalAReceber = splits.reduce((acc: number, s: any) => acc + (s.shareValue || 0), 0);
+  const [period, setPeriod] = useState<'current' | 'previous' | 'all'>('current');
+
+  const now = new Date();
+  const currentMonth = now.getMonth();
+  const currentYear = now.getFullYear();
+  const previousMonthDate = new Date(currentYear, currentMonth - 1, 1);
+
+  const getTransactionDate = (tx: any): Date | null => {
+    if (!tx?.date) return null;
+    const date = tx.date?.toDate ? tx.date.toDate() : new Date(tx.date);
+    return Number.isNaN(date.getTime()) ? null : date;
+  };
+
+  const monthBalance = transactions.reduce((acc: number, tx: any) => {
+    const date = getTransactionDate(tx);
+    if (!date || date.getMonth() !== currentMonth || date.getFullYear() !== currentYear) return acc;
+    const value = Number(tx.value) || 0;
+    return acc + (tx.type === 'out' ? -value : value);
+  }, 0);
+
+  const filteredTransactions = transactions.filter((tx: any) => {
+    if (period === 'all') return true;
+    const date = getTransactionDate(tx);
+    if (!date) return false;
+    if (period === 'current') {
+      return date.getMonth() === currentMonth && date.getFullYear() === currentYear;
+    }
+    return date.getMonth() === previousMonthDate.getMonth() && date.getFullYear() === previousMonthDate.getFullYear();
+  });
 
   const getIcon = (cat: string) => {
     switch (cat) {
@@ -5515,6 +3926,12 @@ function DetalhesGastosPage({
     }
   };
 
+  const periodOptions = [
+    { id: 'current' as const, label: t('Mês Atual', 'Current Month') },
+    { id: 'previous' as const, label: t('Mês Anterior', 'Previous Month') },
+    { id: 'all' as const, label: t('Todos', 'All') },
+  ];
+
   return (
     <div className="space-y-8 pb-32">
       <header className="flex justify-between items-center">
@@ -5524,204 +3941,107 @@ function DetalhesGastosPage({
         </div>
       </header>
 
-      {/* Header com Card A Receber */}
-          <section className="bg-[var(--bg-card)] border border-[var(--border-card)] rounded-[32px] p-6 relative overflow-hidden group">
+      {/* Card Saldo do Mês */}
+      <section className="bg-[var(--bg-card)] border border-[var(--border-card)] rounded-[32px] p-6 relative overflow-hidden group">
         <div className="absolute top-0 right-0 w-32 h-32 bg-[var(--accent)]/5 rounded-full -mr-16 -mt-16 blur-3xl group-hover:bg-[var(--accent)]/10 transition-colors" />
         <div className="flex justify-between items-start mb-4">
           <div>
-            <span className="text-[10px] font-black text-[var(--accent)] uppercase tracking-[0.3em]">{t("Gestão de Créditos", "Credit Management")}</span>
+            <span className="text-[10px] font-black text-[var(--accent)] uppercase tracking-[0.3em]">{t("Resumo Financeiro", "Financial Summary")}</span>
             <div className="flex items-center gap-3 mt-1">
-              <h3 className="text-2xl font-medium text-[var(--text-primary)]">{t("A Receber", "To Receive")}</h3>
+              <h3 className="text-2xl font-medium text-[var(--text-primary)]">{t("Saldo do Mês", "Month Balance")}</h3>
             </div>
           </div>
-          <div className="w-12 h-12 rounded-2xl bg-[var(--accent)]/10 flex items-center justify-center text-[var(--accent)]">
+          <div className={`w-12 h-12 rounded-2xl flex items-center justify-center ${monthBalance >= 0 ? 'bg-[var(--accent)]/10 text-[var(--accent)]' : 'bg-[var(--trend-down)]/10 text-[var(--trend-down)]'}`}>
             <TrendingUp size={24} />
           </div>
         </div>
-        <p className="text-4xl font-mono tracking-tighter text-[var(--text-primary)]">
-          {totalAReceber.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+        <p className={`text-4xl font-mono tracking-tighter ${monthBalance >= 0 ? 'text-[var(--accent)]' : 'text-[var(--trend-down)]'}`}>
+          {monthBalance.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
         </p>
         <p className="text-[10px] text-[var(--text-muted)] font-bold uppercase tracking-widest mt-2">
-          {t("Total pendente de devedores", "Total pending from debtors")}
+          {t("Entradas menos saídas do mês atual", "Income minus expenses for the current month")}
         </p>
       </section>
 
-      {/* Lista de Gastos */}
+      {/* Histórico de Transações */}
       <div className="space-y-4">
-        <div className="flex justify-between items-center px-2">
-          <h2 className="text-sm font-bold text-[var(--text-muted)] uppercase tracking-widest">{t("Histórico de Gastos", "Expense History")}</h2>
-          <span className="text-[10px] font-mono text-[var(--text-muted)]">{transactions.filter((tx: any) => tx.type === 'out').length} {t("itens", "items")}</span>
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between px-2">
+          <div className="flex items-center gap-3">
+            <h2 className="text-sm font-bold text-[var(--text-muted)] uppercase tracking-widest">{t("Histórico de Transações", "Transaction History")}</h2>
+            <span className="text-[10px] font-mono text-[var(--text-muted)]">{filteredTransactions.length} {t("itens", "items")}</span>
+          </div>
+          <div className="flex gap-1 p-1 bg-[var(--bg-card)] border border-[var(--border-card)] rounded-2xl w-full sm:w-auto">
+            {periodOptions.map(option => (
+              <button
+                key={option.id}
+                onClick={() => setPeriod(option.id)}
+                className={`flex-1 sm:flex-none px-3 py-2 rounded-xl text-[10px] font-bold uppercase tracking-widest transition-colors ${period === option.id ? 'bg-[var(--accent)] text-[var(--bg-app)]' : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'}`}
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
         </div>
-        
+
         <div className="space-y-3">
-          {transactions.filter((tx: any) => tx.type === 'out').map((tx: any, idx: number) => (
-            <motion.div 
-              key={`expense-history-${tx.id}-${idx}`}
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              className="flex justify-between items-center p-4 bg-[var(--bg-card)] rounded-[24px] border border-[var(--border-card)] group hover:border-[var(--accent)] transition-all"
-            >
-              <div className="flex items-center gap-4">
-                <div 
-                  className="w-12 h-12 rounded-2xl flex items-center justify-center"
-                  style={{ backgroundColor: `${getColor(tx.categoria_primaria)}1A`, color: getColor(tx.categoria_primaria) }}
-                >
-                  {getIcon(tx.categoria_primaria)}
-                </div>
-                <div>
-                  <p className="text-sm font-medium text-[var(--text-primary)]">{tx.label}</p>
-                  <p className="text-[10px] text-[var(--text-muted)] uppercase font-bold tracking-wider">
-                    {tx.date?.toDate ? tx.date.toDate().toLocaleDateString('pt-BR') : t("Recente", "Recent")}
-                  </p>
-                </div>
-              </div>
-              
-              <div className="flex items-center gap-6">
-                <div className="text-right">
-                  <p className="text-base font-mono font-bold text-[var(--trend-down)]">
-                    - {tx.value.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
-                  </p>
-                  <div className="flex gap-1 mt-1 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
-                    <button 
-                      onClick={() => onEdit(tx)}
-                      className="p-2 text-[var(--text-muted)] hover:text-[var(--accent)] transition-colors bg-white/5 rounded-lg sm:bg-transparent"
-                    >
-                      <Edit3 size={16} />
-                    </button>
-                    <button 
-                      onClick={() => onDelete(tx)}
-                      className="p-2 text-[var(--text-muted)] hover:text-[var(--trend-down)] transition-colors bg-white/5 rounded-lg sm:bg-transparent"
-                    >
-                      <Trash2 size={16} />
-                    </button>
+          {filteredTransactions.length === 0 ? (
+            <div className="py-16 text-center border border-dashed border-[var(--border-card)] rounded-[32px]">
+              <History size={32} className="mx-auto text-[var(--text-muted)] mb-3 opacity-30" />
+              <p className="text-xs font-bold uppercase tracking-widest text-[var(--text-muted)]">
+                {t("Nenhuma transação neste período", "No transactions in this period")}
+              </p>
+            </div>
+          ) : filteredTransactions.map((tx: any, idx: number) => {
+            const isIncome = tx.type !== 'out';
+            const value = Math.abs(Number(tx.value) || 0);
+            const date = getTransactionDate(tx);
+
+            return (
+              <motion.div 
+                key={`transaction-history-${tx.id}-${idx}`}
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="flex justify-between items-center p-4 bg-[var(--bg-card)] rounded-[24px] border border-[var(--border-card)] group hover:border-[var(--accent)] transition-all"
+              >
+                <div className="flex items-center gap-4">
+                  <div 
+                    className={`w-12 h-12 rounded-2xl flex items-center justify-center ${isIncome ? 'bg-[var(--accent)]/10 text-[var(--accent)]' : 'bg-[var(--trend-down)]/10'}`}
+                    style={isIncome ? undefined : { color: getColor(tx.categoria_primaria) }}
+                  >
+                    {getIcon(tx.categoria_primaria)}
+                  </div>
+                  <div>
+                    <p className="text-sm font-medium text-[var(--text-primary)]">{tx.label}</p>
+                    <p className="text-[10px] text-[var(--text-muted)] uppercase font-bold tracking-wider">
+                      {date ? date.toLocaleDateString('pt-BR') : t("Recente", "Recent")}
+                    </p>
                   </div>
                 </div>
-              </div>
-            </motion.div>
-          ))}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function ZenithIAView({ language, transactions, assets }: any) {
-  const t = (pt: string, en: string) => (language === 'en-US' ? en : pt);
-  const now = new Date();
-  const currentMonth = now.getMonth();
-  const currentYear = now.getFullYear();
-  const formatBRL = (value: number) => value.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
-
-  const getMonthTransactions = (month: number, year: number) => transactions.filter((tx: any) => {
-    const date = tx.date?.toDate ? tx.date.toDate() : (tx.date ? new Date(tx.date) : null);
-    return date && !isNaN(date.getTime()) && date.getMonth() === month && date.getFullYear() === year;
-  });
-
-  const sumByType = (txs: any[], types: string[]) => txs
-    .filter((tx: any) => types.includes(tx.type))
-    .reduce((acc: number, tx: any) => acc + (tx.value ?? 0), 0);
-
-  const expensesByCategory = (txs: any[]) => txs
-    .filter((tx: any) => tx.type === 'out')
-    .reduce<Record<string, number>>((acc, tx: any) => {
-      const category = tx.categoria_primaria || 'Outros';
-      acc[category] = (acc[category] ?? 0) + (tx.value ?? 0);
-      return acc;
-    }, {});
-
-  const currentMonthTx = getMonthTransactions(currentMonth, currentYear);
-  const previousMonthDate = new Date(currentYear, currentMonth - 1, 1);
-  const previousMonthTx = getMonthTransactions(previousMonthDate.getMonth(), previousMonthDate.getFullYear());
-  const currentExpenses = expensesByCategory(currentMonthTx);
-  const previousExpenses = expensesByCategory(previousMonthTx);
-  const topCategory = Object.entries(currentExpenses).sort((a, b) => b[1] - a[1])[0];
-
-  let dailyInsight: string;
-  if (topCategory) {
-    const [category, value] = topCategory;
-    const previousValue = previousExpenses[category] ?? 0;
-
-    if (previousValue > 0) {
-      const variation = ((value - previousValue) / previousValue) * 100;
-      dailyInsight = t(
-        `Sua maior despesa este mês é "${category}" (${formatBRL(value)}), ${variation >= 0 ? 'alta' : 'queda'} de ${Math.abs(variation).toFixed(1)}% em relação ao mês anterior.`,
-        `Your largest expense this month is "${category}" (${formatBRL(value)}), ${variation >= 0 ? 'up' : 'down'} ${Math.abs(variation).toFixed(1)}% from last month.`
-      );
-    } else {
-      dailyInsight = t(
-        `Sua maior despesa este mês é "${category}", totalizando ${formatBRL(value)}.`,
-        `Your largest expense this month is "${category}", totaling ${formatBRL(value)}.`
-      );
-    }
-  } else {
-    dailyInsight = t(
-      'Ainda não há despesas registradas neste mês. Adicione transações para receber insights.',
-      'There are no expenses registered this month yet. Add transactions to receive insights.'
-    );
-  }
-
-  const recentMonths = [1, 2, 3].map(offset => {
-    const date = new Date(currentYear, currentMonth - offset, 1);
-    const txs = getMonthTransactions(date.getMonth(), date.getFullYear());
-    return {
-      hasData: txs.length > 0,
-      net: sumByType(txs, ['in', 'yield']) - sumByType(txs, ['out'])
-    };
-  });
-  const monthsWithData = recentMonths.filter(month => month.hasData);
-  const averageNet = monthsWithData.length > 0
-    ? monthsWithData.reduce((acc, month) => acc + month.net, 0) / monthsWithData.length
-    : 0;
-  const totalAssets = assets.reduce((acc: number, asset: any) => acc + (asset.value ?? 0), 0);
-
-  const wealthSummary = monthsWithData.length > 0 || totalAssets > 0
-    ? t(
-      `Seu patrimônio atual é ${formatBRL(totalAssets)}. Nos últimos ${monthsWithData.length} ${monthsWithData.length === 1 ? 'mês' : 'meses'} com movimentação, seu fluxo médio mensal foi ${formatBRL(averageNet)}.`,
-      `Your current net worth is ${formatBRL(totalAssets)}. Over the last ${monthsWithData.length} ${monthsWithData.length === 1 ? 'month' : 'months'} with activity, your average monthly cash flow was ${formatBRL(averageNet)}.`
-    )
-    : t(
-      'Cadastre ativos e transações para ver um resumo baseado nos seus dados.',
-      'Add assets and transactions to see a summary based on your data.'
-    );
-
-  return (
-    <div className="space-y-8 pb-32">
-      <div className="flex flex-col items-center text-center space-y-4 py-10">
-        <div className="w-20 h-20 rounded-full bg-[var(--accent)]/10 flex items-center justify-center text-[var(--accent)] relative">
-          <Sparkles size={40} />
-          <motion.div 
-            animate={{ scale: [1, 1.2, 1], opacity: [0.5, 1, 0.5] }}
-            transition={{ duration: 2, repeat: Infinity }}
-            className="absolute inset-0 rounded-full border-2 border-[var(--accent)]"
-          />
-        </div>
-        <div>
-          <h2 className="text-2xl font-medium text-[var(--text-primary)]">Zenith IA</h2>
-          <p className="text-[var(--text-muted)] text-xs max-w-[240px] mx-auto">
-            {t("Sua inteligência financeira pessoal está analisando sua carteira.", "Your personal financial intelligence is analyzing your portfolio.")}
-          </p>
-        </div>
-      </div>
-
-      <div className="grid grid-cols-1 gap-4">
-        <div className="bg-[var(--bg-card)] border border-[var(--border-card)] rounded-[32px] p-6 space-y-4">
-          <div className="flex items-center gap-3">
-            <Zap size={20} className="text-[var(--accent)]" />
-            <span className="text-xs font-bold uppercase tracking-widest text-[var(--text-primary)]">{t("Insight do Dia", "Daily Insight")}</span>
-          </div>
-          <p className="text-sm text-[var(--text-secondary)] leading-relaxed italic">
-            "{dailyInsight}"
-          </p>
-        </div>
-
-        <div className="bg-[var(--bg-card)] border border-[var(--border-card)] rounded-[32px] p-6 space-y-4">
-          <div className="flex items-center gap-3">
-            <TrendingUp size={20} className="text-[var(--accent)]" />
-            <span className="text-xs font-bold uppercase tracking-widest text-[var(--text-primary)]">{t("Patrimônio e Fluxo", "Net Worth & Cash Flow")}</span>
-          </div>
-          <p className="text-sm text-[var(--text-secondary)] leading-relaxed">
-            {wealthSummary}
-          </p>
+                
+                <div className="flex items-center gap-6">
+                  <div className="text-right">
+                    <p className={`text-base font-mono font-bold ${isIncome ? 'text-[var(--accent)]' : 'text-[var(--trend-down)]'}`}>
+                      {isIncome ? '+' : '-'} {value.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                    </p>
+                    <div className="flex gap-1 mt-1 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
+                      <button 
+                        onClick={() => onEdit(tx)}
+                        className="p-2 text-[var(--text-muted)] hover:text-[var(--accent)] transition-colors bg-white/5 rounded-lg sm:bg-transparent"
+                      >
+                        <Edit3 size={16} />
+                      </button>
+                      <button 
+                        onClick={() => onDelete(tx)}
+                        className="p-2 text-[var(--text-muted)] hover:text-[var(--trend-down)] transition-colors bg-white/5 rounded-lg sm:bg-transparent"
+                      >
+                        <Trash2 size={16} />
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </motion.div>
+            );
+          })}
         </div>
       </div>
     </div>
@@ -5947,99 +4267,95 @@ function AddTransactionModal({ onClose, onAdd, initialData, language }: { onClos
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-6">
-      <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={onClose} className="absolute inset-0 bg-black/80 backdrop-blur-md" />
-      <motion.div initial={{ opacity: 0, scale: 0.9, y: 30 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.9, y: 30 }} className="relative w-full max-w-sm bg-[var(--bg-card)] border border-[var(--border-card)] rounded-[40px] p-8 shadow-2xl overflow-hidden">
-        <div className="absolute top-0 right-0 p-6">
-          <button onClick={onClose} className="text-[var(--text-muted)] hover:text-[var(--text-primary)] p-2"><X size={24} /></button>
+    <Modal
+      open
+      onClose={onClose}
+      variant="center"
+      title={initialData ? t('Editar Transação', 'Edit Transaction') : t('Nova Transação', 'New Transaction')}
+      closeLabel={t('Fechar', 'Close')}
+    >
+      <form onSubmit={handleSubmit} className="space-y-4">
+        <div>
+          <label className="text-[10px] uppercase font-bold text-[var(--text-muted)] tracking-widest">{t("Descrição", "Description")}</label>
+          <input
+            type="text"
+            required
+            placeholder={t("Ex: Recebimento Pix", "Ex: Pix Receipt")}
+            className="mt-1 w-full bg-[var(--bg-app)] border border-[var(--border-card)] rounded-xl p-3 text-[var(--text-primary)] text-base sm:text-sm focus:border-[var(--accent)] outline-none transition-colors sm:p-4"
+            value={formData.label}
+            onChange={(e) => setFormData({ ...formData, label: e.target.value })}
+          />
         </div>
-        <div className="mt-4 space-y-6">
-          <h3 className="text-2xl font-medium text-[var(--text-primary)]">{initialData ? t('Editar Transação', 'Edit Transaction') : t('Nova Transação', 'New Transaction')}</h3>
-          
-          <form onSubmit={handleSubmit} className="space-y-4">
-            <div>
-              <label className="text-[10px] uppercase font-bold text-[var(--text-muted)] tracking-widest">{t("Descrição", "Description")}</label>
-              <input 
-                type="text" 
-                required
-                placeholder={t("Ex: Recebimento Pix", "Ex: Pix Receipt")}
-                className="w-full bg-[var(--bg-app)] border border-[var(--border-card)] rounded-xl p-4 text-[var(--text-primary)] text-sm focus:border-[var(--accent)] outline-none transition-colors mt-1"
-                value={formData.label}
-                onChange={(e) => setFormData({ ...formData, label: e.target.value })}
-              />
-            </div>
 
-            <div>
-              <label className="text-[10px] uppercase font-bold text-[var(--text-muted)] tracking-widest">{t("Valor", "Value")}</label>
-              <input 
-                type="text" 
-                required
-                placeholder="R$ 0,00"
-                className="w-full bg-[var(--bg-app)] border border-[var(--border-card)] rounded-xl p-4 text-[var(--text-primary)] text-sm focus:border-[var(--accent)] outline-none transition-colors mt-1 font-mono"
-                value={displayValue}
-                onChange={handleValueChange}
-              />
-            </div>
+        <div>
+          <label className="text-[10px] uppercase font-bold text-[var(--text-muted)] tracking-widest">{t("Valor", "Value")}</label>
+          <input
+            type="text"
+            required
+            placeholder="R$ 0,00"
+            className="mt-1 w-full bg-[var(--bg-app)] border border-[var(--border-card)] rounded-xl p-3 text-[var(--text-primary)] text-base sm:text-sm focus:border-[var(--accent)] outline-none transition-colors font-mono sm:p-4"
+            value={displayValue}
+            onChange={handleValueChange}
+          />
+        </div>
 
-            <div>
-              <label className="text-[10px] uppercase font-bold text-[var(--text-muted)] tracking-widest">{t("Data", "Date")}</label>
-              <input 
-                type="date" 
-                required
-                className="w-full bg-[var(--bg-app)] border border-[var(--border-card)] rounded-xl p-4 text-[var(--text-primary)] text-sm focus:border-[var(--accent)] outline-none transition-colors mt-1"
-                value={formData.date}
-                onChange={(e) => setFormData({ ...formData, date: e.target.value })}
-              />
-            </div>
+        <div>
+          <label className="text-[10px] uppercase font-bold text-[var(--text-muted)] tracking-widest">{t("Data", "Date")}</label>
+          <input
+            type="date"
+            required
+            className="mt-1 w-full bg-[var(--bg-app)] border border-[var(--border-card)] rounded-xl p-3 text-[var(--text-primary)] text-base sm:text-sm focus:border-[var(--accent)] outline-none transition-colors sm:p-4"
+            value={formData.date}
+            onChange={(e) => setFormData({ ...formData, date: e.target.value })}
+          />
+        </div>
 
-            <div>
-              <label className="text-[10px] uppercase font-bold text-[var(--text-muted)] tracking-widest">{t("Tipo", "Type")}</label>
-              <div className="grid grid-cols-3 gap-2 mt-1">
-                {[
-                  { id: 'in', label: t('Entrada', 'Income'), color: 'var(--trend-up)' },
-                  { id: 'out', label: t('Saída', 'Expense'), color: 'var(--trend-down)' },
-                  { id: 'yield', label: t('Rendimento', 'Yield'), color: 'var(--trend-yield)' }
-                ].map((t_type, idx) => (
-                  <button
-                    key={`tx-type-opt-${t_type.id}-${idx}`}
-                    type="button"
-                    onClick={() => setFormData({ ...formData, type: t_type.id as any })}
-                    className={`py-3 rounded-xl text-[10px] font-bold uppercase tracking-widest border transition-all ${formData.type === t_type.id ? 'bg-[var(--text-primary)]/5 border-[var(--text-primary)]/20 text-[var(--text-primary)]' : 'bg-transparent border-[var(--border-card)] text-[var(--text-muted)]'}`}
-                    style={{ borderColor: formData.type === t_type.id ? t_type.color : undefined }}
-                  >
-                    {t_type.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <div>
-              <label className="text-[10px] uppercase font-bold text-[var(--text-muted)] tracking-widest">{t("Categoria", "Category")}</label>
-              <select 
-                className="w-full bg-[var(--bg-app)] border border-[var(--border-card)] rounded-xl p-4 text-[var(--text-primary)] text-sm focus:border-[var(--accent)] outline-none transition-colors mt-1"
-                value={formData.categoria_primaria}
-                onChange={(e) => setFormData({ ...formData, categoria_primaria: e.target.value })}
+        <div>
+          <label className="text-[10px] uppercase font-bold text-[var(--text-muted)] tracking-widest">{t("Tipo", "Type")}</label>
+          <div className="mt-1 grid grid-cols-3 gap-2">
+            {[
+              { id: 'in', label: t('Entrada', 'Income'), color: 'var(--trend-up)' },
+              { id: 'out', label: t('Saída', 'Expense'), color: 'var(--trend-down)' },
+              { id: 'yield', label: t('Rendimento', 'Yield'), color: 'var(--trend-yield)' }
+            ].map((t_type, idx) => (
+              <button
+                key={`tx-type-opt-${t_type.id}-${idx}`}
+                type="button"
+                onClick={() => setFormData({ ...formData, type: t_type.id as any })}
+                className={`rounded-xl border py-2.5 text-[10px] font-bold uppercase tracking-widest transition-all sm:py-3 ${formData.type === t_type.id ? 'bg-[var(--text-primary)]/5 border-[var(--text-primary)]/20 text-[var(--text-primary)]' : 'bg-transparent border-[var(--border-card)] text-[var(--text-muted)]'}`}
+                style={{ borderColor: formData.type === t_type.id ? t_type.color : undefined }}
               >
-                <option value="Moradia">{t("Moradia", "Housing")}</option>
-                <option value="Alimentação">{t("Alimentação", "Food")}</option>
-                <option value="Energia">{t("Energia", "Energy")}</option>
-                <option value="Água">{t("Água", "Water")}</option>
-                <option value="Transporte">{t("Transporte", "Transport")}</option>
-                <option value="Lazer">{t("Lazer", "Leisure")}</option>
-                <option value="Investimentos">{t("Investimentos", "Investments")}</option>
-                <option value="Outros">{t("Outros", "Others")}</option>
-              </select>
-            </div>
-
-            <button 
-              type="submit"
-              className="w-full py-4 bg-[var(--accent)] text-[var(--bg-app)] rounded-2xl font-bold text-sm uppercase tracking-widest hover:bg-[var(--accent)]/80 transition-all mt-4"
-            >
-              {initialData ? t('Salvar Alterações', 'Save Changes') : t('Confirmar Transação', 'Confirm Transaction')}
-            </button>
-          </form>
+                {t_type.label}
+              </button>
+            ))}
+          </div>
         </div>
-      </motion.div>
-    </div>
+
+        <div>
+          <label className="text-[10px] uppercase font-bold text-[var(--text-muted)] tracking-widest">{t("Categoria", "Category")}</label>
+          <select
+            className="mt-1 w-full bg-[var(--bg-app)] border border-[var(--border-card)] rounded-xl p-3 text-[var(--text-primary)] text-base sm:text-sm focus:border-[var(--accent)] outline-none transition-colors sm:p-4"
+            value={formData.categoria_primaria}
+            onChange={(e) => setFormData({ ...formData, categoria_primaria: e.target.value })}
+          >
+            <option value="Moradia">{t("Moradia", "Housing")}</option>
+            <option value="Alimentação">{t("Alimentação", "Food")}</option>
+            <option value="Energia">{t("Energia", "Energy")}</option>
+            <option value="Água">{t("Água", "Water")}</option>
+            <option value="Transporte">{t("Transporte", "Transport")}</option>
+            <option value="Lazer">{t("Lazer", "Leisure")}</option>
+            <option value="Investimentos">{t("Investimentos", "Investments")}</option>
+            <option value="Outros">{t("Outros", "Others")}</option>
+          </select>
+        </div>
+
+        <button
+          type="submit"
+          className="mt-4 w-full rounded-2xl bg-[var(--accent)] py-4 text-sm font-bold uppercase tracking-widest text-[var(--bg-app)] transition-all hover:bg-[var(--accent)]/80"
+        >
+          {initialData ? t('Salvar Alterações', 'Save Changes') : t('Confirmar Transação', 'Confirm Transaction')}
+        </button>
+      </form>
+    </Modal>
   );
 }
