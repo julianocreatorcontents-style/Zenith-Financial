@@ -49,7 +49,8 @@ cat > HANDOFF.md <<'HANDOFF_EOF'
 
 ## 4. Próximos passos — Fase 2.3 (Wire-up real)
 
-O card funciona em isolamento. O próximo passo é integrá-lo ao app principal sem quebrar nada.
+O card funciona em isolamento. O próximo passo é integrá-lo ao app principal sem quebrar nada. 
+Adicionar avatars/logos das instituições (ex: Mercado Pago, 99Pay) ao lado do nome no YieldProjectionCard
 
 ### O problema
 O App.tsx tem ~4000 linhas (194 KB) e concentra toda a lógica de Firestore (onSnapshot, getDocs, writeBatch). Não há InvestmentsView.tsx isolado. Mexer nele às cegas é arriscado.
