@@ -23,7 +23,7 @@ import {
 import { 
   auth, db, googleProvider, signInWithPopup, signOut, 
   signInWithEmailAndPassword, createUserWithEmailAndPassword, updateProfile,
-  collection, doc, setDoc, updateDoc, deleteDoc, onSnapshot, query, where, orderBy, serverTimestamp,
+  collection, addDoc, doc, setDoc, updateDoc, deleteDoc, onSnapshot, query, where, orderBy, serverTimestamp,
   handleFirestoreError, OperationType, getDocs, getDoc, getDocFromServer, writeBatch, limit,
   FIRESTORE_ERROR_EVENT
 } from './firebase';
@@ -472,6 +472,8 @@ export default function ZenithApp() {
   const [user, setUser] = useState<User | null>(null);
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [assets, setAssets] = useState<Asset[]>([]);
+  const [isAddMenuOpen, setIsAddMenuOpen] = useState(false);
+  const [forceCreateInvestment, setForceCreateInvestment] = useState(false);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [ddas, setDdas] = useState<DDA[]>([]);
   const [settings, setSettings] = useState<Settings | null>(null);
@@ -1393,7 +1395,23 @@ export default function ZenithApp() {
           />
         );
       case 'METRIC_RENDIMENTOS':
-        return <YieldProjectionCard assets={assets as any} />;
+        return (
+          <YieldProjectionCard
+            assets={assets as any}
+            forceOpenCreateModal={forceCreateInvestment}
+            onCloseCreateModal={() => setForceCreateInvestment(false)}
+            onUpdateAsset={async (id: any, data: any) => {
+              await updateDoc(doc(db, "assets", id), data).catch((e: any) => handleFirestoreError(e, OperationType.UPDATE, "assets/" + id));
+            }}
+            onCreateAsset={async (data: any) => {
+              await addDoc(collection(db, "assets"), {
+                ...data,
+                uid: auth.currentUser?.uid,
+                createdAt: serverTimestamp()
+              }).catch((e: any) => handleFirestoreError(e, OperationType.CREATE, "assets"));
+            }}
+          />
+        );
       case 'METRIC_INVESTIMENTOS':
         return (
           <MiniMetricCard 
@@ -2482,7 +2500,7 @@ export default function ZenithApp() {
                       ))}
                     </div>
                     <button 
-                      onClick={() => setIsIngestionHubOpen(true)}
+                      onClick={() => setIsAddMenuOpen(true)}
                       className="w-10 h-10 bg-[var(--accent)] text-[var(--bg-app)] rounded-xl flex items-center justify-center shadow-lg shadow-[var(--accent)]/20 hover:scale-105 transition-transform"
                     >
                       <Plus size={20} />
@@ -2677,7 +2695,33 @@ export default function ZenithApp() {
 
         </AnimatePresence>
 
-        {/* --- NAV DOCK --- */}
+        
+          {/* ADD MENU MODAL */}
+          {isAddMenuOpen && (
+            <div className="fixed inset-0 z-[150] flex items-end justify-center p-4 bg-black/60 backdrop-blur-sm pb-28 transition-opacity" onClick={() => setIsAddMenuOpen(false)}>
+              <div className="bg-[var(--bg-card)] w-full max-w-md rounded-3xl p-6 shadow-2xl flex flex-col gap-4 animate-in slide-in-from-bottom-5" onClick={e => e.stopPropagation()}>
+                 <h3 className="text-lg font-bold text-[var(--text-primary)] text-center mb-2">O que deseja adicionar?</h3>
+                 
+                 <button type="button" onClick={() => { setIsAddMenuOpen(false); setIsIngestionHubOpen(true); }} className="flex items-center gap-4 p-4 bg-[var(--bg-app)] rounded-2xl border border-[var(--border-card)] hover:border-[var(--accent)] transition text-left">
+                   <div className="w-10 h-10 rounded-full bg-[var(--accent)]/10 flex items-center justify-center text-[var(--accent)] shrink-0"><LayoutGrid size={20}/></div>
+                   <div>
+                     <p className="font-bold text-[var(--text-primary)]">Importar Dados</p>
+                     <p className="text-xs text-[var(--text-muted)]">Extratos bancários ou notas</p>
+                   </div>
+                 </button>
+      
+                 <button type="button" onClick={() => { setIsAddMenuOpen(false); setForceCreateInvestment(true); }} className="flex items-center gap-4 p-4 bg-[var(--bg-app)] rounded-2xl border border-[var(--border-card)] hover:border-[var(--accent)] transition text-left">
+                   <div className="w-10 h-10 rounded-full bg-[var(--accent)]/10 flex items-center justify-center text-[var(--accent)] shrink-0"><TrendingUp size={20}/></div>
+                   <div>
+                     <p className="font-bold text-[var(--text-primary)]">Novo Investimento</p>
+                     <p className="text-xs text-[var(--text-muted)]">CDB, Tesouro, 99Pay, etc</p>
+                   </div>
+                 </button>
+              </div>
+            </div>
+          )}
+          
+          {/* --- NAV DOCK --- */}
         <div className="fixed bottom-0 inset-x-0 p-6 z-40 pointer-events-none">
           <nav className="max-w-md mx-auto h-20 bg-[var(--bg-card)]/95 border border-[var(--border-card)] flex items-center justify-around px-4 rounded-[35px] backdrop-blur-2xl shadow-[0_20px_50px_rgba(0,0,0,0.4)] pointer-events-auto">
             <NavItem icon={<LayoutGrid size={24} />} label={t("INÍCIO", "HOME")} active={currentTab === 'Início'} onClick={() => setCurrentTab('Início')} />
@@ -2686,7 +2730,7 @@ export default function ZenithApp() {
             {/* FAB HUB */}
             <div className="relative -top-6">
               <button 
-                onClick={() => setIsIngestionHubOpen(true)}
+                onClick={() => setIsAddMenuOpen(true)}
                 className="w-16 h-16 bg-[var(--accent)] rounded-full flex items-center justify-center shadow-[0_0_25px_rgba(0,255,163,0.5)] hover:scale-110 transition-transform active:scale-95 pointer-events-auto"
               >
                 <Plus size={32} className="text-[var(--bg-app)]" />
