@@ -1,84 +1,23 @@
-cd ~/Zenith-Financial
+# Documento de Handoff — Zenith Financial (Fase 2.3 concluída)
 
-cat > HANDOFF.md <<'HANDOFF_EOF'
-# Documento de Handoff — Zenith Financial (Fase 2.2 concluída)
+**Instruções:** Cole este documento no início de uma nova conversa com o texto: "Continue este projeto a partir do documento de handoff abaixo."
 
-**Instruções:** Cole este documento inteiro no início de uma nova conversa com o texto: "Continue este projeto a partir do documento de handoff abaixo."
+## Estado Atual
+- Repositório: github.com/julianocreatorcontents-style/Zenith-Financial
+- Branch principal: `main` (limpa, com merge da Fase 2.3)
+- Domínio + Adapters: **178 testes verdes**
+- UI: O `YieldProjectionCard` está integrado na Home (substituiu o card "RENDIMENTOS"), usa os 3 temas globais e exibe os logos das instituições via Clearbit.
 
-## 1. Estado atual do projeto
+## Próximo Passo: Fase 3 (Configuração de Investimentos)
+O motor está rodando com os dados de DEMO no card porque o Firestore ainda não tem os campos `strategy` e `investmentPolicy` nos assets reais.
+Para colocar os dados reais da usuária, precisamos:
+1. Criar uma tela/modal para a usuária configurar um ativo: escolher a instituição, a taxa base, o bônus e a convenção (252/365).
+2. Salvar esses dados no Firestore (coleção `assets`).
+3. O `YieldProjectionCard` vai ler esses dados automaticamente (já que ele usa o `assetToInvestment`).
+4. (Opcional) Criar um gráfico de evolução do patrimônio usando as projeções.
 
-| Item | Valor |
-|---|---|
-| Repositório | https://github.com/julianocreatorcontents-style/Zenith-Financial |
-| Branch principal | main (limpa, sincronizada) |
-| Último commit | c08f0a6 — card de rendimento (YieldProjectionCard) |
-| Domínio completo | 178 testes verdes |
-| Próximo passo | Fase 2.3 — Refatorar App.tsx e plugar o card |
-
-### Histórico recente
-
-
-## 2. O que está pronto
-
-### Domínio Puro (`src/domain/`)
-- Money: centavos inteiros, imutável.
-- Rate: basis points inteiros.
-- YieldCalculator: 252 vs 365 dias, faixas (RateTier), arredondamento por tier.
-- IncomeTaxPolicy e IofPolicy: tabelas regressivas exatas.
-- Investment: entidade validada com daysInvested.
-- RecalculateYields: use case de projeção diária e 30/60/90 dias.
-- Result<T>: tratamento funcional de erros.
-
-### Adapters (`src/lib/adapters/`)
-- assetToInvestment: converte RawAssetDoc (Firestore) em Investment.
-- BcbMarketRateAdapter: busca CDI/Selic na API do BCB, com cache em memória e janela de 7 dias.
-- FirestoreInvestmentRepo: implementa InvestmentRepoPort filtrando por uid e strategy.
-- SystemClockAdapter: implementa ClockPort.
-
-### UI Isolada (`src/views/`)
-- YieldProjectionCard.tsx: componente standalone que lê os assets e exibe rendimento bruto/líquido e projeções 30/90 dias. Provado contra extratos reais (99Pay R$ 2,40, MP R$ 3,82/R$ 4,86).
-- Ainda não está plugado no App.tsx principal.
-
-## 3. GOTCHAS CRÍTICOS (não perder)
-
-1. NUNCA rode bun install no Termux. O Bun 1.4.4 symlinka o Vitest para um cache global quebrado. Se precisar reinstalar: `rm -rf node_modules && npm install`.
-2. Use npm para testar. O script test:domain roda `vitest run` e varre src/domain + src/lib/adapters.
-3. Heredoc trava se >60 linhas. Divida em partes com delimitadores únicos (P1_OK, P2_OK).
-4. O agy (Antigravity) está instável. Não use para escrever arquivos.
-5. noUncheckedIndexedAccess: true no tsconfig.domain.json. Não desligar. Exige guards como `if (tier === undefined) throw...`.
-
-## 4. Próximos passos — Fase 2.3 (Wire-up real)
-
-O card funciona em isolamento. O próximo passo é integrá-lo ao app principal sem quebrar nada. 
-Adicionar avatars/logos das instituições (ex: Mercado Pago, 99Pay) ao lado do nome no YieldProjectionCard
-
-### O problema
-O App.tsx tem ~4000 linhas (194 KB) e concentra toda a lógica de Firestore (onSnapshot, getDocs, writeBatch). Não há InvestmentsView.tsx isolado. Mexer nele às cegas é arriscado.
-
-### Plano sugerido
-1. Adicionar React Testing Library (RTL) e configurar jsdom no Vitest.
-2. Extrair componentes do App.tsx (começando pelos cards do dashboard) para arquivos separados em src/components/.
-3. Criar um hook useInvestments(uid) que carrega RawAssetDoc do Firestore e usa o assetToInvestment.
-4. Plugar o `<YieldProjectionCard assets={assets} cdi={cdi} />` no dashboard do App.tsx.
-5. Testar o fluxo (Firestore mockado) com RTL.
-
-## 5. Comandos essenciais
-
-```bash
-cd ~/Zenith-Financial
-git status && git log --oneline -3
-bun run test:domain   # 178 passed
-bun run dev           # sobe o app original na porta 3000
-
-
----
-
-## Confirmar que o arquivo foi criado
-
-Após colar o bloco acima, rode:
-
-```bash
-wc -l HANDOFF.md
-head -5 HANDOFF.md
-
-
+## ⚠️ GOTCHAS CRÍTICOS (Termux)
+1. **NUNCA rode `bun install` no Termux.** O Bun quebra o Vitest. Se precisar reinstalar: `rm -rf node_modules && npm install`.
+2. **Use `npm` para os testes.** (`bun run test:domain` chama o `vitest` local).
+3. **Heredoc no Termux:** Se travar, use delimitadores únicos e divida em partes menores que 60 linhas.
+4. **Antigravity CLI:** Não use para escrever arquivos, o patch está instável.
