@@ -9,7 +9,7 @@
     "preview": "vite preview",
     "clean": "rm -rf dist",
     "lint": "tsc --noEmit",
-    "test:domain": "vitest run src/domain",
+    "test:domain": "vitest run",
     "typecheck:domain": "tsc -p tsconfig.domain.json --noEmit"
   },
   "dependencies": {

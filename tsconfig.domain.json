@@ -5,5 +5,8 @@
     "noUncheckedIndexedAccess": true,
     "types": ["vitest/globals"]
   },
-  "include": ["src/domain/**/*.ts"]
+  "include": [
+    "src/domain/**/*.ts",
+    "src/lib/adapters/**/*.ts"
+  ]
 }
