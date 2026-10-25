@@ -100,13 +100,21 @@ export function YieldProjectionCard({
         inv.policy,
       );
 
+      const daysInYear = inv.policy.dayCountConvention === 'CALENDAR_DAYS_365' ? 365 : 252;
+
       let irRate = 0;
       let iofRate = 0;
       let totalTax = 0;
+      let futureIrRate = 0;
+      
       if (inv.taxDisplayMode === 'NET' && days >= 1) {
         irRate = IncomeTaxPolicy.rateFor(days);
         iofRate = IofPolicy.rateFor(days);
         totalTax = Math.min(irRate + iofRate, 1);
+        
+        // Para a projeção de 1 ano, o dinheiro estará investido por mais 365 dias
+        const futureDays = days + 365;
+        futureIrRate = IncomeTaxPolicy.rateFor(futureDays);
       }
 
       const netDaily =
@@ -118,28 +126,34 @@ export function YieldProjectionCard({
         inv.policy,
         30,
       );
-      const p90Gross = YieldCalculator.projectTiered(
+      
+      const p1YearGross = YieldCalculator.projectTiered(
         inv.currentBalance,
         cdiAnnualPercent,
         inv.policy,
-        90,
+        daysInYear, // 365 para 99Pay, 252 para Mercado Pago
       );
 
       let p30Net = p30Gross;
-      let p90Net = p90Gross;
+      let p1YearNet = p1YearGross;
+      
       if (totalTax > 0) {
-        const netPolicy = buildNetPolicy(inv.policy, totalTax);
+        const netPolicyCurrent = buildNetPolicy(inv.policy, totalTax);
         p30Net = YieldCalculator.projectTiered(
           inv.currentBalance,
           cdiAnnualPercent,
-          netPolicy,
+          netPolicyCurrent,
           30,
         );
-        p90Net = YieldCalculator.projectTiered(
+      }
+      
+      if (futureIrRate > 0) {
+        const netPolicyFuture = buildNetPolicy(inv.policy, Math.min(futureIrRate, 1));
+        p1YearNet = YieldCalculator.projectTiered(
           inv.currentBalance,
           cdiAnnualPercent,
-          netPolicy,
-          90,
+          netPolicyFuture,
+          daysInYear,
         );
       }
 
@@ -153,11 +167,12 @@ export function YieldProjectionCard({
         dailyLiquido: netDaily.toBRL(),
         p30Gross: p30Gross.toBRL(),
         p30Net: p30Net.toBRL(),
-        p90Gross: p90Gross.toBRL(),
-        p90Net: p90Net.toBRL(),
+        p1YearGross: p1YearGross.toBRL(),
+        p1YearNet: p1YearNet.toBRL(),
         showBoth,
         irRate,
         iofRate,
+        futureIrRate,
         days,
       };
     });
@@ -245,22 +260,22 @@ export function YieldProjectionCard({
               </div>
               <div className="text-right">
                 <span className="text-[9px] uppercase tracking-wider text-[var(--text-muted)]">
-                  90 dias
+                  1 ano
                 </span>
                 {p.showBoth && (
                   <div className="text-[9px] text-[var(--text-muted)] font-mono">
-                    bruto {formatBRL(p.p90Gross)}
+                    bruto {formatBRL(p.p1YearGross)}
                   </div>
                 )}
                 <div className="text-xs font-mono text-[var(--text-primary)]">
-                  {formatBRL(p.showBoth ? p.p90Net : p.p90Gross)}
+                  {formatBRL(p.showBoth ? p.p1YearNet : p.p1YearGross)}
                 </div>
               </div>
             </div>
 
             <p className="text-[9px] text-[var(--text-muted)] mt-2 italic">
               {p.showBoth
-                ? `IR ${(p.irRate * 100).toFixed(1)}% · IOF ${(p.iofRate * 100).toFixed(1)}% · ${p.days} dias`
+                ? `IR atual ${(p.irRate * 100).toFixed(1)}% · IR em 1 ano ${(p.futureIrRate * 100).toFixed(1)}%`
                 : `Bruto · IR retido apenas no resgate · ${p.days} dias`}
             </p>
           </div>
