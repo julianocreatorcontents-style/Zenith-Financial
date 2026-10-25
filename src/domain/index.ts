@@ -14,3 +14,7 @@ export type {
   YieldPolicy,
 } from './yield/YieldPolicy';
 export type { Result } from './shared/Result';
+export type { TaxDisplayMode } from './investment/Investment';
+export type { ClockPort } from './ports/ClockPort';
+export type { MarketRatePort } from './ports/MarketRatePort';
+export type { InvestmentRepoPort } from './ports/InvestmentRepoPort';
