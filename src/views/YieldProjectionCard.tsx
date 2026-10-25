@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useMemo, useState, useEffect } from 'react';
 import { YieldCalculator } from '../domain/yield/YieldCalculator';
 import { IncomeTaxPolicy } from '../domain/tax/IncomeTaxPolicy';
 import { IofPolicy } from '../domain/tax/IofPolicy';
@@ -6,274 +6,228 @@ import { assetToInvestment } from '../lib/adapters/assetToInvestment';
 import type { RawAssetDoc } from '../lib/adapters/assetToInvestment';
 import type { Investment } from '../domain/investment/Investment';
 import type { YieldPolicy } from '../domain/yield/YieldPolicy';
+import { InvestmentPolicyModal } from '../components/InvestmentPolicyModal';
+import type { InvestmentPolicyData } from '../components/InvestmentPolicyModal';
 
 interface YieldProjectionCardProps {
   assets?: RawAssetDoc[];
   cdiAnnualPercent?: number;
+  onUpdateAsset?: (id: string, data: any) => Promise<void>;
+  onCreateAsset?: (data: any) => Promise<void>;
+  forceOpenCreateModal?: boolean;
+  onCloseCreateModal?: () => void;
 }
 
-const DEMO: RawAssetDoc[] = [
-  {
-    id: 'demo-99pay',
-    uid: 'demo',
-    name: '99Pay',
-    value: 5069.81,
-    valorInvestido: 5000,
-    createdAt: new Date('2026-01-15'),
-    strategy: 'FIXED_INCOME_TIERED',
-    investmentPolicy: {
-      dayCountConvention: 'CALENDAR_DAYS_365',
-      taxDisplayMode: 'GROSS',
-      rateTiers: [
-        { upTo: 5000, baseRateValue: 110, bonusRateValue: 29 },
-        { upTo: null, baseRateValue: 80, bonusRateValue: 0 },
-      ],
-    },
-  },
-  {
-    id: 'demo-mp-saldo',
-    uid: 'demo',
-    name: 'Mercado Pago · Saldo',
-    value: 8985.72,
-    valorInvestido: 8985.72,
-    createdAt: new Date('2026-02-16'),
-    strategy: 'FIXED_INCOME_TIERED',
-    investmentPolicy: {
-      dayCountConvention: 'BUSINESS_DAYS_252',
-      taxDisplayMode: 'NET',
-      rateTiers: [{ upTo: null, baseRateValue: 105, bonusRateValue: 0 }],
-    },
-  },
-  {
-    id: 'demo-mp-cofrinho',
-    uid: 'demo',
-    name: 'Mercado Pago · Cofrinho',
-    value: 10078.64,
-    valorInvestido: 10078.64,
-    createdAt: new Date('2026-02-16'),
-    strategy: 'FIXED_INCOME_TIERED',
-    investmentPolicy: {
-      dayCountConvention: 'BUSINESS_DAYS_252',
-      taxDisplayMode: 'NET',
-      rateTiers: [{ upTo: null, baseRateValue: 120, bonusRateValue: 0 }],
-    },
-  },
-];
-
-const formatBRL = (value: number) =>
-  value.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
-
+const formatBRL = (value: number) => value.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 const getLogo = (name: string) => {
   const n = name.toLowerCase();
-  if (n.includes('99pay')) return 'https://logo.clearbit.com/99pay.com.br';
-  if (n.includes('mercado pago')) return 'https://logo.clearbit.com/mercadopago.com.br';
+  if (n.includes('99pay')) return 'https://www.google.com/s2/favicons?domain=99pay.com.br&sz=128';
+  if (n.includes('mercado pago')) return 'https://www.google.com/s2/favicons?domain=mercadopago.com.br&sz=128';
   return null;
 };
 
 function buildNetPolicy(policy: YieldPolicy, taxRate: number): YieldPolicy {
-  return {
-    ...policy,
-    rateTiers: policy.rateTiers.map((t) => ({
-      upTo: t.upTo,
-      baseRateValue: t.baseRateValue * (1 - taxRate),
-      bonusRateValue: t.bonusRateValue * (1 - taxRate),
-    })),
-  };
+  return { ...policy, rateTiers: policy.rateTiers.map((t) => ({ upTo: t.upTo, baseRateValue: t.baseRateValue * (1 - taxRate), bonusRateValue: t.bonusRateValue * (1 - taxRate) })) };
 }
 
-export function YieldProjectionCard({
-  assets,
-  cdiAnnualPercent = 13.65,
-}: YieldProjectionCardProps) {
+export function YieldProjectionCard({ assets, cdiAnnualPercent = 13.65, onUpdateAsset, onCreateAsset, forceOpenCreateModal, onCloseCreateModal }: YieldProjectionCardProps) {
+  const [modalOpen, setModalOpen] = useState(false);
+  const [modalMode, setModalMode] = useState<'create' | 'edit'>('edit');
+  const [selectedAssetId, setSelectedAssetId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (forceOpenCreateModal) {
+      setModalMode('create'); setSelectedAssetId(null); setModalOpen(true);
+    }
+  }, [forceOpenCreateModal]);
+
+  const handleClose = () => {
+    setModalOpen(false);
+    if (modalMode === 'create' && onCloseCreateModal) onCloseCreateModal();
+  };
+
+  const normalizedAssets = useMemo(() => {
+    if (!assets || assets.length === 0) return [];
+    return assets
+      .filter(a => a.type === 'investment' || a.type === 'liquidity' || a.strategy)
+      .map(a => {
+        if (a.strategy && a.investmentPolicy) return a;
+        return {
+          ...a, strategy: 'FIXED_INCOME_TIERED',
+          investmentPolicy: { indexer: 'CDI', rateType: 'PERCENT_INDEXER', dayCountConvention: 'BUSINESS_DAYS_252', taxDisplayMode: 'NET', rateTiers: [{ upTo: null, baseRateValue: 100, bonusRateValue: 0 }] }
+        } as RawAssetDoc;
+      });
+  }, [assets]);
+
+  const handleSave = async (data: InvestmentPolicyData) => {
+    const tiers = [{ upTo: data.hasTier2 ? data.tier2Limit : null, baseRateValue: data.baseRateValue, bonusRateValue: data.bonusRateValue }];
+    if (data.hasTier2) tiers.push({ upTo: null, baseRateValue: data.tier2BaseRate, bonusRateValue: data.tier2BonusRate });
+
+    const newPolicy = {
+      indexer: data.indexer, rateType: data.rateType, dayCountConvention: data.dayCountConvention, taxDisplayMode: data.taxDisplayMode,
+      rateTiers: tiers
+    };
+
+    if (modalMode === 'create' && onCreateAsset) {
+      await onCreateAsset({ name: data.name, value: data.initialBalance || 0, type: 'investment', strategy: 'FIXED_INCOME_TIERED', investmentPolicy: newPolicy });
+    } else if (modalMode === 'edit' && selectedAssetId && onUpdateAsset) {
+      if (!selectedAssetId.startsWith('demo-')) {
+        await onUpdateAsset(selectedAssetId, { name: data.name, value: data.initialBalance, strategy: 'FIXED_INCOME_TIERED', investmentPolicy: newPolicy });
+      }
+    }
+    handleClose();
+  };
+
   const projections = useMemo(() => {
-    const fromProps = (assets ?? [])
-      .map(assetToInvestment)
-      .filter((inv): inv is Investment => inv !== null);
-
-    const source =
-      fromProps.length > 0
-        ? fromProps
-        : DEMO.map(assetToInvestment).filter(
-            (inv): inv is Investment => inv !== null,
-          );
-
+    const fromProps = normalizedAssets.map(assetToInvestment).filter((inv): inv is Investment => inv !== null);
+    const source = fromProps.length > 0 ? fromProps : [];
     const today = new Date();
 
+    const lastDayOfMonthDate = new Date(today.getFullYear(), today.getMonth() + 1, 0);
+    let daysToProject = lastDayOfMonthDate.getDate() - today.getDate();
+    let labelMonth = lastDayOfMonthDate;
+    if (daysToProject === 0) {
+      const nextMonthLastDay = new Date(today.getFullYear(), today.getMonth() + 2, 0);
+      daysToProject = nextMonthLastDay.getDate();
+      labelMonth = nextMonthLastDay;
+    }
+    const monthAbbr = labelMonth.toLocaleString('pt-BR', { month: 'short' }).replace('.', '').toUpperCase();
+    
     return source.map((inv) => {
       const days = inv.daysInvested(today);
-      const grossDaily = YieldCalculator.dailyYieldTiered(
-        inv.currentBalance,
-        cdiAnnualPercent,
-        inv.policy,
-      );
-
+      const grossDaily = YieldCalculator.dailyYieldTiered(inv.currentBalance, cdiAnnualPercent, inv.policy);
       const daysInYear = inv.policy.dayCountConvention === 'CALENDAR_DAYS_365' ? 365 : 252;
-
-      let irRate = 0;
-      let iofRate = 0;
-      let totalTax = 0;
-      let futureIrRate = 0;
       
-      if (inv.taxDisplayMode === 'NET' && days >= 1) {
-        irRate = IncomeTaxPolicy.rateFor(days);
-        iofRate = IofPolicy.rateFor(days);
-        totalTax = Math.min(irRate + iofRate, 1);
-        const futureDays = days + 365;
-        futureIrRate = IncomeTaxPolicy.rateFor(futureDays);
+      let irRate = 0; let totalTax = 0; let futureIrRate = 0;
+      // CORREÇÃO: Desconta IR mesmo no dia 0
+      if (inv.taxDisplayMode === 'NET') {
+        irRate = IncomeTaxPolicy.rateFor(Math.max(days, 1));
+        totalTax = Math.min(irRate + (days >= 1 ? IofPolicy.rateFor(days) : 0), 1);
+        futureIrRate = IncomeTaxPolicy.rateFor(days + 365);
       }
 
       const netDaily = totalTax > 0 ? grossDaily.multiply(1 - totalTax) : grossDaily;
+      const pMonthGross = YieldCalculator.projectTiered(inv.currentBalance, cdiAnnualPercent, inv.policy, daysToProject);
+      const p1YearGross = YieldCalculator.projectTiered(inv.currentBalance, cdiAnnualPercent, inv.policy, daysInYear);
+      const pMonthNet = totalTax > 0 ? YieldCalculator.projectTiered(inv.currentBalance, cdiAnnualPercent, buildNetPolicy(inv.policy, totalTax), daysToProject) : pMonthGross;
+      const p1YearNet = futureIrRate > 0 ? YieldCalculator.projectTiered(inv.currentBalance, cdiAnnualPercent, buildNetPolicy(inv.policy, futureIrRate), daysInYear) : p1YearGross;
 
-      const p30Gross = YieldCalculator.projectTiered(
-        inv.currentBalance, cdiAnnualPercent, inv.policy, 30
-      );
-      
-      const p1YearGross = YieldCalculator.projectTiered(
-        inv.currentBalance, cdiAnnualPercent, inv.policy, daysInYear
-      );
+      const profitMonth = pMonthNet.subtract(inv.currentBalance);
+      const profitYear = p1YearNet.subtract(inv.currentBalance);
 
-      let p30Net = p30Gross;
-      let p1YearNet = p1YearGross;
-      
-      if (totalTax > 0) {
-        const netPolicyCurrent = buildNetPolicy(inv.policy, totalTax);
-        p30Net = YieldCalculator.projectTiered(inv.currentBalance, cdiAnnualPercent, netPolicyCurrent, 30);
+      const tier1 = inv.policy.rateTiers[0];
+      const effectiveRate = (tier1?.baseRateValue || 0) + (tier1?.bonusRateValue || 0);
+      let rateStr = '';
+      if (inv.policy.rateType === 'FIXED') rateStr = `${effectiveRate.toFixed(2)}% a.a.`;
+      else if (inv.policy.rateType === 'SPREAD') rateStr = `CDI + ${effectiveRate.toFixed(2)}%`;
+      else {
+        rateStr = `${effectiveRate}% do CDI`;
+        if (inv.policy.rateTiers.length > 1) rateStr += ` (até ${formatBRL(tier1?.upTo?.toBRL() || 0)})`;
       }
-      
-      if (futureIrRate > 0) {
-        const netPolicyFuture = buildNetPolicy(inv.policy, Math.min(futureIrRate, 1));
-        p1YearNet = YieldCalculator.projectTiered(inv.currentBalance, cdiAnnualPercent, netPolicyFuture, daysInYear);
-      }
-
-      const showBoth = inv.taxDisplayMode === 'NET' && totalTax > 0;
 
       return {
-        id: inv.id,
-        name: inv.name,
-        balance: inv.currentBalance.toBRL(),
-        dailyBruto: grossDaily.toBRL(),
-        dailyLiquido: netDaily.toBRL(),
-        p30Gross: p30Gross.toBRL(),
-        p30Net: p30Net.toBRL(),
-        p1YearGross: p1YearGross.toBRL(),
-        p1YearNet: p1YearNet.toBRL(),
-        showBoth,
-        irRate,
-        iofRate,
-        futureIrRate,
-        days,
+        id: inv.id, name: inv.name, balance: inv.currentBalance.toBRL(), rateStr,
+        dailyBruto: grossDaily.toBRL(), dailyLiquido: netDaily.toBRL(),
+        pMonthNet: pMonthNet.toBRL(), p1YearNet: p1YearNet.toBRL(),
+        profitMonth: profitMonth.toBRL(), profitYear: profitYear.toBRL(),
+        showBoth: inv.taxDisplayMode === 'NET', irRate, futureIrRate, days,
       };
     });
-  }, [assets, cdiAnnualPercent]);
+  }, [normalizedAssets, cdiAnnualPercent]);
 
-  if (projections.length === 0) {
+  const today = new Date();
+  const lastDay = new Date(today.getFullYear(), today.getMonth() + 1, 0);
+  let labelDate = lastDay;
+  if (lastDay.getDate() === today.getDate()) labelDate = new Date(today.getFullYear(), today.getMonth() + 2, 0);
+  const monthLabel = `ATÉ ${labelDate.getDate()} ${labelDate.toLocaleString('pt-BR', { month: 'short' }).replace('.', '').toUpperCase()}`;
+
+  if (projections.length === 0 && !onCreateAsset) {
     return (
       <section className="bg-[var(--bg-card)] border border-[var(--border-card)] rounded-2xl p-5">
-        <p className="text-sm text-[var(--text-muted)]">
-          Nenhum investimento com política configurada.
-        </p>
+        <p className="text-sm text-[var(--text-muted)]">Nenhum investimento configurado no momento.</p>
       </section>
     );
   }
 
   return (
-    <section className="bg-[var(--bg-card)] border border-[var(--border-card)] rounded-2xl p-5">
-      <div className="flex justify-between items-center mb-4">
-        <h3 className="text-sm font-bold text-[var(--text-primary)]">
-          Rendimento projetado
-        </h3>
-        <span className="text-[10px] uppercase tracking-widest text-[var(--text-muted)] font-mono">
-          CDI {cdiAnnualPercent.toFixed(2)}%
-        </span>
-      </div>
+    <>
+      <section className="bg-[var(--bg-card)] border border-[var(--border-card)] rounded-2xl p-5">
+        <div className="flex justify-between items-center mb-4">
+          <h3 className="text-sm font-bold text-[var(--text-primary)]">Rendimento projetado</h3>
+          <div className="flex items-center gap-3">
+            {onCreateAsset && <button type="button" onClick={() => { setModalMode('create'); setSelectedAssetId(null); setModalOpen(true); }} className="text-[var(--text-muted)] hover:text-[var(--accent)] font-bold text-lg">+</button>}
+            <span className="text-[10px] uppercase tracking-widest text-[var(--text-muted)] font-mono">CDI {cdiAnnualPercent.toFixed(2)}%</span>
+          </div>
+        </div>
 
-      <div className="space-y-3">
-        {projections.map((p) => (
-          <div
-            key={p.id}
-            className="bg-[var(--bg-app)] border border-[var(--border-card)] rounded-xl p-3"
-          >
-            <div className="flex justify-between items-baseline mb-3">
-              <div className="flex items-center gap-2">
-                {getLogo(p.name) && (
-                  <img src={getLogo(p.name)!} alt={p.name} className="w-5 h-5 rounded-full bg-white object-contain" />
-                )}
-                <span className="text-sm font-semibold text-[var(--text-primary)]">
-                  {p.name}
-                </span>
-              </div>
-              <span className="text-xs font-mono text-[var(--text-muted)]">
-                {formatBRL(p.balance)}
-              </span>
-            </div>
+        <div className="space-y-3">
+          {projections.map((p) => (
+            <div key={p.id} className="bg-[var(--bg-app)] border border-[var(--border-card)] rounded-xl p-3 relative group">
+              <button type="button" onClick={() => { setModalMode('edit'); setSelectedAssetId(p.id); setModalOpen(true); }} className="absolute top-3 right-3 text-[var(--text-muted)] hover:text-[var(--accent)] opacity-50 group-hover:opacity-100 p-1">⚙️</button>
 
-            {p.showBoth ? (
-              <div className="grid grid-cols-2 gap-2 mb-3">
-                <div>
-                  <span className="text-[9px] uppercase tracking-wider text-[var(--text-muted)]">
-                    Bruto / dia
-                  </span>
-                  <div className="text-sm font-mono text-[var(--text-primary)]">
-                    +{formatBRL(p.dailyBruto)}
+              <div className="flex justify-between items-baseline mb-3 pr-8">
+                <div className="flex flex-col gap-0.5">
+                  <div className="flex items-center gap-2">
+                    {getLogo(p.name) && <img src={getLogo(p.name)!} alt={p.name} className="w-5 h-5 rounded-full bg-white object-contain p-0.5" />}
+                    <span className="text-sm font-semibold text-[var(--text-primary)]">{p.name}</span>
                   </div>
+                  <span className="text-[10px] text-[var(--accent)] font-medium">{p.rateStr}</span>
+                </div>
+                <span className="text-xs font-mono text-[var(--text-muted)]">{formatBRL(p.balance)}</span>
+              </div>
+
+              <div className="flex justify-between items-baseline mb-3">
+                <span className="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">{p.showBoth ? 'Líquido / dia' : 'Rende / dia'}</span>
+                <span className="text-base font-bold text-[var(--accent)] font-mono">+{formatBRL(p.showBoth ? p.dailyLiquido : p.dailyBruto)}</span>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3 pt-2 border-t border-[var(--border-card)]">
+                <div>
+                  <span className="text-[9px] uppercase tracking-wider text-[var(--text-muted)]">{monthLabel}</span>
+                  <div className="text-sm font-bold text-[var(--accent)] font-mono">+{formatBRL(p.profitMonth)}</div>
+                  <div className="text-[9px] text-[var(--text-muted)] font-mono mt-0.5">Saldo: {formatBRL(p.pMonthNet)}</div>
                 </div>
                 <div className="text-right">
-                  <span className="text-[9px] uppercase tracking-wider text-[var(--text-muted)]">
-                    Líquido / dia
-                  </span>
-                  <div className="text-base font-bold text-[var(--accent)] font-mono">
-                    +{formatBRL(p.dailyLiquido)}
-                  </div>
+                  <span className="text-[9px] uppercase tracking-wider text-[var(--text-muted)]">1 ANO</span>
+                  <div className="text-sm font-bold text-[var(--accent)] font-mono">+{formatBRL(p.profitYear)}</div>
+                  <div className="text-[9px] text-[var(--text-muted)] font-mono mt-0.5">Saldo: {formatBRL(p.p1YearNet)}</div>
                 </div>
               </div>
-            ) : (
-              <div className="flex justify-between items-baseline mb-3">
-                <span className="text-[9px] uppercase tracking-wider text-[var(--text-muted)]">
-                  Rende / dia
-                </span>
-                <span className="text-base font-bold text-[var(--accent)] font-mono">
-                  +{formatBRL(p.dailyBruto)}
-                </span>
-              </div>
-            )}
 
-            <div className="grid grid-cols-2 gap-3 pt-2 border-t border-[var(--border-card)]">
-              <div>
-                <span className="text-[9px] uppercase tracking-wider text-[var(--text-muted)]">
-                  30 dias
-                </span>
-                {p.showBoth && (
-                  <div className="text-[9px] text-[var(--text-muted)] font-mono">
-                    bruto {formatBRL(p.p30Gross)}
-                  </div>
-                )}
-                <div className="text-xs font-mono text-[var(--text-primary)]">
-                  {formatBRL(p.showBoth ? p.p30Net : p.p30Gross)}
-                </div>
-              </div>
-              <div className="text-right">
-                <span className="text-[9px] uppercase tracking-wider text-[var(--text-muted)]">
-                  1 ano
-                </span>
-                {p.showBoth && (
-                  <div className="text-[9px] text-[var(--text-muted)] font-mono">
-                    bruto {formatBRL(p.p1YearGross)}
-                  </div>
-                )}
-                <div className="text-xs font-mono text-[var(--text-primary)]">
-                  {formatBRL(p.showBoth ? p.p1YearNet : p.p1YearGross)}
-                </div>
-              </div>
+              <p className="text-[9px] text-[var(--text-muted)] mt-2 italic text-right">
+                {p.showBoth ? `IR ${(p.irRate * 100).toFixed(1)}%` : `Bruto · IR no resgate · ${p.days} dias`}
+              </p>
             </div>
+          ))}
+        </div>
+      </section>
 
-            <p className="text-[9px] text-[var(--text-muted)] mt-2 italic">
-              {p.showBoth
-                ? `IR atual ${(p.irRate * 100).toFixed(1)}% · IR em 1 ano ${(p.futureIrRate * 100).toFixed(1)}%`
-                : `Bruto · IR retido apenas no resgate · ${p.days} dias`}
-            </p>
-          </div>
-        ))}
-      </div>
-    </section>
+      <InvestmentPolicyModal 
+        isOpen={modalOpen} mode={modalMode} onClose={handleClose} onSave={handleSave} 
+        initialData={modalMode === 'edit' && selectedAssetId ? (() => {
+          const inv = projections.find(x => x.id === selectedAssetId);
+          const asset = normalizedAssets.find(x => x.id === selectedAssetId);
+          if (!inv || !asset) return undefined;
+          
+          const tiers = asset.investmentPolicy?.rateTiers || [];
+          const t1 = tiers[0] || { upTo: null, baseRateValue: 100, bonusRateValue: 0 };
+          const t2 = tiers[1] || { upTo: null, baseRateValue: 0, bonusRateValue: 0 };
+          
+          return {
+            name: inv.name, initialBalance: inv.balance,
+            indexer: asset.investmentPolicy?.indexer || 'CDI',
+            rateType: asset.investmentPolicy?.rateType || 'PERCENT_INDEXER',
+            dayCountConvention: asset.investmentPolicy?.dayCountConvention || 'BUSINESS_DAYS_252',
+            taxDisplayMode: asset.investmentPolicy?.taxDisplayMode || 'NET',
+            baseRateValue: t1.baseRateValue,
+            bonusRateValue: t1.bonusRateValue,
+            hasTier2: tiers.length > 1,
+            tier2Limit: t1.upTo ? Number(t1.upTo) : 0,
+            tier2BaseRate: t2.baseRateValue,
+            tier2BonusRate: t2.bonusRateValue,
+          };
+        })() : undefined}
+      />
+    </>
   );
 }
