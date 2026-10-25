@@ -1,3 +1,5 @@
+export { RecalculateYields } from './use-cases/RecalculateYields';
+export type { YieldProjection } from './use-cases/RecalculateYields';
 export { Investment } from './investment/Investment';
 export { Money } from './money/Money';
 export { Rate } from './rate/Rate';
