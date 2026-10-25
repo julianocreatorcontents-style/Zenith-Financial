@@ -55,6 +55,7 @@ import LoadingSpinner from './components/LoadingSpinner';
 import Modal from './components/ui/Modal';
 import { checkDuplicates } from './lib/dataUtils';
 import StorageTrashView from './views/StorageTrashView';
+import { YieldProjectionCard } from "./views/YieldProjectionCard";
 
 const HeritageSettings = lazy(() =>
   import('./components/HeritageSettings').then((module) => ({ default: module.HeritageSettings }))
@@ -1392,22 +1393,7 @@ export default function ZenithApp() {
           />
         );
       case 'METRIC_RENDIMENTOS':
-        return (
-          <MiniMetricCard 
-            key={id}
-            id="yields"
-            label={metricConfig.label || t("Rendimentos", "Yields")} 
-            value={(metrics.yield.total ?? 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })} 
-            percent={metrics.yield.var} 
-            trend={metrics.yield.trend} 
-            data={metrics.yield.data} 
-            color={mainColor}
-            opacity={opacity}
-            privacy={privacyMode}
-            onSettings={() => openDrawer('settings')}
-            resolveStyle={resolveStyle}
-          />
-        );
+        return <YieldProjectionCard assets={assets as any} />;
       case 'METRIC_INVESTIMENTOS':
         return (
           <MiniMetricCard 

@@ -63,6 +63,13 @@ const DEMO: RawAssetDoc[] = [
 const formatBRL = (value: number) =>
   value.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 
+const getLogo = (name: string) => {
+  const n = name.toLowerCase();
+  if (n.includes('99pay')) return 'https://logo.clearbit.com/99pay.com.br';
+  if (n.includes('mercado pago')) return 'https://logo.clearbit.com/mercadopago.com.br';
+  return null;
+};
+
 function buildNetPolicy(policy: YieldPolicy, taxRate: number): YieldPolicy {
   return {
     ...policy,
@@ -111,27 +118,18 @@ export function YieldProjectionCard({
         irRate = IncomeTaxPolicy.rateFor(days);
         iofRate = IofPolicy.rateFor(days);
         totalTax = Math.min(irRate + iofRate, 1);
-        
-        // Para a projeção de 1 ano, o dinheiro estará investido por mais 365 dias
         const futureDays = days + 365;
         futureIrRate = IncomeTaxPolicy.rateFor(futureDays);
       }
 
-      const netDaily =
-        totalTax > 0 ? grossDaily.multiply(1 - totalTax) : grossDaily;
+      const netDaily = totalTax > 0 ? grossDaily.multiply(1 - totalTax) : grossDaily;
 
       const p30Gross = YieldCalculator.projectTiered(
-        inv.currentBalance,
-        cdiAnnualPercent,
-        inv.policy,
-        30,
+        inv.currentBalance, cdiAnnualPercent, inv.policy, 30
       );
       
       const p1YearGross = YieldCalculator.projectTiered(
-        inv.currentBalance,
-        cdiAnnualPercent,
-        inv.policy,
-        daysInYear, // 365 para 99Pay, 252 para Mercado Pago
+        inv.currentBalance, cdiAnnualPercent, inv.policy, daysInYear
       );
 
       let p30Net = p30Gross;
@@ -139,22 +137,12 @@ export function YieldProjectionCard({
       
       if (totalTax > 0) {
         const netPolicyCurrent = buildNetPolicy(inv.policy, totalTax);
-        p30Net = YieldCalculator.projectTiered(
-          inv.currentBalance,
-          cdiAnnualPercent,
-          netPolicyCurrent,
-          30,
-        );
+        p30Net = YieldCalculator.projectTiered(inv.currentBalance, cdiAnnualPercent, netPolicyCurrent, 30);
       }
       
       if (futureIrRate > 0) {
         const netPolicyFuture = buildNetPolicy(inv.policy, Math.min(futureIrRate, 1));
-        p1YearNet = YieldCalculator.projectTiered(
-          inv.currentBalance,
-          cdiAnnualPercent,
-          netPolicyFuture,
-          daysInYear,
-        );
+        p1YearNet = YieldCalculator.projectTiered(inv.currentBalance, cdiAnnualPercent, netPolicyFuture, daysInYear);
       }
 
       const showBoth = inv.taxDisplayMode === 'NET' && totalTax > 0;
@@ -206,9 +194,14 @@ export function YieldProjectionCard({
             className="bg-[var(--bg-app)] border border-[var(--border-card)] rounded-xl p-3"
           >
             <div className="flex justify-between items-baseline mb-3">
-              <span className="text-sm font-semibold text-[var(--text-primary)]">
-                {p.name}
-              </span>
+              <div className="flex items-center gap-2">
+                {getLogo(p.name) && (
+                  <img src={getLogo(p.name)!} alt={p.name} className="w-5 h-5 rounded-full bg-white object-contain" />
+                )}
+                <span className="text-sm font-semibold text-[var(--text-primary)]">
+                  {p.name}
+                </span>
+              </div>
               <span className="text-xs font-mono text-[var(--text-muted)]">
                 {formatBRL(p.balance)}
               </span>
