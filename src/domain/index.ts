@@ -1,3 +1,4 @@
+export { Investment } from './investment/Investment';
 export { Money } from './money/Money';
 export { Rate } from './rate/Rate';
 export { YieldCalculator } from './yield/YieldCalculator';
