@@ -29,14 +29,14 @@ export function map<T, U, E>(
   if (r.ok) {
     return ok(fn(r.value));
   }
-  return r;
+  return err((r as { readonly ok: false; readonly error: E }).error);
 }
 
 export function unwrap<T, E>(r: Result<T, E>): T {
   if (r.ok) {
     return r.value;
   }
-  throw r.error;
+  throw (r as { readonly ok: false; readonly error: E }).error;
 }
 
 export function unwrapOr<T, E>(r: Result<T, E>, fallback: T): T {

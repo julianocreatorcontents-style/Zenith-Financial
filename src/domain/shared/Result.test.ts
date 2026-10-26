@@ -12,7 +12,7 @@ describe('ok / err', () => {
     const e = new Error('falhou');
     const r = err(e);
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.error).toBe(e);
+    if (isErr(r)) expect(r.error).toBe(e);
   });
 });
 
@@ -70,6 +70,6 @@ describe('map', () => {
       throw new Error('não deveria executar');
     });
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error).toBe(e);
+    if (isErr(result)) expect(result.error).toBe(e);
   });
 });

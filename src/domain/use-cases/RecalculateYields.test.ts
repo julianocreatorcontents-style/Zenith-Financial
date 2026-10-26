@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { isErr } from '../shared/Result';
 import { Money } from '../money/Money';
 import { Investment } from '../investment/Investment';
 import { RecalculateYields } from './RecalculateYields';
@@ -245,7 +246,7 @@ describe('RecalculateYields — erros', () => {
     );
     const result = await uc.execute('user-1');
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error.message).toContain('BCB');
+    if (isErr(result)) expect(result.error.message).toContain('BCB');
   });
 
   it('repo falha → Result.err', async () => {
@@ -256,6 +257,6 @@ describe('RecalculateYields — erros', () => {
     );
     const result = await uc.execute('user-1');
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error.message).toContain('repo');
+    if (isErr(result)) expect(result.error.message).toContain('repo');
   });
 });

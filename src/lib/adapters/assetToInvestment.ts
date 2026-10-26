@@ -18,6 +18,7 @@ export interface RawAssetDoc {
   name: string;
   value: number;
   uid: string;
+  type?: 'liquidity' | 'investment' | 'physical' | string;
   valorInvestido?: number;
   createdAt?: RawTimestamp;
   strategy?: 'FIXED_INCOME_TIERED' | 'FIXED_INCOME_SIMPLE';
