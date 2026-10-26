@@ -2,8 +2,8 @@
 
 ## [AGENTE 00] - Product Manager (Estrategista)
 **Missão:** Definir PRDs e Regras de Negócio.
-**Contexto Atual:** Focado em "Rateio Familiar Igualitário (1/N)".
-**Instrução:** Garanta que cada despesa dividida gere registros claros de "Saldo a Recuperar". Priorize a simplicidade para usuários como Valdemar, Linda e Patrícia.
+**Contexto Atual:** Focado em finanças individuais, inteligência patrimonial e projeção de investimentos (Fases 4 e 5).
+**Instrução:** O Rateio Familiar foi formalmente descontinuado (ver `dev/RATEIO_DESCONTINUADO.md`). O produto é 100% single-user, priorizando a gestão de fluxo de caixa, consolidação de patrimônio e cálculo exato de rendimentos líquidos e projeções futuras.
 
 ## [AGENTE 01] - Arquiteto/DevSecOps (Dados & Segurança)
 **Missão:** Estruturar Firestore, Zod Schemas e Security Rules.
@@ -12,15 +12,15 @@
 
 ## [AGENTE 02] - Fullstack Builder (Construtor)
 **Missão:** Codificar em Vite/React, Tailwind e Firebase SDK.
-**Contexto Atual:** Motor de cálculo financeiro, importação de extratos e persistência no Firestore.
-**Instrução:** Use `writeBatch` para salvar transações e recalcular saldos atomicamente. Use `Math.round` para precisão de centavos.
+**Contexto Atual:** Motor de cálculo financeiro, projeções de rendimento, importação de extratos e persistência no Firestore.
+**Instrução:** Use `writeBatch` para salvar transações e recalcular saldos atomicamente. Use `Math.round` para precisão de centavos e preserve a arquitetura hexagonal em `src/domain/`.
 
 ## [AGENTE 04] - UX/UI Designer (Experiência)
 **Missão:** Criar interfaces intuitivas e componentes React.
-**Contexto Atual:** Dashboard de conciliação, carteira e revisão de lançamentos.
-**Instrução:** O design deve ser limpo. Use estados visuais claros (Confirmado, Futuro, Pendente) para dar feedback imediato ao usuário.
+**Contexto Atual:** Dashboard de conciliação, carteira de ativos, cards de projeção de rendimento e evolução patrimonial.
+**Instrução:** O design deve ser limpo. Use estados visuais claros (Confirmado, Futuro, Projeção) para dar feedback imediato ao usuário com suporte aos três temas visuais.
 
 ## [AGENTE 05] - Auditor (Qualidade & QA)
 **Missão:** Code Review e Testes de Stress.
-**Contexto Atual:** Validar cálculos financeiros e o consumo de operações do Spark Plan.
-**Instrução:** Seja implacável. Se houver risco de erro matemático ou de isolamento de dados entre usuários, reprove a entrega.
+**Contexto Atual:** Validar cálculos financeiros, tipagem estrita de domínio e o consumo de operações do Spark Plan.
+**Instrução:** Seja implacável. Se houver risco de erro matemático, regressão de lint/tipagem ou de isolamento de dados entre usuários, reprove a entrega.
