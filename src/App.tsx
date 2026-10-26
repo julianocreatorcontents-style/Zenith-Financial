@@ -56,6 +56,7 @@ import Modal from './components/ui/Modal';
 import { checkDuplicates } from './lib/dataUtils';
 import StorageTrashView from './views/StorageTrashView';
 import { YieldProjectionCard } from "./views/YieldProjectionCard";
+import { calculateNetWorthProjection } from "./lib/adapters/netWorthProjection";
 
 const HeritageSettings = lazy(() =>
   import('./components/HeritageSettings').then((module) => ({ default: module.HeritageSettings }))
@@ -498,6 +499,7 @@ export default function ZenithApp() {
   const [authForm, setAuthForm] = useState({ name: '', email: '', password: '' });
   const [isBiometryEnabled, setIsBiometryEnabled] = useState(false);
   const [chartFilterValue, setChartFilterValue] = useState<{ type: 'category' | 'asset' | null, value: string | null }>({ type: null, value: null });
+  const [evolutionView, setEvolutionView] = useState<'historico' | 'projecao'>('historico');
 
   const filteredRecentTransactions = useMemo(() => {
     let filtered = [...transactions];
@@ -574,6 +576,11 @@ export default function ZenithApp() {
   }, [transactions, assets]);
 
   const chartData = useMemo(() => calculateEvolutionData(assets, transactions, chartFilter), [assets, transactions, chartFilter]);
+
+  const projectionData = useMemo(() => calculateNetWorthProjection({
+    assets: assets as any,
+    transactions,
+  }), [assets, transactions]);
 
   const portfolioAllocationPercent = useMemo(() => {
     const total = assets.reduce((acc, asset) => acc + (Number(asset?.value) || 0), 0);
@@ -1447,12 +1454,13 @@ export default function ZenithApp() {
 
     switch (id) {
       case 'CHART_EVOL_PATRIMONIO':
+        const evolutionData = evolutionView === 'projecao' ? projectionData : chartData;
         return (
           <div key={id} className="h-48 w-full -mr-5 sm:-mr-6 mt-2 overflow-hidden">
             <ResponsiveContainer width="100%" height="100%">
               {visualType === 'Linha' || visualType === 'Área' ? (
                 <AreaChart 
-                  data={chartData} 
+                  data={evolutionData} 
                   margin={{ top: 10, right: 0, left: 10, bottom: 0 }}
                 >
                   <CartesianGrid vertical={false} stroke="var(--border-card)" strokeDasharray="3 3" opacity={0.3} />
@@ -1489,6 +1497,11 @@ export default function ZenithApp() {
                                   ✨ {t('Projeção baseada na tendência recente', 'Projection based on recent trend')}
                                 </p>
                               )}
+                              {data.projected && (
+                                <p className="mt-2 text-[8px] text-[var(--accent)] font-bold italic">
+                                  ✨ {t('Projeção bruta pelas taxas dos investimentos', 'Gross projection based on investment rates')}
+                                </p>
+                              )}
                             </div>
                           );
                         }
@@ -1519,7 +1532,7 @@ export default function ZenithApp() {
                   )}
                 </AreaChart>
               ) : (
-                <BarChart data={chartData}>
+                <BarChart data={evolutionData}>
                   <XAxis dataKey="name" hide />
                   <Tooltip />
                   <Bar dataKey="value" fill={mainColor} fillOpacity={opacity} radius={[4, 4, 0, 0]} />
@@ -2313,8 +2326,22 @@ export default function ZenithApp() {
 
               {/* CARD PATRIMÔNIO TOTAL */}
               <section className="bg-[var(--bg-card)] border border-[var(--border-card)] rounded-[32px] p-5 sm:p-6 relative overflow-hidden">
-                <div className="space-y-1 mb-1">
+                <div className="flex items-start justify-between gap-3 mb-1">
                   <span className="text-xs font-medium text-[var(--text-secondary)]">{settings?.customTerms['Saldo'] || t("Evolução do Patrimônio", "Net Worth Evolution")}</span>
+                  <div className="flex shrink-0 rounded-xl border border-[var(--border-card)] bg-[var(--bg-app)] p-0.5">
+                    <button
+                      onClick={() => setEvolutionView('historico')}
+                      className={`rounded-lg px-2 py-1 text-[9px] font-bold uppercase tracking-wider transition-colors ${evolutionView === 'historico' ? 'bg-[var(--accent)] text-[var(--bg-app)]' : 'text-[var(--text-muted)]'}`}
+                    >
+                      {t('Histórico', 'History')}
+                    </button>
+                    <button
+                      onClick={() => setEvolutionView('projecao')}
+                      className={`rounded-lg px-2 py-1 text-[9px] font-bold uppercase tracking-wider transition-colors ${evolutionView === 'projecao' ? 'bg-[var(--accent)] text-[var(--bg-app)]' : 'text-[var(--text-muted)]'}`}
+                    >
+                      {t('Projeção', 'Forecast')}
+                    </button>
+                  </div>
                 </div>
                 <div className="flex items-center gap-3 mb-2">
                   <h2 className="text-3xl font-mono tracking-tighter font-medium text-[var(--text-primary)]">

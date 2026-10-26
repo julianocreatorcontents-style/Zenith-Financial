@@ -216,10 +216,11 @@ export const calculateEvolutionData = (
 
   const canProject = lastDate.getTime() === today.getTime() && points.length > 0;
   if (canProject) {
-    const lastValue = points[points.length - 1].value;
+    const lastPeriodPoint = points[points.length - 1];
+    const lastValue = lastPeriodPoint?.value;
     if (typeof lastValue === 'number') {
       const lookback = Math.min(7, points.length - 1);
-      const previousValue = points[points.length - 1 - lookback].value;
+      const previousValue = points[points.length - 1 - lookback]?.value;
       const dailyChange = lookback > 0 && typeof previousValue === 'number'
         ? (lastValue - previousValue) / lookback
         : 0;
@@ -275,9 +276,9 @@ export const calculateCashFlowData = (transactions: any[]) => {
   let projection = 0;
   if (monthsWithData.length >= 3) {
     projection = Math.round(monthsWithData.reduce((acc, m) => acc + m.value, 0) / 3);
-  } else if (previousMonths[1].hasData) {
+  } else if (previousMonths[1]?.hasData) {
     projection = previousMonths[1].value;
-  } else if (previousMonths[0].hasData) {
+  } else if (previousMonths[0]?.hasData) {
     projection = previousMonths[0].value;
   }
 
