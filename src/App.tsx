@@ -502,6 +502,7 @@ export default function ZenithApp() {
   const [isBiometryEnabled, setIsBiometryEnabled] = useState(false);
   const [chartFilterValue, setChartFilterValue] = useState<{ type: 'category' | 'asset' | null, value: string | null }>({ type: null, value: null });
   const [evolutionView, setEvolutionView] = useState<'historico' | 'projecao'>('historico');
+  const [projectionTaxMode, setProjectionTaxMode] = useState<'liquido' | 'bruto'>('liquido');
   const [marketRate, setMarketRate] = useState<MarketRateState>(getCachedCdiRate);
 
   useEffect(() => {
@@ -1469,8 +1470,14 @@ export default function ZenithApp() {
     const visualType = chartConfig.visualType || 'Área';
 
     switch (id) {
-      case 'CHART_EVOL_PATRIMONIO':
-        const evolutionData = evolutionView === 'projecao' ? projectionData : chartData;
+      case 'CHART_EVOL_PATRIMONIO': {
+        const isProjection = evolutionView === 'projecao';
+        const evolutionData = isProjection ? projectionData : chartData;
+        const activeDataKey = isProjection && projectionTaxMode === 'liquido' ? 'valueNet' : 'value';
+        const comparisonDataKey = isProjection
+          ? (projectionTaxMode === 'liquido' ? 'value' : 'valueNet')
+          : null;
+
         return (
           <div key={id} className="h-48 w-full -mr-5 sm:-mr-6 mt-2 overflow-hidden">
             <ResponsiveContainer width="100%" height="100%">
@@ -1501,21 +1508,37 @@ export default function ZenithApp() {
                       content={({ active, payload }) => {
                         if (active && payload && payload.length) {
                           const data = payload[0].payload;
-                          const pointValue = data.value ?? data.predicted ?? 0;
+                          const pointValue = isProjection && projectionTaxMode === 'liquido'
+                            ? (data.valueNet ?? data.value ?? 0)
+                            : (data.value ?? data.predicted ?? 0);
                           return (
                             <div className="bg-[var(--bg-card)] border border-[var(--border-card)] p-3 rounded-xl shadow-2xl backdrop-blur-md bg-opacity-90">
                               <p className="text-[10px] uppercase font-bold text-[var(--text-secondary)] tracking-widest mb-1">{data.date}</p>
                               <p className="text-base font-mono font-bold text-[var(--text-primary)]">
                                 {privacyMode ? '••••••' : pointValue.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
                               </p>
-                              {predictiveEnabled && data.predicted != null && (
+                              {isProjection && data.projected && (
+                                <div className="mt-2 space-y-1">
+                                  {projectionTaxMode === 'liquido' && data.valueNet !== undefined && data.value !== data.valueNet && (
+                                    <p className="text-[9px] text-[var(--text-muted)] font-mono">
+                                      {t('Bruto:', 'Gross:')} {privacyMode ? '••••••' : Number(data.value).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                                    </p>
+                                  )}
+                                  {projectionTaxMode === 'bruto' && data.valueNet !== undefined && data.value !== data.valueNet && (
+                                    <p className="text-[9px] text-[var(--text-muted)] font-mono">
+                                      {t('Líquido est.:', 'Est. net:')} {privacyMode ? '••••••' : Number(data.valueNet).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                                    </p>
+                                  )}
+                                  <p className="text-[8px] text-[var(--accent)] font-bold italic">
+                                    ✨ {projectionTaxMode === 'liquido'
+                                      ? t('Projeção líquida (com IR regressivo e IOF)', 'Net projection (with regressive IR & IOF)')
+                                      : t('Projeção bruta pelas taxas dos investimentos', 'Gross projection based on investment rates')}
+                                  </p>
+                                </div>
+                              )}
+                              {!isProjection && predictiveEnabled && data.predicted != null && (
                                 <p className="mt-2 text-[8px] text-[var(--accent)] font-bold italic">
                                   ✨ {t('Projeção baseada na tendência recente', 'Projection based on recent trend')}
-                                </p>
-                              )}
-                              {data.projected && (
-                                <p className="mt-2 text-[8px] text-[var(--accent)] font-bold italic">
-                                  ✨ {t('Projeção bruta pelas taxas dos investimentos', 'Gross projection based on investment rates')}
                                 </p>
                               )}
                             </div>
@@ -1525,9 +1548,22 @@ export default function ZenithApp() {
                       }}
                     />
                   )}
+                  {comparisonDataKey && (
+                    <Area 
+                      type="monotone" 
+                      dataKey={comparisonDataKey} 
+                      stroke={mainColor} 
+                      strokeWidth={1.5}
+                      strokeDasharray="3 3"
+                      fill="transparent" 
+                      dot={false}
+                      isAnimationActive={false}
+                      opacity={0.4}
+                    />
+                  )}
                   <Area 
                     type="monotone" 
-                    dataKey="value" 
+                    dataKey={activeDataKey} 
                     stroke={mainColor} 
                     strokeWidth={visualType === 'Linha' ? 2 : 3}
                     fillOpacity={visualType === 'Linha' ? 0 : opacity} 
@@ -1535,7 +1571,7 @@ export default function ZenithApp() {
                     activeDot={{ r: 5, fill: mainColor, stroke: 'var(--bg-app)', strokeWidth: 2 }}
                     dot={false}
                   />
-                  {predictiveEnabled && (
+                  {predictiveEnabled && !isProjection && (
                     <Area 
                       type="monotone" 
                       dataKey="predicted" 
@@ -1551,12 +1587,13 @@ export default function ZenithApp() {
                 <BarChart data={evolutionData}>
                   <XAxis dataKey="name" hide />
                   <Tooltip />
-                  <Bar dataKey="value" fill={mainColor} fillOpacity={opacity} radius={[4, 4, 0, 0]} />
+                  <Bar dataKey={activeDataKey} fill={mainColor} fillOpacity={opacity} radius={[4, 4, 0, 0]} />
                 </BarChart>
               )}
             </ResponsiveContainer>
           </div>
         );
+      }
       case 'CHART_METAS_PROG':
         return (
           <section key={id} className="bg-[var(--bg-card)] border border-[var(--border-card)] rounded-[32px] p-6">
@@ -2344,21 +2381,39 @@ export default function ZenithApp() {
 
               {/* CARD PATRIMÔNIO TOTAL */}
               <section className="bg-[var(--bg-card)] border border-[var(--border-card)] rounded-[32px] p-5 sm:p-6 relative overflow-hidden">
-                <div className="flex items-start justify-between gap-3 mb-1">
+                <div className="flex flex-wrap items-center justify-between gap-2 mb-1">
                   <span className="text-xs font-medium text-[var(--text-secondary)]">{settings?.customTerms['Saldo'] || t("Evolução do Patrimônio", "Net Worth Evolution")}</span>
-                  <div className="flex shrink-0 rounded-xl border border-[var(--border-card)] bg-[var(--bg-app)] p-0.5">
-                    <button
-                      onClick={() => setEvolutionView('historico')}
-                      className={`rounded-lg px-2 py-1 text-[9px] font-bold uppercase tracking-wider transition-colors ${evolutionView === 'historico' ? 'bg-[var(--accent)] text-[var(--bg-app)]' : 'text-[var(--text-muted)]'}`}
-                    >
-                      {t('Histórico', 'History')}
-                    </button>
-                    <button
-                      onClick={() => setEvolutionView('projecao')}
-                      className={`rounded-lg px-2 py-1 text-[9px] font-bold uppercase tracking-wider transition-colors ${evolutionView === 'projecao' ? 'bg-[var(--accent)] text-[var(--bg-app)]' : 'text-[var(--text-muted)]'}`}
-                    >
-                      {t('Projeção', 'Forecast')}
-                    </button>
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    {evolutionView === 'projecao' && (
+                      <div className="flex shrink-0 rounded-xl border border-[var(--border-card)] bg-[var(--bg-app)] p-0.5">
+                        <button
+                          onClick={() => setProjectionTaxMode('liquido')}
+                          className={`rounded-lg px-2 py-1 text-[9px] font-bold uppercase tracking-wider transition-colors ${projectionTaxMode === 'liquido' ? 'bg-[var(--accent)] text-[var(--bg-app)]' : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'}`}
+                        >
+                          {t('Líquido', 'Net')}
+                        </button>
+                        <button
+                          onClick={() => setProjectionTaxMode('bruto')}
+                          className={`rounded-lg px-2 py-1 text-[9px] font-bold uppercase tracking-wider transition-colors ${projectionTaxMode === 'bruto' ? 'bg-[var(--accent)] text-[var(--bg-app)]' : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'}`}
+                        >
+                          {t('Bruto', 'Gross')}
+                        </button>
+                      </div>
+                    )}
+                    <div className="flex shrink-0 rounded-xl border border-[var(--border-card)] bg-[var(--bg-app)] p-0.5">
+                      <button
+                        onClick={() => setEvolutionView('historico')}
+                        className={`rounded-lg px-2 py-1 text-[9px] font-bold uppercase tracking-wider transition-colors ${evolutionView === 'historico' ? 'bg-[var(--accent)] text-[var(--bg-app)]' : 'text-[var(--text-muted)]'}`}
+                      >
+                        {t('Histórico', 'History')}
+                      </button>
+                      <button
+                        onClick={() => setEvolutionView('projecao')}
+                        className={`rounded-lg px-2 py-1 text-[9px] font-bold uppercase tracking-wider transition-colors ${evolutionView === 'projecao' ? 'bg-[var(--accent)] text-[var(--bg-app)]' : 'text-[var(--text-muted)]'}`}
+                      >
+                        {t('Projeção', 'Forecast')}
+                      </button>
+                    </div>
                   </div>
                 </div>
                 <div className="flex items-center gap-3 mb-2">

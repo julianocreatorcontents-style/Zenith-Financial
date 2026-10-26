@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { calculateNetWorthProjection } from './netWorthProjection';
 import { YieldCalculator } from '../../domain/yield/YieldCalculator';
+import { IncomeTaxPolicy } from '../../domain/tax/IncomeTaxPolicy';
+import { IofPolicy } from '../../domain/tax/IofPolicy';
 import { Money } from '../../domain/money/Money';
 import type { RawAssetDoc } from './assetToInvestment';
 
@@ -32,6 +34,7 @@ describe('calculateNetWorthProjection', () => {
     expect(points).toHaveLength(1);
     expect(points[0]?.name).toBe('Hoje');
     expect(points[0]?.value).toBe(1000);
+    expect(points[0]?.valueNet).toBe(1000);
     expect(points[0]?.projected).toBe(false);
   });
 
@@ -147,5 +150,106 @@ describe('calculateNetWorthProjection', () => {
     });
 
     expect(points.every((point) => point.value === 2500)).toBe(true);
+    expect(points.every((point) => point.valueNet === 2500)).toBe(true);
+  });
+
+  it('mantém valueNet estritamente igual a value quando taxDisplayMode é GROSS', () => {
+    const asset = makeAsset({
+      value: 5000,
+      investmentPolicy: {
+        indexer: 'CDI',
+        rateType: 'PERCENT_INDEXER',
+        dayCountConvention: 'CALENDAR_DAYS_365',
+        taxDisplayMode: 'GROSS',
+        rateTiers: [{ upTo: null, baseRateValue: 100, bonusRateValue: 0 }],
+      },
+    });
+
+    const points = calculateNetWorthProjection({
+      assets: [asset],
+      months: 6,
+      from: new Date('2026-01-01T12:00:00'),
+    });
+
+    for (const point of points) {
+      expect(point.valueNet).toBe(point.value);
+    }
+  });
+
+  it('calcula valueNet menor que value quando taxDisplayMode é NET com IR regressivo', () => {
+    const asset = makeAsset({
+      value: 10000,
+      createdAt: new Date('2025-01-01'), // Já tem 1 ano investido, sem IOF
+      investmentPolicy: {
+        indexer: 'CDI',
+        rateType: 'PERCENT_INDEXER',
+        dayCountConvention: 'CALENDAR_DAYS_365',
+        taxDisplayMode: 'NET',
+        rateTiers: [{ upTo: null, baseRateValue: 100, bonusRateValue: 0 }],
+      },
+    });
+
+    const points = calculateNetWorthProjection({
+      assets: [asset],
+      months: 12,
+      from: new Date('2026-01-01T12:00:00'),
+    });
+
+    // Ponto 0 (Hoje): ambos são iguais ao saldo atual
+    expect(points[0]?.valueNet).toBe(points[0]?.value);
+
+    // Meses projetados: o líquido deve ser estritamente menor que o bruto, mas maior que o principal
+    for (let i = 1; i < points.length; i++) {
+      const point = points[i]!;
+      expect(point.valueNet).toBeLessThan(point.value);
+      expect(point.valueNet).toBeGreaterThan(10000);
+    }
+  });
+
+  it('aplica dedução combinada de IR e IOF quando investimento tem menos de 30 dias', () => {
+    const from = new Date('2026-01-01T12:00:00');
+    // Criado hoje: nos primeiros dias incide IOF pesado + IR 22,5%
+    const recentAsset = makeAsset({
+      value: 10000,
+      createdAt: new Date('2026-01-01T12:00:00'),
+      investmentPolicy: {
+        indexer: 'CDI',
+        rateType: 'PERCENT_INDEXER',
+        dayCountConvention: 'CALENDAR_DAYS_365',
+        taxDisplayMode: 'NET',
+        rateTiers: [{ upTo: null, baseRateValue: 100, bonusRateValue: 0 }],
+      },
+    });
+
+    // Investimento antigo (mais de 720 dias): alíquota mínima de 15% de IR e zero IOF
+    const seasonedAsset = makeAsset({
+      value: 10000,
+      createdAt: new Date('2023-01-01T12:00:00'),
+      investmentPolicy: {
+        indexer: 'CDI',
+        rateType: 'PERCENT_INDEXER',
+        dayCountConvention: 'CALENDAR_DAYS_365',
+        taxDisplayMode: 'NET',
+        rateTiers: [{ upTo: null, baseRateValue: 100, bonusRateValue: 0 }],
+      },
+    });
+
+    const recentPoints = calculateNetWorthProjection({
+      assets: [recentAsset],
+      months: 1,
+      from,
+    });
+    const seasonedPoints = calculateNetWorthProjection({
+      assets: [seasonedAsset],
+      months: 1,
+      from,
+    });
+
+    // Como o ativo seasoned tem menor alíquota de IR e zero IOF, seu rendimento líquido deve ser maior
+    const recentNetYield = (recentPoints[1]?.valueNet ?? 0) - 10000;
+    const seasonedNetYield = (seasonedPoints[1]?.valueNet ?? 0) - 10000;
+
+    expect(seasonedNetYield).toBeGreaterThan(recentNetYield);
   });
 });
+
