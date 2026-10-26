@@ -54,10 +54,10 @@ import ColorPicker from './components/ColorPicker';
 import LoadingSpinner from './components/LoadingSpinner';
 import Modal from './components/ui/Modal';
 import { checkDuplicates } from './lib/dataUtils';
-import StorageTrashView from './views/StorageTrashView';
 import { YieldProjectionCard } from "./views/YieldProjectionCard";
 import { calculateNetWorthProjection } from "./lib/adapters/netWorthProjection";
 
+const StorageTrashView = lazy(() => import('./views/StorageTrashView'));
 const HeritageSettings = lazy(() =>
   import('./components/HeritageSettings').then((module) => ({ default: module.HeritageSettings }))
 );
@@ -2305,7 +2305,9 @@ export default function ZenithApp() {
           )}
 
           {currentTab === 'Armazenamento' && (
-            <StorageTrashView user={user} language={settings?.language} />
+            <Suspense fallback={<LoadingSpinner />}>
+              <StorageTrashView user={user} language={settings?.language} />
+            </Suspense>
           )}
 
           {currentTab === 'Início' && (
@@ -2932,7 +2934,9 @@ function ProfileDrawer({
           )}
 
           {activeDrawerPage === 'trash' && (
-            <StorageTrashView user={user} language={language} embedded />
+            <Suspense fallback={<LoadingSpinner />}>
+              <StorageTrashView user={user} language={language} embedded />
+            </Suspense>
           )}
         </div>
 

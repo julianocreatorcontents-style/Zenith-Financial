@@ -21,6 +21,9 @@ export default defineConfig({
         manualChunks(id) {
           if (!id.includes('node_modules')) return;
 
+          if (id.includes('/@firebase/firestore') || id.includes('/firebase/firestore')) {
+            return 'vendor-firestore';
+          }
           if (id.includes('/firebase/') || id.includes('/@firebase/')) {
             return 'vendor-firebase';
           }

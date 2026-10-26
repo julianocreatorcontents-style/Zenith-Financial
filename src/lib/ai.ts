@@ -1,4 +1,6 @@
-import { GoogleGenAI, Type } from '@google/genai';
+async function getGenAI() {
+  return await import('@google/genai');
+}
 
 export const GEMINI_API_KEY_STORAGE = 'zenith_gemini_api_key';
 
@@ -83,6 +85,7 @@ async function generate(apiKey: string, contents: unknown, config?: unknown) {
   const key = apiKey?.trim();
   if (!key) throw new MissingApiKeyError();
 
+  const { GoogleGenAI } = await getGenAI();
   const ai = new GoogleGenAI({ apiKey: key });
 
   try {
@@ -117,6 +120,8 @@ export async function extractTransaction(
 ): Promise<ExtractedTransaction> {
   const rulesStr = rulesToPrompt(input.userRules, 'texto');
 
+  const { Type } = await getGenAI();
+
   const response = await generate(
     apiKey,
     [{
@@ -150,6 +155,8 @@ export async function extractDocument(
   input: ExtractDocumentInput,
 ): Promise<ExtractedTransaction> {
   const rulesStr = rulesToPrompt(input.userRules, 'emissor');
+
+  const { Type } = await getGenAI();
 
   const response = await generate(
     apiKey,
@@ -191,6 +198,8 @@ export async function extractAssets(
   const contentPart = input.data
     ? { inlineData: { data: input.data, mimeType: input.mimeType || 'application/octet-stream' } }
     : { text: input.text || '' };
+
+  const { Type } = await getGenAI();
 
   const response = await generate(
     apiKey,
