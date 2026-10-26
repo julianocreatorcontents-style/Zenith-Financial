@@ -3,44 +3,18 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useCallback, useMemo, useRef, lazy, Suspense } from 'react';
+import React, { useState, useCallback, lazy, Suspense } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   X, CreditCard, TrendingUp,
   LayoutGrid, Plus, AlertCircle, Sparkles, ShieldCheck
 } from 'lucide-react';
 import { 
-  auth, db, googleProvider, signInWithPopup, signOut, 
-  signInWithEmailAndPassword, createUserWithEmailAndPassword, updateProfile,
-  collection, addDoc, doc, setDoc, updateDoc, deleteDoc, onSnapshot, query, where, orderBy, serverTimestamp,
-  handleFirestoreError, OperationType, getDocs, writeBatch, limit,
-  FIRESTORE_ERROR_EVENT
-} from './firebase';
-import { Timestamp } from 'firebase/firestore';
-import {
-  extractDocument,
-  getAiErrorMessage,
-  GEMINI_API_KEY_STORAGE,
   MissingApiKeyError,
   InvalidApiKeyError,
+  getAiErrorMessage
 } from './lib/ai';
-import { TransactionSchema } from './lib/validations';
-import { z } from 'zod';
-import { 
-  calculateTotals, 
-  calculateVariation, 
-  getMiniChartData, 
-  calculateEvolutionData, 
-  calculateCashFlowData,
-  calculateMonthBalance,
-  calculateNetWorth
-} from './lib/finance';
-import { onAuthStateChanged, User } from 'firebase/auth';
 import LoadingSpinner from './components/LoadingSpinner';
-import { calculateNetWorthProjection } from "./lib/adapters/netWorthProjection";
-import { getCachedCdiRate, fetchLiveCdiRate } from "./lib/adapters/marketRateService";
-import type { MarketRateState } from "./lib/adapters/marketRateService";
-import { mapSpreadsheetRow } from "./lib/spreadsheetParser";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { ProfileDrawer } from "./components/drawers/ProfileDrawer";
 import { AddTransactionModal } from "./components/modals/AddTransactionModal";
@@ -52,12 +26,12 @@ import { HomeView } from "./views/HomeView";
 import { WalletTransactionsView as DetalhesGastosPage } from "./views/WalletTransactionsView";
 import { InvestmentsView } from "./views/InvestmentsView";
 import { AuthView } from "./views/AuthView";
-import { Asset, UserProfile, Transaction, DDA, Settings } from "./types/app";
+import { Asset } from "./types/app";
+import { useZenithData } from "./hooks/useZenithData";
 
 const StorageTrashView = lazy(() => import('./views/StorageTrashView'));
 const ZenithIAView = lazy(() => import('./views/ZenithIAView'));
 
-// --- UTILS ---
 const getGreeting = () => {
   const hour = new Date().getHours();
   if (hour >= 5 && hour < 12) return "Bom dia";
@@ -66,418 +40,58 @@ const getGreeting = () => {
 };
 
 export default function ZenithApp() {
-  const [user, setUser] = useState<User | null>(null);
-  const [profile, setProfile] = useState<UserProfile | null>(null);
-  const [assets, setAssets] = useState<Asset[]>([]);
+  const data = useZenithData();
+  const {
+    user, profile, assets, transactions, ddas, settings, privacyMode,
+    isAuthReady, userRules, notifications, investorProfile,
+    isBiometryModalOpen, setIsBiometryModalOpen, marketRate,
+    error, setError, firestoreIssues, setFirestoreIssues,
+    geminiApiKey, apiKeyError, setApiKeyError,
+    pendingTransaction, setPendingTransaction, isProcessingIA,
+    metrics, chartData, projectionData, cashFlowData,
+    portfolioAllocationPercent, t, getGeminiApiKey,
+    togglePrivacyMode, handleSaveProfile, handleSaveApiKey,
+    handleGoogleLogin, handleEmailLogin, handleRegister, handleLogout,
+    handleAcceptDDA, handleRejectDDA, moveToTrash,
+    createAsset, updateAsset, deleteAsset,
+    addTransaction, updateTransaction, confirmPendingTransaction,
+    handleFileUpload
+  } = data;
+
+  // Estados locais de navegação e modais da UI
+  const [currentTab, setCurrentTab] = useState<'Início' | 'Carteira' | 'Investimentos' | 'IA' | 'Armazenamento'>('Início');
   const [isAddMenuOpen, setIsAddMenuOpen] = useState(false);
   const [forceCreateInvestment, setForceCreateInvestment] = useState(false);
-  const [transactions, setTransactions] = useState<Transaction[]>([]);
-  const [ddas, setDdas] = useState<DDA[]>([]);
-  const [settings, setSettings] = useState<Settings | null>(null);
-  const [privacyMode, setPrivacyMode] = useState(false);
   const [selectedAsset, setSelectedAsset] = useState<Asset | null>(null);
-  const [isAuthReady, setIsAuthReady] = useState(false);
-  const [chartFilter] = useState({ period: 'Meses', month: 'Atual', day: 'Todos' });
+  const [selectedAssetForDeepDive, setSelectedAssetForDeepDive] = useState<Asset | null>(null);
   const [isAddingAsset, setIsAddingAsset] = useState(false);
   const [isAddingTransaction, setIsAddingTransaction] = useState(false);
   const [isEditingTransaction, setIsEditingTransaction] = useState(false);
   const [selectedTransaction, setSelectedTransaction] = useState<any>(null);
-  const [userRules, setUserRules] = useState<any[]>([]);
   const [isProfileDrawerOpen, setIsProfileDrawerOpen] = useState(false);
   const [drawerPageRequest, setDrawerPageRequest] = useState<'menu' | 'profile' | 'notifications' | 'settings' | 'ai_key' | 'trash'>('menu');
-  const [notifications, setNotifications] = useState<any[]>([]);
   const [isIngestionHubOpen, setIsIngestionHubOpen] = useState(false);
   const [isReviewModalOpen, setIsReviewModalOpen] = useState(false);
-  const [pendingTransaction, setPendingTransaction] = useState<any>(null);
-  const [isProcessingIA, setIsProcessingIA] = useState(false);
-  const [isBiometryModalOpen, setIsBiometryModalOpen] = useState(false);
-  const [chartFilterValue, setChartFilterValue] = useState<{ type: 'category' | 'asset' | null, value: string | null }>({ type: null, value: null });
-  const [evolutionView, setEvolutionView] = useState<'historico' | 'projecao'>('historico');
-  const [projectionTaxMode, setProjectionTaxMode] = useState<'liquido' | 'bruto'>('liquido');
-  const [marketRate, setMarketRate] = useState<MarketRateState>(getCachedCdiRate);
-
-  useEffect(() => {
-    let mounted = true;
-    fetchLiveCdiRate().then((res) => {
-      if (mounted) setMarketRate(res);
-    });
-    return () => {
-      mounted = false;
-    };
-  }, []);
-
   const [isCategoryDetailsOpen, setIsCategoryDetailsOpen] = useState(false);
   const [activeCategoryDetail, setActiveCategoryDetail] = useState<string | null>(null);
   const [timeFilter, setTimeFilter] = useState<'7' | '15' | '30'>('30');
-  const [error, setError] = useState<string | null>(null);
-  const [firestoreIssues, setFirestoreIssues] = useState<{ id: string; code: string; operationType: string; path: string | null; timestamp: string }[]>([]);
-  const [geminiApiKey, setGeminiApiKey] = useState(() => {
-    try {
-      return localStorage.getItem(GEMINI_API_KEY_STORAGE) || '';
-    } catch {
-      return '';
-    }
-  });
-  const [apiKeyError, setApiKeyError] = useState<string | null>(null);
+  const [chartFilterValue, setChartFilterValue] = useState<{ type: 'category' | 'asset' | null, value: string | null }>({ type: null, value: null });
+  const [evolutionView, setEvolutionView] = useState<'historico' | 'projecao'>('historico');
+  const [projectionTaxMode, setProjectionTaxMode] = useState<'liquido' | 'bruto'>('liquido');
 
   const openDrawer = useCallback((page: 'menu' | 'profile' | 'notifications' | 'settings' | 'ai_key' | 'trash' = 'menu') => {
     setDrawerPageRequest(page);
     setIsProfileDrawerOpen(true);
   }, []);
 
-  const metrics = useMemo(() => {
-    const now = new Date();
-    const currentMonth = now.getMonth();
-    const currentYear = now.getFullYear();
-    const prevMonth = currentMonth === 0 ? 11 : currentMonth - 1;
-    const prevYear = currentMonth === 0 ? currentYear - 1 : currentYear;
-
-    const currentTotals = calculateTotals(transactions, currentMonth, currentYear, assets);
-    const prevTotals = calculateTotals(transactions, prevMonth, prevYear, assets);
-
-    const monthBalance = calculateMonthBalance(transactions, currentMonth, currentYear);
-    const netWorth = calculateNetWorth(assets, transactions, currentMonth, currentYear);
-    const previousNetWorth = calculateNetWorth(assets, transactions, prevMonth, prevYear);
-
-    const investmentAssets = assets.filter(a => a.type === 'investment');
-    const investedCost = investmentAssets.reduce((acc, a) => acc + (a.valorInvestido ?? a.value ?? 0), 0);
-
-    return {
-      in: {
-        total: currentTotals.in,
-        var: calculateVariation(currentTotals.in, prevTotals.in),
-        trend: currentTotals.in >= prevTotals.in ? 'up' : 'down',
-        data: getMiniChartData(transactions, 'in')
-      },
-      out: {
-        total: currentTotals.out,
-        var: calculateVariation(currentTotals.out, prevTotals.out),
-        trend: currentTotals.out >= prevTotals.out ? 'up' : 'down',
-        data: getMiniChartData(transactions, 'out')
-      },
-      yield: {
-        total: currentTotals.yield,
-        var: calculateVariation(currentTotals.yield, prevTotals.yield),
-        trend: currentTotals.yield >= prevTotals.yield ? 'up' : 'down',
-        data: getMiniChartData(transactions, 'yield')
-      },
-      monthBalance,
-      netWorth,
-      netWorthVar: calculateVariation(netWorth, previousNetWorth),
-      netWorthTrend: netWorth >= previousNetWorth ? 'up' : 'down',
-      investments: currentTotals.investments,
-      investmentsVar: calculateVariation(currentTotals.investments, investedCost),
-      investmentsTrend: currentTotals.investments >= investedCost ? 'up' : 'down',
-      investmentsData: investmentAssets.map(a => ({ v: a.value ?? 0 }))
-    };
-  }, [transactions, assets]);
-
-  const chartData = useMemo(() => calculateEvolutionData(assets, transactions, chartFilter), [assets, transactions, chartFilter]);
-
-  const projectionData = useMemo(() => calculateNetWorthProjection({
-    assets,
-    transactions,
-    cdiAnnualPercent: marketRate.cdiAnnualPercent,
-  }), [assets, transactions, marketRate.cdiAnnualPercent]);
-
-  const portfolioAllocationPercent = useMemo(() => {
-    const total = assets.reduce((acc, asset) => acc + (Number(asset?.value) || 0), 0);
-    if (total <= 0) return 0;
-    return Math.max(0, Math.min(100, Math.round((metrics.investments / total) * 100)));
-  }, [assets, metrics.investments]);
-
-  const [investorProfile, setInvestorProfile] = useState<'Conservador' | 'Sofisticado' | 'Arrojado'>('Conservador');
-  const [selectedAssetForDeepDive, setSelectedAssetForDeepDive] = useState<Asset | null>(null);
-  const [investmentTab, setInvestmentTab] = useState<'Ativos' | 'Subcategorias' | 'Estratégias'>('Ativos');
-
-  const cashFlowData = useMemo(() => calculateCashFlowData(transactions), [transactions]);
-  const [currentTab, setCurrentTab] = useState<'Início' | 'Carteira' | 'Investimentos' | 'IA' | 'Armazenamento'>('Início');
-
-  // Auth Listener
-  useEffect(() => {
-    const unsub = onAuthStateChanged(auth, (u) => {
-      setUser(u);
-      setIsAuthReady(true);
-    }, (error) => {
-      console.error("Auth Listener Error:", error);
-      setIsAuthReady(true);
-    });
-    
-    const timer = setTimeout(() => {
-      if (!isAuthReady) {
-        console.warn("Auth Listener timeout - proceeding as guest");
-        setIsAuthReady(true);
-      }
-    }, 8000);
-
-    return () => {
-      unsub();
-      clearTimeout(timer);
-    };
-  }, []);
-
-  // Profile Listener
-  useEffect(() => {
-    if (!user) {
-      setProfile(null);
+  const handleAiError = useCallback((e: unknown) => {
+    if (e instanceof MissingApiKeyError || e instanceof InvalidApiKeyError) {
+      setApiKeyError(e.message);
+      openDrawer('ai_key');
       return;
     }
-    const unsub = onSnapshot(doc(db, 'users', user.uid), (snap) => {
-      try {
-        if (snap.exists()) {
-          const data = snap.data() as UserProfile;
-          setProfile({ uid: snap.id, ...data });
-          if (data.investor_profile) setInvestorProfile(data.investor_profile);
-        } else {
-          const initialProfile: any = {
-            uid: user.uid,
-            displayName: user.displayName || 'Usuário',
-            photoURL: user.photoURL || `https://picsum.photos/seed/${user.uid}/100/100`,
-            email: user.email || '',
-            investor_profile: 'Conservador',
-            createdAt: serverTimestamp(),
-            authProvider: user.providerData[0]?.providerId === 'google.com' ? 'google' : 'email'
-          };
-          setDoc(doc(db, 'users', user.uid), initialProfile).then(() => {
-            try {
-              const biometryDecision = localStorage.getItem(`biometry_${user.uid}`);
-              if (!biometryDecision && typeof window !== 'undefined' && window.PublicKeyCredential) {
-                setIsBiometryModalOpen(true);
-              }
-            } catch (e) {
-              console.warn("localStorage blocked:", e);
-            }
-          }).catch(e => handleFirestoreError(e, OperationType.WRITE, `users/${user.uid}`));
-        }
-      } catch (e) {
-        console.error("Error in profile listener:", e);
-      }
-    }, (e) => handleFirestoreError(e, OperationType.GET, `users/${user.uid}`));
-    return unsub;
-  }, [user]);
-
-  // Assets Listener
-  useEffect(() => {
-    if (!user) {
-      setAssets([]);
-      return;
-    }
-    const q = query(collection(db, 'assets'), where('uid', '==', user.uid), orderBy('createdAt', 'desc'));
-    const unsub = onSnapshot(q, (snap) => {
-      const docs = snap.docs.map(d => ({ id: d.id, ...d.data() } as Asset));
-      setAssets(docs);
-    }, (e) => handleFirestoreError(e, OperationType.LIST, 'assets'));
-    return unsub;
-  }, [user]);
-
-  // Transactions Listener
-  useEffect(() => {
-    if (!user) {
-      setTransactions([]);
-      return;
-    }
-    const q = query(collection(db, 'transactions'), where('uid', '==', user.uid), orderBy('date', 'desc'));
-    const unsub = onSnapshot(q, (snap) => {
-      const docs = snap.docs.map(d => ({ id: d.id, ...d.data() } as Transaction));
-      setTransactions(docs);
-    }, (e) => handleFirestoreError(e, OperationType.LIST, 'transactions'));
-    return unsub;
-  }, [user]);
-
-  // Settings Listener
-  useEffect(() => {
-    if (!user) {
-      setSettings(null);
-      return;
-    }
-
-    try {
-      const cached = localStorage.getItem(`zenith_config_${user.uid}`);
-      if (cached) {
-        const data = JSON.parse(cached);
-        setSettings(prev => prev ? { ...prev, zenith_config: data } : { 
-          theme: 'dark', 
-          language: 'pt-BR', 
-          privacyMode: data.master_states?.modo_privacidade || false,
-          activeWidgets: [],
-          yieldColor: '#00FF00',
-          granularity: 'month',
-          customTerms: {},
-          zenith_config: data 
-        } as Settings);
-        setPrivacyMode(data.master_states?.modo_privacidade || false);
-      }
-    } catch (e) {
-      console.warn("Failed to load cached settings:", e);
-    }
-
-    const unsub = onSnapshot(doc(db, 'settings', user.uid), (snap) => {
-      if (snap.exists()) {
-        const data = snap.data() as Settings;
-        setSettings(data);
-        setPrivacyMode(data.privacyMode);
-        
-        if (data.zenith_config) {
-          try {
-            localStorage.setItem(`zenith_config_${user.uid}`, JSON.stringify(data.zenith_config));
-          } catch (e) {
-            console.warn("Storage failed:", e);
-          }
-        }
-      } else {
-        const initialSettings: Settings = {
-          theme: 'dark',
-          language: 'pt-BR',
-          privacyMode: false,
-          activeWidgets: ['all'],
-          yieldColor: '#00FFA3',
-          granularity: 'month',
-          customTerms: {},
-          zenith_config: {
-            master_states: {
-              modo_privacidade: false,
-              insights_ia_ativo: true,
-              idioma: 'pt-BR',
-              tema_global: 'Escuro',
-              dashboard_management_expanded: false
-            },
-            categories: {
-              'Alimentação': { id: 'Alimentação', nome: 'Alimentação', cor_destaque: { hex: '#FF5722' }, visivel_no_dash: true, config_avancada: {}, ia_insights_buffer: {} },
-              'Moradia': { id: 'Moradia', nome: 'Moradia', cor_destaque: { hex: '#2196F3' }, visivel_no_dash: true, config_avancada: {}, ia_insights_buffer: {} },
-              'Transporte': { id: 'Transporte', nome: 'Transporte', cor_destaque: { hex: '#4CAF50' }, visivel_no_dash: true, config_avancada: {}, ia_insights_buffer: {} },
-              'Lazer': { id: 'Lazer', nome: 'Lazer', cor_destaque: { hex: '#9C27B0' }, visivel_no_dash: true, config_avancada: {}, ia_insights_buffer: {} },
-              'Saúde': { id: 'Saúde', nome: 'Saúde', cor_destaque: { hex: '#E91E63' }, visivel_no_dash: true, config_avancada: {}, ia_insights_buffer: {} }
-            },
-            dashboard_order: [
-              'METRIC_ENTRADAS',
-              'METRIC_SAIDAS',
-              'METRIC_RENDIMENTOS',
-              'CHART_ALOC_ATIV',
-              'CHART_FLUXO_CAIXA',
-              'CHART_DIST_CATEG',
-              'CHART_SAZON_MENS',
-              'CHART_PREV_CONTAS',
-              'CHART_METAS_PROG'
-            ]
-          }
-        };
-        setDoc(doc(db, 'settings', user.uid), initialSettings).catch(e => handleFirestoreError(e, OperationType.WRITE, `settings/${user.uid}`));
-      }
-    }, (e) => handleFirestoreError(e, OperationType.GET, `settings/${user.uid}`));
-    return unsub;
-  }, [user]);
-
-  // Notifications Listener
-  useEffect(() => {
-    if (!user) return;
-    const q = query(collection(db, 'notifications'), where('uid', '==', user.uid), orderBy('createdAt', 'desc'), limit(10));
-    const unsub = onSnapshot(q, (snap) => {
-      setNotifications(snap.docs.map(d => ({ id: d.id, ...d.data() })));
-    }, (e) => handleFirestoreError(e, OperationType.LIST, 'notifications'));
-    return unsub;
-  }, [user]);
-
-  // DDA Listener
-  useEffect(() => {
-    if (!user) {
-      setDdas([]);
-      return;
-    }
-    const q = query(collection(db, 'ddas'), where('uid', '==', user.uid));
-    const unsub = onSnapshot(q, (snap) => {
-      setDdas(snap.docs.map(d => ({ id: d.id, ...d.data() } as DDA)));
-    }, (e) => handleFirestoreError(e, OperationType.LIST, 'ddas'));
-    return unsub;
-  }, [user]);
-
-  // Firestore Diagnostic Listener
-  useEffect(() => {
-    const handleDiagnostic = (event: Event) => {
-      const customEvent = event as CustomEvent<{ code: string; operationType: string; path: string | null }>;
-      if (!customEvent.detail) return;
-      const issue = {
-        id: `${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
-        code: customEvent.detail.code,
-        operationType: customEvent.detail.operationType,
-        path: customEvent.detail.path,
-        timestamp: new Date().toLocaleTimeString('pt-BR')
-      };
-      setFirestoreIssues(prev => [issue, ...prev].slice(0, 5));
-    };
-
-    window.addEventListener(FIRESTORE_ERROR_EVENT, handleDiagnostic);
-    return () => window.removeEventListener(FIRESTORE_ERROR_EVENT, handleDiagnostic);
-  }, []);
-
-  const handleFileUpload = async (file: File) => {
-    const fileName = file.name.toLowerCase();
-    if (fileName.endsWith('.csv') || fileName.endsWith('.xlsx') || fileName.endsWith('.xls')) {
-      const reader = new FileReader();
-      reader.onload = async (evt) => {
-        try {
-          const buffer = evt.target?.result;
-          if (!buffer) return;
-
-          const XLSX = await import('xlsx');
-          const wb = XLSX.read(buffer, { type: 'binary' });
-          const firstSheet = wb.SheetNames[0];
-          const rawRows = XLSX.utils.sheet_to_json(wb.Sheets[firstSheet]) as any[];
-
-          const parsedList = rawRows
-            .map(row => mapSpreadsheetRow(row))
-            .filter((t): t is NonNullable<typeof t> => t !== null);
-
-          if (parsedList.length === 0) {
-            setError('Nenhuma transação válida encontrada na planilha.');
-            return;
-          }
-
-          const batch = writeBatch(db);
-          parsedList.forEach(t => {
-            const docRef = doc(collection(db, 'transactions'));
-            batch.set(docRef, { ...t, uid: user!.uid, date: serverTimestamp() });
-          });
-          await batch.commit();
-          await recalculateBalances(user!.uid);
-          setIsIngestionHubOpen(false);
-        } catch (e: any) {
-          setError(`Erro ao processar planilha: ${e.message}`);
-        }
-      };
-      reader.readAsBinaryString(file);
-      return;
-    }
-
-    setIsProcessingIA(true);
-    setIsIngestionHubOpen(false);
-    try {
-      const reader = new FileReader();
-      reader.onload = async () => {
-        try {
-          const base64Data = (reader.result as string).split(',')[1];
-          const result = await extractDocument(getGeminiApiKey(), {
-            data: base64Data,
-            mimeType: file.type
-          });
-          setPendingTransaction({
-            label: result.label || 'Transação Importada',
-            value: result.value || 0,
-            type: result.type || 'out',
-            categoria_primaria: result.category || 'Geral'
-          });
-          setIsReviewModalOpen(true);
-        } catch (err) {
-          handleAiError(err);
-        } finally {
-          setIsProcessingIA(false);
-        }
-      };
-      reader.readAsDataURL(file);
-    } catch (err) {
-      handleAiError(err);
-      setIsProcessingIA(false);
-    }
-  };
+    setError(getAiErrorMessage(e, settings?.language || 'pt-BR'));
+  }, [settings?.language, openDrawer, setApiKeyError, setError]);
 
   const handleUniversalIngestion = async (type: 'scanner' | 'upload' | 'spreadsheet' | 'manual') => {
     if (type === 'manual') {
@@ -497,193 +111,16 @@ export default function ZenithApp() {
     }
     input.onchange = (e: any) => {
       const file = e.target.files?.[0];
-      if (file) handleFileUpload(file);
+      if (file) {
+        setIsIngestionHubOpen(false);
+        handleFileUpload(file).then(() => {
+          if (!file.name.toLowerCase().endsWith('.csv') && !file.name.toLowerCase().endsWith('.xlsx') && !file.name.toLowerCase().endsWith('.xls')) {
+            setIsReviewModalOpen(true);
+          }
+        });
+      }
     };
     input.click();
-  };
-
-  const confirmPendingTransaction = async (updatedTx?: any) => {
-    const dataToSave = updatedTx || pendingTransaction;
-    if (!dataToSave || !user) return;
-    try {
-      const validated = TransactionSchema.parse({
-        label: dataToSave.label,
-        value: Number(dataToSave.value),
-        type: dataToSave.type,
-        categoria_primaria: dataToSave.categoria_primaria,
-        etiqueta_personalizada: dataToSave.etiqueta_personalizada,
-        metodo_origem: dataToSave.metodo_origem,
-        date: new Date()
-      });
-
-      const newTxRef = doc(collection(db, 'transactions'));
-      await setDoc(newTxRef, {
-        ...validated,
-        uid: user.uid,
-        date: serverTimestamp()
-      });
-      await recalculateBalances(user.uid);
-      setIsReviewModalOpen(false);
-      setPendingTransaction(null);
-    } catch (e) {
-      if (e instanceof z.ZodError) {
-        setError(e.issues[0]?.message || 'Dados inválidos');
-      } else {
-        handleFirestoreError(e, OperationType.WRITE, 'transactions');
-      }
-    }
-  };
-
-  const recalculateBalances = async (userId: string) => {
-    try {
-      const q = query(collection(db, 'transactions'), where('uid', '==', userId), orderBy('date', 'asc'));
-      const snap = await getDocs(q);
-      let currentBal = 0;
-      const batch = writeBatch(db);
-      snap.docs.forEach((d) => {
-        const tx = d.data() as Transaction;
-        if (tx.type === 'in' || tx.type === 'yield') {
-          currentBal += tx.value;
-        } else if (tx.type === 'out') {
-          currentBal -= tx.value;
-        }
-        batch.update(d.ref, { partialBalance: currentBal });
-      });
-      await batch.commit();
-    } catch (e) {
-      handleFirestoreError(e, OperationType.WRITE, 'recalculate_balances');
-    }
-  };
-
-  const t = useCallback((pt: string, en: string) => {
-    return settings?.language === 'en-US' ? en : pt;
-  }, [settings?.language]);
-
-  const getGeminiApiKey = useCallback(() => {
-    const key = geminiApiKey.trim();
-    if (!key) {
-      throw new MissingApiKeyError();
-    }
-    return key;
-  }, [geminiApiKey]);
-
-  const handleAiError = useCallback((e: unknown) => {
-    if (e instanceof MissingApiKeyError || e instanceof InvalidApiKeyError) {
-      setApiKeyError(e.message);
-      openDrawer('ai_key');
-      return;
-    }
-    setError(getAiErrorMessage(e, settings?.language || 'pt-BR'));
-  }, [settings?.language, openDrawer]);
-
-  const handleAcceptDDA = async (dda: DDA) => {
-    try {
-      await updateDoc(doc(db, 'ddas', dda.id), { status: 'accepted' });
-      const txRef = doc(collection(db, 'transactions'));
-      await setDoc(txRef, {
-        label: `DDA: ${dda.beneficiary}`,
-        value: dda.value,
-        type: 'out',
-        date: serverTimestamp(),
-        uid: user!.uid
-      });
-    } catch (e) {
-      handleFirestoreError(e, OperationType.WRITE, 'transactions');
-    }
-  };
-
-  const handleRejectDDA = async (dda: DDA) => {
-    try {
-      await updateDoc(doc(db, 'ddas', dda.id), { status: 'rejected' });
-    } catch (e) {
-      handleFirestoreError(e, OperationType.WRITE, 'ddas');
-    }
-  };
-
-  const handleGoogleLogin = async () => {
-    try {
-      await signInWithPopup(auth, googleProvider);
-    } catch (e: any) {
-      setError(e.message);
-    }
-  };
-
-  const handleEmailLogin = async (email: string, pass: string) => {
-    try {
-      await signInWithEmailAndPassword(auth, email, pass);
-    } catch (e: any) {
-      setError(e.message);
-    }
-  };
-
-  const handleRegister = async (name: string, email: string, pass: string) => {
-    try {
-      const res = await createUserWithEmailAndPassword(auth, email, pass);
-      await updateProfile(res.user, { displayName: name });
-    } catch (e: any) {
-      setError(e.message);
-    }
-  };
-
-  // User Rules Listener
-  useEffect(() => {
-    if (!user) {
-      setUserRules([]);
-      return;
-    }
-    const q = query(collection(db, 'user_rules'), where('uid', '==', user.uid));
-    const unsub = onSnapshot(q, (snap) => {
-      setUserRules(snap.docs.map(d => ({ id: d.id, ...d.data() })));
-    });
-    return unsub;
-  }, [user]);
-
-  const handleLogout = async () => {
-    try {
-      await signOut(auth);
-    } catch (e) {
-      console.error('Logout error:', e);
-    }
-  };
-
-  const handleSaveProfile = useCallback(async (data: any) => {
-    if (!user) return;
-    const { uid: _uid, pix_key: _pixKey, ...updateData } = data;
-    await updateDoc(doc(db, 'users', user.uid), updateData)
-      .catch(e => handleFirestoreError(e, OperationType.UPDATE, `users/${user.uid}`));
-  }, [user]);
-
-  const handleSaveApiKey = useCallback((key: string) => {
-    const trimmed = key.trim();
-    if (!trimmed) return;
-    try {
-      localStorage.setItem(GEMINI_API_KEY_STORAGE, trimmed);
-    } catch {
-      // Memory fallback
-    }
-    setGeminiApiKey(trimmed);
-    setApiKeyError(null);
-    setError(null);
-  }, []);
-
-  const moveToTrash = async (item: any, collectionName: string) => {
-    try {
-      if (!user) return;
-      const batch = writeBatch(db);
-      const trashRef = doc(collection(db, 'trash'));
-      batch.set(trashRef, {
-        originalId: item.id,
-        originalCollection: collectionName,
-        data: item,
-        deletedAt: serverTimestamp(),
-        uid: user.uid
-      });
-      batch.delete(doc(db, collectionName, item.id));
-
-      await batch.commit();
-    } catch (e) {
-      handleFirestoreError(e, OperationType.DELETE, `${collectionName}/${item.id}`);
-    }
   };
 
   if (!isAuthReady) {
@@ -814,14 +251,7 @@ export default function ZenithApp() {
               transactions={transactions}
               ddas={ddas}
               privacyMode={privacyMode}
-              onTogglePrivacy={() => {
-                const newVal = !privacyMode;
-                setPrivacyMode(newVal);
-                if (user) {
-                  updateDoc(doc(db, 'settings', user.uid), { privacyMode: newVal })
-                    .catch(e => handleFirestoreError(e, OperationType.WRITE, `settings/${user.uid}`));
-                }
-              }}
+              onTogglePrivacy={togglePrivacyMode}
               metrics={metrics}
               chartData={chartData}
               projectionData={projectionData}
@@ -842,16 +272,8 @@ export default function ZenithApp() {
               onSelectAsset={setSelectedAsset}
               onAcceptDDA={handleAcceptDDA}
               onRejectDDA={handleRejectDDA}
-              onUpdateAsset={async (id: any, data: any) => {
-                await updateDoc(doc(db, "assets", id), data).catch((e: any) => handleFirestoreError(e, OperationType.UPDATE, "assets/" + id));
-              }}
-              onCreateAsset={async (data: any) => {
-                await addDoc(collection(db, "assets"), {
-                  ...data,
-                  uid: auth.currentUser?.uid,
-                  createdAt: serverTimestamp()
-                }).catch((e: any) => handleFirestoreError(e, OperationType.CREATE, "assets"));
-              }}
+              onUpdateAsset={updateAsset}
+              onCreateAsset={createAsset}
               t={t}
             />
           )}
@@ -919,11 +341,11 @@ export default function ZenithApp() {
               privacyMode={privacyMode}
               language={settings.language}
               onDelete={async (id) => {
-                await deleteDoc(doc(db, 'assets', id)).catch(e => handleFirestoreError(e, OperationType.DELETE, `assets/${id}`));
+                await deleteAsset(id);
                 setSelectedAsset(null);
               }}
-              onSave={async (id, data) => {
-                await updateDoc(doc(db, 'assets', id), data).catch(e => handleFirestoreError(e, OperationType.UPDATE, `assets/${id}`));
+              onSave={async (id, updateData) => {
+                await updateAsset(id, updateData);
                 setSelectedAsset(null);
               }}
             />
@@ -947,18 +369,20 @@ export default function ZenithApp() {
               user={user}
               getApiKey={getGeminiApiKey}
               onApiKeyError={handleAiError}
-              onAdd={async (data) => {
-                const newAssetRef = doc(collection(db, 'assets'));
-                await setDoc(newAssetRef, { ...data, uid: user.uid, createdAt: serverTimestamp() }).catch(e => handleFirestoreError(e, OperationType.CREATE, 'assets'));
+              onAdd={async (assetData) => {
+                await createAsset(assetData);
                 setIsAddingAsset(false);
               }}
             />
           )}
 
-          {/* PÁGINA DETALHES CATEGORIA */}
+          {/* Category Detail Modal */}
           <CategoryDetailModal 
             isOpen={isCategoryDetailsOpen}
-            onClose={() => setIsCategoryDetailsOpen(false)}
+            onClose={() => {
+              setIsCategoryDetailsOpen(false);
+              setActiveCategoryDetail(null);
+            }}
             activeCategoryDetail={activeCategoryDetail}
             timeFilter={timeFilter}
             setTimeFilter={setTimeFilter}
@@ -974,15 +398,8 @@ export default function ZenithApp() {
             <AddTransactionModal 
               onClose={() => setIsAddingTransaction(false)}
               language={settings.language}
-              onAdd={async (data) => {
-                const newTxRef = doc(collection(db, 'transactions'));
-                const txData = { 
-                  ...data, 
-                  uid: user.uid, 
-                  date: data.date ? Timestamp.fromDate(new Date(data.date + 'T12:00:00')) : serverTimestamp() 
-                };
-                await setDoc(newTxRef, txData).catch(e => handleFirestoreError(e, OperationType.CREATE, 'transactions'));
-                await recalculateBalances(user.uid);
+              onAdd={async (txData) => {
+                await addTransaction(txData);
                 setIsAddingTransaction(false);
               }}
             />
@@ -997,26 +414,8 @@ export default function ZenithApp() {
                 setIsEditingTransaction(false);
                 setSelectedTransaction(null);
               }}
-              onAdd={async (data) => {
-                const txRef = doc(db, 'transactions', selectedTransaction.id);
-                const txData = { 
-                  ...data, 
-                  uid: user.uid, 
-                  date: data.date ? Timestamp.fromDate(new Date(data.date + 'T12:00:00')) : serverTimestamp() 
-                };
-                
-                if (selectedTransaction.categoria_primaria !== data.categoria_primaria) {
-                  const ruleRef = doc(collection(db, 'user_rules'));
-                  await setDoc(ruleRef, {
-                    uid: user.uid,
-                    pattern: selectedTransaction.label,
-                    category: data.categoria_primaria,
-                    createdAt: serverTimestamp()
-                  }).catch(e => console.error("Error saving rule:", e));
-                }
-
-                await updateDoc(txRef, txData).catch(e => handleFirestoreError(e, OperationType.UPDATE, `transactions/${selectedTransaction.id}`));
-                await recalculateBalances(user.uid);
+              onAdd={async (txData) => {
+                await updateTransaction(selectedTransaction, txData);
                 setIsEditingTransaction(false);
                 setSelectedTransaction(null);
               }}
@@ -1082,7 +481,10 @@ export default function ZenithApp() {
             <ReviewModal 
               transaction={pendingTransaction}
               isProcessing={isProcessingIA}
-              onConfirm={confirmPendingTransaction}
+              onConfirm={async (updatedTx) => {
+                await confirmPendingTransaction(updatedTx);
+                setIsReviewModalOpen(false);
+              }}
               onCancel={() => {
                 setIsReviewModalOpen(false);
                 setPendingTransaction(null);
