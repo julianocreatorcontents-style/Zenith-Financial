@@ -1,4 +1,4 @@
-import React, { useMemo, useCallback } from 'react';
+import React, { useState, useMemo, useCallback } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   Eye,
@@ -9,7 +9,8 @@ import {
   Landmark,
   Car,
   ArrowUpRight,
-  ArrowRightLeft
+  ArrowRightLeft,
+  TrendingUp,
 } from 'lucide-react';
 import {
   ResponsiveContainer,
@@ -26,6 +27,7 @@ import {
   Cell
 } from 'recharts';
 import type { MarketRateState } from '../lib/adapters/marketRateService';
+import { calculateNetWorthProjection } from '../lib/adapters/netWorthProjection';
 import { Asset, Transaction, DDA, Settings, ChartSlot } from '../types/app';
 import {
   DDASuggestion,
@@ -111,6 +113,18 @@ export const HomeView: React.FC<HomeViewProps> = ({
   onCreateAsset,
   t
 }) => {
+  const [monthlyContribution, setMonthlyContribution] = useState<number>(0);
+
+  const computedProjectionData = useMemo(() => {
+    if (evolutionView !== 'projecao') return projectionData;
+    return calculateNetWorthProjection({
+      assets,
+      transactions,
+      cdiAnnualPercent: marketRate.cdiAnnualPercent,
+      monthlyContribution,
+    });
+  }, [evolutionView, assets, transactions, marketRate.cdiAnnualPercent, monthlyContribution, projectionData]);
+
   const resolveStyle = useCallback((catId: string, propertyName: string, defaultValue?: any) => {
     const config = settings?.zenith_config;
     if (!config) return defaultValue !== undefined ? defaultValue : 'var(--accent)';
@@ -334,7 +348,7 @@ export const HomeView: React.FC<HomeViewProps> = ({
     switch (id) {
       case 'CHART_EVOL_PATRIMONIO': {
         const isProjection = evolutionView === 'projecao';
-        const evolutionData = isProjection ? projectionData : chartData;
+        const evolutionData = isProjection ? computedProjectionData : chartData;
         const activeDataKey = isProjection && projectionTaxMode === 'liquido' ? 'valueNet' : 'value';
         const comparisonDataKey = isProjection
           ? (projectionTaxMode === 'liquido' ? 'value' : 'valueNet')
@@ -396,6 +410,11 @@ export const HomeView: React.FC<HomeViewProps> = ({
                                       ? t('Projeção líquida (com IR regressivo e IOF)', 'Net projection (with regressive IR & IOF)')
                                       : t('Projeção bruta pelas taxas dos investimentos', 'Gross projection based on investment rates')}
                                   </p>
+                                  {data.contributedTotal > 0 && (
+                                    <p className="text-[9px] text-[var(--text-muted)] font-mono">
+                                      {t('Aportes acumulados:', 'Cumulative contributions:')} {privacyMode ? '••••••' : Number(data.contributedTotal).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                                    </p>
+                                  )}
                                 </div>
                               )}
                               {!isProjection && predictiveEnabled && data.predicted != null && (
@@ -803,20 +822,36 @@ export const HomeView: React.FC<HomeViewProps> = ({
           </span>
           <div className="flex flex-wrap items-center gap-1.5">
             {evolutionView === 'projecao' && (
-              <div className="flex shrink-0 rounded-xl border border-[var(--border-card)] bg-[var(--bg-app)] p-0.5">
-                <button
-                  onClick={() => setProjectionTaxMode('liquido')}
-                  className={`rounded-lg px-2 py-1 text-[9px] font-bold uppercase tracking-wider transition-colors ${projectionTaxMode === 'liquido' ? 'bg-[var(--accent)] text-[var(--bg-app)]' : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'}`}
-                >
-                  {t('Líquido', 'Net')}
-                </button>
-                <button
-                  onClick={() => setProjectionTaxMode('bruto')}
-                  className={`rounded-lg px-2 py-1 text-[9px] font-bold uppercase tracking-wider transition-colors ${projectionTaxMode === 'bruto' ? 'bg-[var(--accent)] text-[var(--bg-app)]' : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'}`}
-                >
-                  {t('Bruto', 'Gross')}
-                </button>
-              </div>
+              <>
+                <div className="flex shrink-0 rounded-xl border border-[var(--border-card)] bg-[var(--bg-app)] p-0.5">
+                  <button
+                    onClick={() => setProjectionTaxMode('liquido')}
+                    className={`rounded-lg px-2 py-1 text-[9px] font-bold uppercase tracking-wider transition-colors ${projectionTaxMode === 'liquido' ? 'bg-[var(--accent)] text-[var(--bg-app)]' : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'}`}
+                  >
+                    {t('Líquido', 'Net')}
+                  </button>
+                  <button
+                    onClick={() => setProjectionTaxMode('bruto')}
+                    className={`rounded-lg px-2 py-1 text-[9px] font-bold uppercase tracking-wider transition-colors ${projectionTaxMode === 'bruto' ? 'bg-[var(--accent)] text-[var(--bg-app)]' : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'}`}
+                  >
+                    {t('Bruto', 'Gross')}
+                  </button>
+                </div>
+                <div className="flex items-center gap-1.5 bg-[var(--bg-app)] border border-[var(--border-card)] rounded-xl px-2 py-1">
+                  <TrendingUp size={10} className="text-[var(--accent)] shrink-0" />
+                  <span className="text-[9px] font-bold text-[var(--text-muted)] uppercase tracking-wider">{t('Aporte/mês', 'Monthly')}</span>
+                  <input
+                    type="number"
+                    min={0}
+                    step={100}
+                    value={monthlyContribution || ''}
+                    onChange={(e) => setMonthlyContribution(Math.max(0, Number(e.target.value) || 0))}
+                    placeholder="0"
+                    className="w-16 bg-transparent text-[9px] font-mono font-bold text-[var(--text-primary)] text-right outline-none"
+                  />
+                  <span className="text-[9px] text-[var(--text-muted)]">R$</span>
+                </div>
+              </>
             )}
             <div className="flex shrink-0 rounded-xl border border-[var(--border-card)] bg-[var(--bg-app)] p-0.5">
               <button

@@ -3,6 +3,7 @@ import type { RawAssetDoc } from './assetToInvestment';
 import { YieldCalculator } from '../../domain/yield/YieldCalculator';
 import { IncomeTaxPolicy } from '../../domain/tax/IncomeTaxPolicy';
 import { IofPolicy } from '../../domain/tax/IofPolicy';
+import { Money } from '../../domain/money/Money';
 import type { Investment } from '../../domain/investment/Investment';
 import type { YieldPolicy } from '../../domain/yield/YieldPolicy';
 import { calculateNetWorth } from '../finance';
@@ -10,6 +11,13 @@ import { calculateNetWorth } from '../finance';
 export const DEFAULT_CDI_ANNUAL_PERCENT = 13.65;
 
 const MS_PER_DAY = 86_400_000;
+
+const DEFAULT_CONTRIBUTION_POLICY: YieldPolicy = {
+  indexer: 'CDI',
+  rateType: 'PERCENT_INDEXER',
+  dayCountConvention: 'CALENDAR_DAYS_365',
+  rateTiers: [{ upTo: null, baseRateValue: 100, bonusRateValue: 0 }],
+};
 
 const MONTHS_SHORT = [
   'JAN', 'FEV', 'MAR', 'ABR', 'MAI', 'JUN',
@@ -27,6 +35,7 @@ export interface NetWorthProjectionPoint {
   valueNet: number;
   date: string;
   projected: boolean;
+  contributedTotal?: number;
 }
 
 export interface NetWorthProjectionInput {
@@ -35,6 +44,7 @@ export interface NetWorthProjectionInput {
   cdiAnnualPercent?: number;
   months?: number;
   from?: Date;
+  monthlyContribution?: number;
 }
 
 const roundCurrency = (value: number) => Math.round(value * 100) / 100;
@@ -112,6 +122,7 @@ export function calculateNetWorthProjection(
     cdiAnnualPercent = DEFAULT_CDI_ANNUAL_PERCENT,
     months = 12,
     from = new Date(),
+    monthlyContribution = 0,
   } = input;
 
   const today = startOfLocalDay(from);
@@ -136,10 +147,12 @@ export function calculateNetWorthProjection(
       valueNet: todayValue,
       date: `Hoje · ${day} de ${MONTHS_SHORT[today.getMonth()]}`,
       projected: false,
+      contributedTotal: 0,
     },
   ];
 
   const safeMonths = Math.max(0, Math.floor(months));
+  const safeContribution = Math.max(0, Number(monthlyContribution) || 0);
 
   for (let offset = 1; offset <= safeMonths; offset++) {
     const target = new Date(today.getFullYear(), today.getMonth() + offset, 0);
@@ -175,15 +188,48 @@ export function calculateNetWorthProjection(
       );
     }
 
+    // Projeção de aportes recorrentes mensais (se informados)
+    let contributionsGross = 0;
+    let contributionsNet = 0;
+
+    if (safeContribution > 0) {
+      for (let k = 1; k <= offset; k++) {
+        // Aporte realizado no início do mês k
+        const contributionDate = new Date(today.getFullYear(), today.getMonth() + k - 1, 1);
+        const days = Math.max(1, Math.round((target.getTime() - contributionDate.getTime()) / MS_PER_DAY));
+
+        // Bruto a 100% do CDI
+        contributionsGross += YieldCalculator.projectTiered(
+          Money.fromBRL(safeContribution),
+          cdiAnnualPercent,
+          DEFAULT_CONTRIBUTION_POLICY,
+          days,
+        ).toBRL();
+
+        // Líquido com IR regressivo + IOF
+        const irRate = IncomeTaxPolicy.rateFor(days);
+        const iofRate = days <= 29 ? IofPolicy.rateFor(days) : 0;
+        const netPolicy = buildNetPolicy(DEFAULT_CONTRIBUTION_POLICY, Math.min(irRate + iofRate, 1));
+        contributionsNet += YieldCalculator.projectTiered(
+          Money.fromBRL(safeContribution),
+          cdiAnnualPercent,
+          netPolicy,
+          days,
+        ).toBRL();
+      }
+    }
+
     const monthLabel = `${MONTHS_SHORT[target.getMonth()]}/${String(target.getFullYear()).slice(-2)}`;
     const dateLabel = `${MONTHS_FULL[target.getMonth()]} de ${target.getFullYear()}`;
+    const totalContributed = safeContribution * offset;
 
     points.push({
       name: monthLabel,
-      value: roundCurrency(nonInvestmentNetWorth + projectedGross),
-      valueNet: roundCurrency(nonInvestmentNetWorth + projectedNet),
+      value: roundCurrency(nonInvestmentNetWorth + projectedGross + contributionsGross),
+      valueNet: roundCurrency(nonInvestmentNetWorth + projectedNet + contributionsNet),
       date: `${dateLabel} · Projeção`,
       projected: true,
+      contributedTotal: totalContributed > 0 ? roundCurrency(totalContributed) : undefined,
     });
   }
 

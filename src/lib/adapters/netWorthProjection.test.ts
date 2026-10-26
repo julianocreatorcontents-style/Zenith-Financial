@@ -251,5 +251,41 @@ describe('calculateNetWorthProjection', () => {
 
     expect(seasonedNetYield).toBeGreaterThan(recentNetYield);
   });
+
+  it('projeta aportes recorrentes mensais acumulando principal e juros compostos', () => {
+    const from = new Date('2026-01-01T12:00:00');
+    const asset = makeAsset({ value: 10000 });
+
+    const withoutContributions = calculateNetWorthProjection({
+      assets: [asset],
+      months: 6,
+      from,
+      monthlyContribution: 0,
+    });
+
+    const withContributions = calculateNetWorthProjection({
+      assets: [asset],
+      months: 6,
+      from,
+      monthlyContribution: 1000,
+    });
+
+    // Ponto Hoje deve permanecer inalterado (R$ 10.000)
+    expect(withContributions[0]?.value).toBe(10000);
+    expect(withContributions[0]?.valueNet).toBe(10000);
+
+    // Mês 1: deve ter pelo menos 1000 a mais que sem aportes
+    const diffMonth1 = (withContributions[1]?.value ?? 0) - (withoutContributions[1]?.value ?? 0);
+    expect(diffMonth1).toBeGreaterThanOrEqual(1000);
+
+    // Mês 6: deve acumular 6 aportes (R$ 6.000 de principal + juros)
+    expect(withContributions[6]?.contributedTotal).toBe(6000);
+    const diffMonth6 = (withContributions[6]?.value ?? 0) - (withoutContributions[6]?.value ?? 0);
+    expect(diffMonth6).toBeGreaterThan(6000);
+
+    // O valor líquido com aportes deve ser menor que o bruto (devido ao IR), mas superior ao principal aportado
+    expect(withContributions[6]?.valueNet).toBeLessThan(withContributions[6]?.value ?? 0);
+    expect(withContributions[6]?.valueNet).toBeGreaterThan(16000);
+  });
 });
 
