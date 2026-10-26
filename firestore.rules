@@ -70,6 +70,13 @@ service cloud.firestore {
       allow update: if isDocOwner() && isWritingOwnData();
     }
 
+    // Notificações do usuário
+    match /notifications/{notificationId} {
+      allow read, delete: if isDocOwner();
+      allow create: if isWritingOwnData();
+      allow update: if isDocOwner() && isWritingOwnData();
+    }
+
     // Bloqueia qualquer outra rota ou coleção não autorizada
     match /{document=**} {
       allow read, write: if false;

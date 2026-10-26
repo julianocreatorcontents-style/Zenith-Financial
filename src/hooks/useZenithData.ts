@@ -257,9 +257,15 @@ export function useZenithData() {
   // 7. Notifications Listener
   useEffect(() => {
     if (!user) return;
-    const q = query(collection(db, 'notifications'), where('uid', '==', user.uid), orderBy('createdAt', 'desc'), limit(10));
+    const q = query(collection(db, 'notifications'), where('uid', '==', user.uid));
     const unsub = onSnapshot(q, (snap) => {
-      setNotifications(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+      const items = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      items.sort((a: any, b: any) => {
+        const tA = a.createdAt?.toMillis ? a.createdAt.toMillis() : (a.createdAt ? new Date(a.createdAt).getTime() : 0);
+        const tB = b.createdAt?.toMillis ? b.createdAt.toMillis() : (b.createdAt ? new Date(b.createdAt).getTime() : 0);
+        return tB - tA;
+      });
+      setNotifications(items.slice(0, 10));
     }, (e) => handleFirestoreError(e, OperationType.LIST, 'notifications'));
     return unsub;
   }, [user]);
