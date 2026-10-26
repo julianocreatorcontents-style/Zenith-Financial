@@ -1,5 +1,7 @@
 import React, { useState } from 'react';
 import { Landmark, Sparkles } from 'lucide-react';
+import { assetToInvestment } from '../lib/adapters/assetToInvestment';
+import { TaxAlertService } from '../domain/tax/TaxAlertService';
 
 export interface InvestmentsViewProps {
   assets: any[];
@@ -43,27 +45,40 @@ export function InvestmentsView({
 
       {activeTab === 'Ativos' && (
         <div className="grid grid-cols-1 gap-3">
-          {filteredAssets.map((asset: any, idx: number) => (
-            <button 
-              key={`asset-item-${asset.id}-${idx}`}
-              onClick={() => onAssetClick(asset)}
-              className="bg-[var(--bg-card)] border border-[var(--border-card)] p-4 rounded-[24px] flex items-center justify-between hover:border-[var(--accent)] transition-all group text-left"
-            >
-              <div className="flex items-center gap-4">
-                <div className="w-10 h-10 rounded-xl bg-[var(--bg-app)] flex items-center justify-center text-[var(--accent)] group-hover:scale-110 transition-transform">
-                  <Landmark size={20} />
+          {filteredAssets.map((asset: any, idx: number) => {
+            const inv = assetToInvestment(asset);
+            const alerts = inv ? TaxAlertService.getAlertsForInvestment(inv) : [];
+            const primaryAlert = alerts[0];
+
+            return (
+              <button 
+                key={`asset-item-${asset.id}-${idx}`}
+                onClick={() => onAssetClick(asset)}
+                className="bg-[var(--bg-card)] border border-[var(--border-card)] p-4 rounded-[24px] flex items-center justify-between hover:border-[var(--accent)] transition-all group text-left"
+              >
+                <div className="flex items-center gap-4">
+                  <div className="w-10 h-10 rounded-xl bg-[var(--bg-app)] flex items-center justify-center text-[var(--accent)] group-hover:scale-110 transition-transform">
+                    <Landmark size={20} />
+                  </div>
+                  <div>
+                    <h4 className="text-sm font-medium text-[var(--text-primary)]">{asset.name}</h4>
+                    <div className="flex items-center gap-2 mt-0.5">
+                      <p className="text-[10px] text-[var(--text-muted)] uppercase font-bold">{asset.emissor || 'Zenith Core'}</p>
+                      {primaryAlert && (
+                        <span className="inline-flex items-center gap-1 text-[9px] font-bold text-[var(--accent)] bg-[var(--accent)]/10 px-2 py-0.5 rounded-full border border-[var(--accent)]/20">
+                          {primaryAlert.type === 'IOF_ZERO' ? '🛡️ IOF' : '📉 IR'} · {primaryAlert.daysRemaining}d
+                        </span>
+                      )}
+                    </div>
+                  </div>
                 </div>
-                <div>
-                  <h4 className="text-sm font-medium text-[var(--text-primary)]">{asset.name}</h4>
-                  <p className="text-[10px] text-[var(--text-muted)] uppercase font-bold">{asset.emissor || 'Zenith Core'}</p>
+                <div className="text-right">
+                  <p className="text-sm font-mono font-bold text-[var(--text-primary)]">{(asset.value ?? 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</p>
+                  <p className="text-[10px] text-[var(--accent)] font-bold">+1.2%</p>
                 </div>
-              </div>
-              <div className="text-right">
-                <p className="text-sm font-mono font-bold text-[var(--text-primary)]">{(asset.value ?? 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</p>
-                <p className="text-[10px] text-[var(--accent)] font-bold">+1.2%</p>
-              </div>
-            </button>
-          ))}
+              </button>
+            );
+          })}
           {filteredAssets.length === 0 && (
             <div className="py-20 text-center border border-dashed border-[var(--border-card)] rounded-[40px] flex flex-col items-center gap-4">
               <p className="text-[var(--text-muted)] text-sm">{t("Nenhum investimento encontrado.", "No investments found.")}</p>

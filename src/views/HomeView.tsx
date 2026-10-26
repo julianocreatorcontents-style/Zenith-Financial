@@ -306,6 +306,7 @@ export const HomeView: React.FC<HomeViewProps> = ({
             assets={assets as any}
             cdiAnnualPercent={marketRate.cdiAnnualPercent}
             rateSource={marketRate.source}
+            language={settings.language}
             forceOpenCreateModal={forceCreateInvestment}
             onCloseCreateModal={() => setForceCreateInvestment(false)}
             onUpdateAsset={onUpdateAsset}

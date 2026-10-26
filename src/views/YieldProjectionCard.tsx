@@ -2,6 +2,8 @@ import { useMemo, useState, useEffect } from 'react';
 import { YieldCalculator } from '../domain/yield/YieldCalculator';
 import { IncomeTaxPolicy } from '../domain/tax/IncomeTaxPolicy';
 import { IofPolicy } from '../domain/tax/IofPolicy';
+import { TaxAlertService } from '../domain/tax/TaxAlertService';
+import type { TaxRegressiveAlert } from '../domain/tax/TaxAlertService';
 import { assetToInvestment } from '../lib/adapters/assetToInvestment';
 import type { RawAssetDoc } from '../lib/adapters/assetToInvestment';
 import type { Investment } from '../domain/investment/Investment';
@@ -13,6 +15,7 @@ interface YieldProjectionCardProps {
   assets?: RawAssetDoc[];
   cdiAnnualPercent?: number;
   rateSource?: 'bcb' | 'cache' | 'default';
+  language?: string;
   onUpdateAsset?: (id: string, data: any) => Promise<void>;
   onCreateAsset?: (data: any) => Promise<void>;
   forceOpenCreateModal?: boolean;
@@ -35,11 +38,13 @@ export function YieldProjectionCard({
   assets,
   cdiAnnualPercent = 13.65,
   rateSource = 'default',
+  language = 'pt-BR',
   onUpdateAsset,
   onCreateAsset,
   forceOpenCreateModal,
   onCloseCreateModal,
 }: YieldProjectionCardProps) {
+  const isEn = language === 'en-US';
   const [modalOpen, setModalOpen] = useState(false);
   const [modalMode, setModalMode] = useState<'create' | 'edit'>('edit');
   const [selectedAssetId, setSelectedAssetId] = useState<string | null>(null);
@@ -134,12 +139,15 @@ export function YieldProjectionCard({
         if (inv.policy.rateTiers.length > 1) rateStr += ` (até ${formatBRL(tier1?.upTo?.toBRL() || 0)})`;
       }
 
+      const taxAlerts = TaxAlertService.getAlertsForInvestment(inv, today);
+
       return {
         id: inv.id, name: inv.name, balance: inv.currentBalance.toBRL(), rateStr,
         dailyBruto: grossDaily.toBRL(), dailyLiquido: netDaily.toBRL(),
         pMonthNet: pMonthNet.toBRL(), p1YearNet: p1YearNet.toBRL(),
         profitMonth: profitMonth.toBRL(), profitYear: profitYear.toBRL(),
         showBoth: inv.taxDisplayMode === 'NET', irRate, futureIrRate, days,
+        taxAlerts,
       };
     });
   }, [normalizedAssets, cdiAnnualPercent]);
@@ -219,6 +227,36 @@ export function YieldProjectionCard({
                   <div className="text-[9px] text-[var(--text-muted)] font-mono mt-0.5">Saldo: {formatBRL(p.p1YearNet)}</div>
                 </div>
               </div>
+
+              {p.taxAlerts && p.taxAlerts.length > 0 && (
+                <div className="mt-2.5 pt-2 border-t border-[var(--border-card)]/50 space-y-1.5">
+                  {p.taxAlerts.map((alert: TaxRegressiveAlert, idx: number) => (
+                    <div
+                      key={`${p.id}-tax-alert-${idx}`}
+                      className="rounded-lg bg-[var(--accent)]/10 border border-[var(--accent)]/20 p-2 text-left"
+                    >
+                      <div className="flex items-center justify-between gap-1">
+                        <span className="text-[10px] font-bold text-[var(--accent)] flex items-center gap-1.5">
+                          <span>{alert.type === 'IOF_ZERO' ? '🛡️' : '📉'}</span>
+                          <span>{alert.title[isEn ? 'en' : 'pt']}</span>
+                        </span>
+                        <span className="text-[8px] font-mono px-1.5 py-0.5 rounded bg-[var(--accent)]/20 text-[var(--text-primary)] font-bold">
+                          {alert.daysRemaining} {isEn ? 'd left' : 'd rest.'}
+                        </span>
+                      </div>
+                      <p className="text-[9px] text-[var(--text-muted)] leading-tight mt-1">
+                        {alert.description[isEn ? 'en' : 'pt']}
+                      </p>
+                      {alert.estimatedTaxSavings.toBRL() > 0 && (
+                        <p className="text-[8px] font-mono text-[var(--text-primary)] font-semibold mt-1">
+                          ✨ {isEn ? 'Est. tax savings if held:' : 'Economia estimada ao aguardar:'}{' '}
+                          <span className="text-[var(--accent)] font-bold">+{formatBRL(alert.estimatedTaxSavings.toBRL())}</span>
+                        </p>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
 
               <p className="text-[9px] text-[var(--text-muted)] mt-2 italic text-right">
                 {p.showBoth ? `IR ${(p.irRate * 100).toFixed(1)}%` : `Bruto · IR no resgate · ${p.days} dias`}

@@ -6,6 +6,8 @@ export { Rate } from './rate/Rate';
 export { YieldCalculator } from './yield/YieldCalculator';
 export { IncomeTaxPolicy } from './tax/IncomeTaxPolicy';
 export { IofPolicy } from './tax/IofPolicy';
+export { TaxAlertService } from './tax/TaxAlertService';
+export type { TaxRegressiveAlert, TaxAlertType } from './tax/TaxAlertService';
 export { ok, err, isOk, isErr, map, unwrap, unwrapOr } from './shared/Result';
 
 export type {
