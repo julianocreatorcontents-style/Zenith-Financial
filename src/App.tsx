@@ -56,6 +56,8 @@ import Modal from './components/ui/Modal';
 import { checkDuplicates } from './lib/dataUtils';
 import { YieldProjectionCard } from "./views/YieldProjectionCard";
 import { calculateNetWorthProjection } from "./lib/adapters/netWorthProjection";
+import { getCachedCdiRate, fetchLiveCdiRate } from "./lib/adapters/marketRateService";
+import type { MarketRateState } from "./lib/adapters/marketRateService";
 
 const StorageTrashView = lazy(() => import('./views/StorageTrashView'));
 const HeritageSettings = lazy(() =>
@@ -500,6 +502,17 @@ export default function ZenithApp() {
   const [isBiometryEnabled, setIsBiometryEnabled] = useState(false);
   const [chartFilterValue, setChartFilterValue] = useState<{ type: 'category' | 'asset' | null, value: string | null }>({ type: null, value: null });
   const [evolutionView, setEvolutionView] = useState<'historico' | 'projecao'>('historico');
+  const [marketRate, setMarketRate] = useState<MarketRateState>(getCachedCdiRate);
+
+  useEffect(() => {
+    let mounted = true;
+    fetchLiveCdiRate().then((res) => {
+      if (mounted) setMarketRate(res);
+    });
+    return () => {
+      mounted = false;
+    };
+  }, []);
 
   const filteredRecentTransactions = useMemo(() => {
     let filtered = [...transactions];
@@ -580,7 +593,8 @@ export default function ZenithApp() {
   const projectionData = useMemo(() => calculateNetWorthProjection({
     assets: assets as any,
     transactions,
-  }), [assets, transactions]);
+    cdiAnnualPercent: marketRate.cdiAnnualPercent,
+  }), [assets, transactions, marketRate.cdiAnnualPercent]);
 
   const portfolioAllocationPercent = useMemo(() => {
     const total = assets.reduce((acc, asset) => acc + (Number(asset?.value) || 0), 0);
@@ -1405,6 +1419,8 @@ export default function ZenithApp() {
         return (
           <YieldProjectionCard
             assets={assets as any}
+            cdiAnnualPercent={marketRate.cdiAnnualPercent}
+            rateSource={marketRate.source}
             forceOpenCreateModal={forceCreateInvestment}
             onCloseCreateModal={() => setForceCreateInvestment(false)}
             onUpdateAsset={async (id: any, data: any) => {

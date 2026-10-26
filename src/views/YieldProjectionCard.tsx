@@ -12,6 +12,7 @@ import type { InvestmentPolicyData } from '../components/InvestmentPolicyModal';
 interface YieldProjectionCardProps {
   assets?: RawAssetDoc[];
   cdiAnnualPercent?: number;
+  rateSource?: 'bcb' | 'cache' | 'default';
   onUpdateAsset?: (id: string, data: any) => Promise<void>;
   onCreateAsset?: (data: any) => Promise<void>;
   forceOpenCreateModal?: boolean;
@@ -30,7 +31,15 @@ function buildNetPolicy(policy: YieldPolicy, taxRate: number): YieldPolicy {
   return { ...policy, rateTiers: policy.rateTiers.map((t) => ({ upTo: t.upTo, baseRateValue: t.baseRateValue * (1 - taxRate), bonusRateValue: t.bonusRateValue * (1 - taxRate) })) };
 }
 
-export function YieldProjectionCard({ assets, cdiAnnualPercent = 13.65, onUpdateAsset, onCreateAsset, forceOpenCreateModal, onCloseCreateModal }: YieldProjectionCardProps) {
+export function YieldProjectionCard({
+  assets,
+  cdiAnnualPercent = 13.65,
+  rateSource = 'default',
+  onUpdateAsset,
+  onCreateAsset,
+  forceOpenCreateModal,
+  onCloseCreateModal,
+}: YieldProjectionCardProps) {
   const [modalOpen, setModalOpen] = useState(false);
   const [modalMode, setModalMode] = useState<'create' | 'edit'>('edit');
   const [selectedAssetId, setSelectedAssetId] = useState<string | null>(null);
@@ -156,7 +165,24 @@ export function YieldProjectionCard({ assets, cdiAnnualPercent = 13.65, onUpdate
           <h3 className="text-sm font-bold text-[var(--text-primary)]">Rendimento projetado</h3>
           <div className="flex items-center gap-3">
             {onCreateAsset && <button type="button" onClick={() => { setModalMode('create'); setSelectedAssetId(null); setModalOpen(true); }} className="text-[var(--text-muted)] hover:text-[var(--accent)] font-bold text-lg">+</button>}
-            <span className="text-[10px] uppercase tracking-widest text-[var(--text-muted)] font-mono">CDI {cdiAnnualPercent.toFixed(2)}%</span>
+            <span
+              className="text-[10px] uppercase tracking-widest text-[var(--text-muted)] font-mono flex items-center gap-1.5"
+              title={
+                rateSource === 'bcb'
+                  ? 'Taxa oficial BCB (tempo real)'
+                  : rateSource === 'cache'
+                  ? 'Taxa BCB em cache local'
+                  : 'Taxa de referência padrão'
+              }
+            >
+              <span>CDI {cdiAnnualPercent.toFixed(2)}%</span>
+              {rateSource === 'bcb' && (
+                <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+              )}
+              {rateSource === 'cache' && (
+                <span className="inline-block w-1.5 h-1.5 rounded-full bg-amber-500" />
+              )}
+            </span>
           </div>
         </div>
 
