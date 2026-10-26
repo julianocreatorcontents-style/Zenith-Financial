@@ -1,8 +1,78 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
+
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isDocOwner() {
+      return isAuthenticated() && resource.data.uid == request.auth.uid;
+    }
+
+    function isWritingOwnData() {
+      return isAuthenticated() && request.resource.data.uid == request.auth.uid;
+    }
+
+    // Perfil do usuário (id do documento = uid)
+    match /users/{userId} {
+      allow read, write: if isOwner(userId);
+    }
+
+    // Configurações do usuário (id do documento = uid)
+    match /settings/{userId} {
+      allow read, write: if isOwner(userId);
+    }
+
+    // Ativos patrimoniais e carteira
+    match /assets/{assetId} {
+      allow read, delete: if isDocOwner();
+      allow create: if isWritingOwnData();
+      allow update: if isDocOwner() && isWritingOwnData();
+    }
+
+    // Transações financeiras
+    match /transactions/{transactionId} {
+      allow read, delete: if isDocOwner();
+      allow create: if isWritingOwnData();
+      allow update: if isDocOwner() && isWritingOwnData();
+    }
+
+    // DDAs / Boletos eletrônicos
+    match /ddas/{ddaId} {
+      allow read, delete: if isDocOwner();
+      allow create: if isWritingOwnData();
+      allow update: if isDocOwner() && isWritingOwnData();
+    }
+
+    // Regras automáticas do usuário
+    match /user_rules/{ruleId} {
+      allow read, delete: if isDocOwner();
+      allow create: if isWritingOwnData();
+      allow update: if isDocOwner() && isWritingOwnData();
+    }
+
+    // Lixeira e recuperação de itens excluídos
+    match /trash/{trashId} {
+      allow read, delete: if isDocOwner();
+      allow create: if isWritingOwnData();
+      allow update: if isDocOwner() && isWritingOwnData();
+    }
+
+    // Parcelamentos
+    match /installments/{installmentId} {
+      allow read, delete: if isDocOwner();
+      allow create: if isWritingOwnData();
+      allow update: if isDocOwner() && isWritingOwnData();
+    }
+
+    // Bloqueia qualquer outra rota ou coleção não autorizada
     match /{document=**} {
-      allow read, write: if request.auth != null;
+      allow read, write: if false;
     }
   }
 }
