@@ -35,6 +35,7 @@ import {
   HomeInvestmentCard
 } from '../components/dashboard/MetricCards';
 import { YieldProjectionCard } from './YieldProjectionCard';
+import type { VisualSettings } from '../components/CardSettingsPanel';
 
 const BRL_FORMATTER = new Intl.NumberFormat('pt-BR', {
   style: 'currency',
@@ -48,6 +49,7 @@ const getTransactionCategory = (transaction: any) =>
   transaction?.categoria_primaria || transaction?.category || 'Outros';
 
 interface HomeViewProps {
+  visualSettings?: VisualSettings;
   user: any;
   settings: Settings;
   assets: Asset[];
@@ -110,7 +112,8 @@ export const HomeView: React.FC<HomeViewProps> = ({
   onRejectDDA,
   onUpdateAsset,
   onCreateAsset,
-  t
+  t,
+  visualSettings,
 }) => {
   const evolChartConfig = settings?.zenith_config?.charts?.['CHART_EVOL_PATRIMONIO'];
 
@@ -315,6 +318,7 @@ export const HomeView: React.FC<HomeViewProps> = ({
       case 'METRIC_RENDIMENTOS':
         return (
           <YieldProjectionCard
+          visualSettings={visualSettings}
             key={id}
             assets={assets as any}
             cdiAnnualPercent={marketRate.cdiAnnualPercent}

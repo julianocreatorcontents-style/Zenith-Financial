@@ -1,15 +1,16 @@
-import { useMemo, useState, useEffect } from 'react';
+import { useMemo, useState, useEffect, useRef } from 'react';
+import { ResponsiveContainer, AreaChart, Area, YAxis, XAxis, CartesianGrid } from 'recharts';
+import { ChevronDown } from 'lucide-react';
 import { YieldCalculator } from '../domain/yield/YieldCalculator';
 import { IncomeTaxPolicy } from '../domain/tax/IncomeTaxPolicy';
 import { IofPolicy } from '../domain/tax/IofPolicy';
-import { TaxAlertService } from '../domain/tax/TaxAlertService';
-import type { TaxRegressiveAlert } from '../domain/tax/TaxAlertService';
 import { assetToInvestment } from '../lib/adapters/assetToInvestment';
 import type { RawAssetDoc } from '../lib/adapters/assetToInvestment';
 import type { Investment } from '../domain/investment/Investment';
 import type { YieldPolicy } from '../domain/yield/YieldPolicy';
 import { InvestmentPolicyModal } from '../components/InvestmentPolicyModal';
 import type { InvestmentPolicyData } from '../components/InvestmentPolicyModal';
+import type { VisualSettings } from '../components/CardSettingsPanel';
 
 interface YieldProjectionCardProps {
   assets?: RawAssetDoc[];
@@ -20,6 +21,7 @@ interface YieldProjectionCardProps {
   onCreateAsset?: (data: any) => Promise<void>;
   forceOpenCreateModal?: boolean;
   onCloseCreateModal?: () => void;
+  visualSettings?: VisualSettings;
 }
 
 const formatBRL = (value: number) => value.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
@@ -34,20 +36,40 @@ function buildNetPolicy(policy: YieldPolicy, taxRate: number): YieldPolicy {
   return { ...policy, rateTiers: policy.rateTiers.map((t) => ({ upTo: t.upTo, baseRateValue: t.baseRateValue * (1 - taxRate), bonusRateValue: t.bonusRateValue * (1 - taxRate) })) };
 }
 
-export function YieldProjectionCard({
-  assets,
-  cdiAnnualPercent = 13.65,
-  rateSource = 'default',
-  language = 'pt-BR',
-  onUpdateAsset,
-  onCreateAsset,
-  forceOpenCreateModal,
-  onCloseCreateModal,
-}: YieldProjectionCardProps) {
+export function YieldProjectionCard({ assets, cdiAnnualPercent = 13.65, rateSource = 'default', language = 'pt-BR', onUpdateAsset, onCreateAsset, forceOpenCreateModal, onCloseCreateModal, visualSettings }: YieldProjectionCardProps) {
   const isEn = language === 'en-US';
   const [modalOpen, setModalOpen] = useState(false);
   const [modalMode, setModalMode] = useState<'create' | 'edit'>('edit');
   const [selectedAssetId, setSelectedAssetId] = useState<string | null>(null);
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const hasInitialized = useRef(false);
+
+  const settings = visualSettings || {
+    isCustomEnabled: true,
+    chartHeight: 'h-64',
+    lineThickness: 0.5,
+    showAxes: true,
+    showProjections: true,
+    accentColor: '#00FFA3',
+    fontFamily: 'monospace',
+    cardBgOpacity: 0.8,
+    textColor: '#FFFFFF',
+    textSizeScale: 1.0,
+    textOpacity: 1.0,
+  };
+
+  const isCustom = settings.isCustomEnabled !== false;
+  const cardBg = isCustom ? 'rgba(10, 26, 18, ' + settings.cardBgOpacity + ')' : 'var(--bg-card)';
+  const textPrimary = isCustom ? settings.textColor : 'var(--text-primary)';
+  const textMuted = isCustom ? 'rgba(255,255,255,0.4)' : 'var(--text-muted)';
+  const accent = isCustom ? settings.accentColor : '#00FFA3';
+  const fontFam = isCustom ? settings.fontFamily : 'inherit';
+
+  const txtStyle = (baseSize: number, baseOpacity: number) => ({
+    color: isCustom ? settings.textColor : 'inherit',
+    fontSize: (baseSize * settings.textSizeScale) + 'px',
+    opacity: isCustom ? settings.textOpacity * baseOpacity : baseOpacity,
+  });
 
   useEffect(() => {
     if (forceOpenCreateModal) {
@@ -74,12 +96,12 @@ export function YieldProjectionCard({
   }, [assets]);
 
   const handleSave = async (data: InvestmentPolicyData) => {
-    const tiers = [{ upTo: data.hasTier2 ? data.tier2Limit : null, baseRateValue: data.baseRateValue, bonusRateValue: data.bonusRateValue }];
-    if (data.hasTier2) tiers.push({ upTo: null, baseRateValue: data.tier2BaseRate, bonusRateValue: data.tier2BonusRate });
-
     const newPolicy = {
       indexer: data.indexer, rateType: data.rateType, dayCountConvention: data.dayCountConvention, taxDisplayMode: data.taxDisplayMode,
-      rateTiers: tiers
+      rateTiers: [
+        { upTo: data.hasTier2 ? data.tier2Limit : null, baseRateValue: data.baseRateValue, bonusRateValue: data.bonusRateValue },
+        ...(data.hasTier2 ? [{ upTo: null, baseRateValue: data.tier2BaseRate, bonusRateValue: data.tier2BonusRate }] : [])
+      ]
     };
 
     if (modalMode === 'create' && onCreateAsset) {
@@ -106,20 +128,19 @@ export function YieldProjectionCard({
       labelMonth = nextMonthLastDay;
     }
     const monthAbbr = labelMonth.toLocaleString('pt-BR', { month: 'short' }).replace('.', '').toUpperCase();
-    
+    const monthLabel = 'Até ' + labelMonth.getDate() + ' ' + monthAbbr.toLowerCase();
+
     return source.map((inv) => {
       const days = inv.daysInvested(today);
       const grossDaily = YieldCalculator.dailyYieldTiered(inv.currentBalance, cdiAnnualPercent, inv.policy);
       const daysInYear = inv.policy.dayCountConvention === 'CALENDAR_DAYS_365' ? 365 : 252;
-      const daysToProjectConvention = inv.policy.dayCountConvention === 'BUSINESS_DAYS_252'
-        ? Math.max(1, Math.round((daysToProject * 252) / 365))
-        : daysToProject;
-      
+      const daysToProjectConvention = inv.policy.dayCountConvention === 'BUSINESS_DAYS_252' ? Math.max(1, Math.round((daysToProject * 252) / 365)) : daysToProject;
+
       let irRate = 0; let totalTax = 0; let futureIrRate = 0;
-      // CORREÇÃO: Desconta IR mesmo no dia 0
+      const taxDays = inv.taxDaysInvested(today);
       if (inv.taxDisplayMode === 'NET') {
-        irRate = IncomeTaxPolicy.rateFor(Math.max(days, 1));
-        totalTax = Math.min(irRate + (days >= 1 ? IofPolicy.rateFor(days) : 0), 1);
+        irRate = IncomeTaxPolicy.rateFor(Math.max(taxDays, 1));
+        totalTax = Math.min(irRate + (taxDays >= 1 ? IofPolicy.rateFor(taxDays) : 0), 1);
         futureIrRate = IncomeTaxPolicy.rateFor(days + 365);
       }
 
@@ -135,166 +156,249 @@ export function YieldProjectionCard({
       const tier1 = inv.policy.rateTiers[0];
       const effectiveRate = (tier1?.baseRateValue || 0) + (tier1?.bonusRateValue || 0);
       let rateStr = '';
-      if (inv.policy.rateType === 'FIXED') rateStr = `${effectiveRate.toFixed(2)}% a.a.`;
-      else if (inv.policy.rateType === 'SPREAD') rateStr = `CDI + ${effectiveRate.toFixed(2)}%`;
+      if (inv.policy.rateType === 'FIXED') rateStr = effectiveRate.toFixed(2) + '% a.a.';
+      else if (inv.policy.rateType === 'SPREAD') rateStr = 'CDI + ' + effectiveRate.toFixed(2) + '%';
       else {
-        rateStr = `${effectiveRate}% do CDI`;
-        if (inv.policy.rateTiers.length > 1) rateStr += ` (até ${formatBRL(tier1?.upTo?.toBRL() || 0)})`;
+        rateStr = effectiveRate + '% do CDI';
+        if (inv.policy.rateTiers.length > 1) rateStr += ' (até ' + formatBRL(tier1?.upTo?.toBRL() || 0) + ')';
       }
 
-      const taxAlerts = TaxAlertService.getAlertsForInvestment(inv, today);
-
       return {
-        id: inv.id, name: inv.name, balance: inv.currentBalance.toBRL(), rateStr,
+        id: inv.id, name: inv.name, balance: inv.currentBalance.toBRL(), baseBalance: inv.principal.toBRL(), rateStr,
         dailyBruto: grossDaily.toBRL(), dailyLiquido: netDaily.toBRL(),
-        pMonthNet: pMonthNet.toBRL(), p1YearNet: p1YearNet.toBRL(),
+        pMonthNet: pMonthNet.toBRL(), p1YearNet: p1YearNet.toBRL(), pMonthGross: pMonthGross.toBRL(), p1YearGross: p1YearGross.toBRL(),
         profitMonth: profitMonth.toBRL(), profitYear: profitYear.toBRL(),
-        showBoth: inv.taxDisplayMode === 'NET', irRate, futureIrRate, days,
-        taxAlerts,
+        showBoth: inv.taxDisplayMode === 'NET', monthLabel, todayDate: today.getDate(), monthEndDate: labelMonth.getDate()
       };
     });
   }, [normalizedAssets, cdiAnnualPercent]);
 
-  const today = new Date();
-  const lastDay = new Date(today.getFullYear(), today.getMonth() + 1, 0);
-  let labelDate = lastDay;
-  if (lastDay.getDate() === today.getDate()) labelDate = new Date(today.getFullYear(), today.getMonth() + 2, 0);
-  const monthLabel = `ATÉ ${labelDate.getDate()} ${labelDate.toLocaleString('pt-BR', { month: 'short' }).replace('.', '').toUpperCase()}`;
+  const portfolioTotals = useMemo(() => {
+    let totalDaily = 0;
+    let totalMonthly = 0;
+    let totalYearly = 0;
+    let totalBalance = 0;
 
-  if (projections.length === 0 && !onCreateAsset) {
-    return (
-      <section className="bg-[var(--bg-card)] border border-[var(--border-card)] rounded-2xl p-5">
-        <p className="text-sm text-[var(--text-muted)]">Nenhum investimento configurado no momento.</p>
-      </section>
-    );
-  }
+    projections.forEach(p => {
+      const daily = p.showBoth ? p.dailyLiquido : p.dailyBruto;
+      totalDaily += daily;
+      totalMonthly += p.profitMonth;
+      totalYearly += p.profitYear;
+      totalBalance += p.balance;
+    });
+
+    const investments = normalizedAssets.map(assetToInvestment).filter(inv => inv !== null);
+    const curve = Array.from({ length: 12 }, (_, i) => {
+      const month = i + 1;
+      const days = Math.round(month * 30.4166);
+      let projectedTotal = 0;
+
+      investments.forEach(inv => {
+        const projected = YieldCalculator.projectTiered(inv.currentBalance, cdiAnnualPercent, inv.policy, days);
+        projectedTotal += projected.toBRL();
+      });
+
+      return { name: 'M' + month, value: projectedTotal - totalBalance };
+    });
+
+    return { totalDaily, totalMonthly, totalYearly, curve };
+  }, [projections, normalizedAssets, cdiAnnualPercent]);
+
+  useEffect(() => {
+    if (!hasInitialized.current && projections.length > 0) {
+      setExpandedId(projections[0].id);
+      hasInitialized.current = true;
+    }
+  }, [projections.length]);
+
+  if (projections.length === 0 && !onCreateAsset) return null;
+
+  const dynamicStyles = {
+    '--accent': isCustom ? settings.accentColor : 'var(--accent)',
+    fontFamily: isCustom ? (settings.fontFamily === 'monospace' ? 'monospace' : settings.fontFamily === 'serif' ? 'serif' : 'sans-serif') : 'inherit',
+  } as React.CSSProperties;
 
   return (
     <>
-      <section className="bg-[var(--bg-card)] border border-[var(--border-card)] rounded-2xl p-5">
-        <div className="flex justify-between items-center mb-4">
-          <h3 className="text-sm font-bold text-[var(--text-primary)]">Rendimento projetado</h3>
-          <div className="flex items-center gap-3">
-            {onCreateAsset && <button type="button" onClick={() => { setModalMode('create'); setSelectedAssetId(null); setModalOpen(true); }} className="text-[var(--text-muted)] hover:text-[var(--accent)] font-bold text-lg">+</button>}
-            <span
-              className="text-[10px] uppercase tracking-widest text-[var(--text-muted)] font-mono flex items-center gap-1.5"
-              title={
-                rateSource === 'bcb'
-                  ? 'Taxa oficial BCB (tempo real)'
-                  : rateSource === 'cache'
-                  ? 'Taxa BCB em cache local'
-                  : 'Taxa de referência padrão'
-              }
-            >
-              <span>CDI {cdiAnnualPercent.toFixed(2)}%</span>
-              {rateSource === 'bcb' && (
-                <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-              )}
-              {rateSource === 'cache' && (
-                <span className="inline-block w-1.5 h-1.5 rounded-full bg-amber-500" />
-              )}
-            </span>
+      <div className="space-y-3" style={dynamicStyles}>
+        <div className="flex justify-between items-center mb-2 px-1">
+          <h3 style={{ color: textPrimary }} className="text-sm font-bold">Rendimento projetado</h3>
+          {onCreateAsset && <button type="button" onClick={() => { setModalMode('create'); setSelectedAssetId(null); setModalOpen(true); }} style={{ color: textPrimary }} className="hover:text-[var(--accent)] font-bold text-lg">+</button>}
+        </div>
+
+        {/* HERO CARD (SOMA TOTAL) */}
+        <div style={{ backgroundColor: cardBg }} className={'relative overflow-hidden rounded-[24px] border mb-4 ' + (isCustom ? 'border-[var(--accent)]/30 shadow-[0_10px_40px_-10px_rgba(0,255,163,0.2)]' : 'border-[var(--border-card)] shadow-sm')}>
+          {isCustom && <div className="absolute top-0 right-0 w-48 h-48 bg-[var(--accent)] opacity-[0.07] blur-[60px] rounded-full pointer-events-none"></div>}
+          
+          <div className="relative z-10 p-5">
+            <h2 style={{ color: textPrimary }} className="text-sm font-bold mb-4">Total da Carteira</h2>
+            
+            <div className="grid grid-cols-3 gap-2 mb-6">
+              <div>
+                <span style={{ color: textMuted }} className="text-[9px] uppercase tracking-widest block mb-1">Diário</span>
+                <span style={{ color: accent }} className="text-lg font-bold font-mono">+{formatBRL(portfolioTotals.totalDaily)}</span>
+              </div>
+              <div>
+                <span style={{ color: textMuted }} className="text-[9px] uppercase tracking-widest block mb-1">Mensal</span>
+                <span style={{ color: accent }} className="text-lg font-bold font-mono">+{formatBRL(portfolioTotals.totalMonthly)}</span>
+              </div>
+              <div>
+                <span style={{ color: textMuted }} className="text-[9px] uppercase tracking-widest block mb-1">Anual</span>
+                <span style={{ color: accent }} className="text-lg font-bold font-mono">+{formatBRL(portfolioTotals.totalYearly)}</span>
+              </div>
+            </div>
+
+            <div className="h-20 w-full" style={{ marginBottom: '-10px' }}>
+              <ResponsiveContainer width="100%" height="100%">
+                <AreaChart data={portfolioTotals.curve} margin={{ top: 0, right: 0, left: 0, bottom: 0 }}>
+                  <defs>
+                    <linearGradient id="heroGrad" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor={accent} stopOpacity={0.3} />
+                      <stop offset="100%" stopColor={accent} stopOpacity={0} />
+                    </linearGradient>
+                  </defs>
+                  <XAxis dataKey="name" hide />
+                  <Area type="monotone" dataKey="value" stroke={accent} strokeWidth={settings.lineThickness} fill="url(#heroGrad)" isAnimationActive={false} dot={false} />
+                </AreaChart>
+              </ResponsiveContainer>
+            </div>
           </div>
         </div>
 
-        <div className="space-y-3">
-          {projections.map((p) => (
-            <div key={p.id} className="bg-[var(--bg-app)] border border-[var(--border-card)] rounded-xl p-3 relative group">
-              <button type="button" onClick={() => { setModalMode('edit'); setSelectedAssetId(p.id); setModalOpen(true); }} className="absolute top-3 right-3 text-[var(--text-muted)] hover:text-[var(--accent)] opacity-50 group-hover:opacity-100 p-1">⚙️</button>
+        {projections.map((p) => {
+          const displayBalance = p.showBoth ? p.pMonthNet : p.pMonthGross;
+          const displayDaily = p.showBoth ? p.dailyLiquido : p.dailyBruto;
+          const isExpanded = expandedId === p.id;
 
-              <div className="flex justify-between items-baseline mb-3 pr-8">
-                <div className="flex flex-col gap-0.5">
-                  <div className="flex items-center gap-2">
-                    {getLogo(p.name) && <img src={getLogo(p.name)!} alt={p.name} className="w-5 h-5 rounded-full bg-white object-contain p-0.5" />}
-                    <span className="text-sm font-semibold text-[var(--text-primary)]">{p.name}</span>
-                  </div>
-                  <span className="text-[10px] text-[var(--accent)] font-medium">{p.rateStr}</span>
-                </div>
-                <span className="text-xs font-mono text-[var(--text-muted)]">{formatBRL(p.balance)}</span>
-              </div>
+          const totalDays = p.monthEndDate - p.todayDate;
+          const chartData = Array.from({ length: 15 }, (_, i) => {
+            const dayOffset = Math.round((i / 14) * totalDays);
+            return {
+              day: p.todayDate + dayOffset,
+              value: p.balance + (displayBalance - p.balance) * (i / 14),
+            };
+          });
 
-              <div className="flex justify-between items-baseline mb-3">
-                <span className="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">{p.showBoth ? 'Líquido / dia' : 'Rende / dia'}</span>
-                <span className="text-base font-bold text-[var(--accent)] font-mono">+{formatBRL(p.showBoth ? p.dailyLiquido : p.dailyBruto)}</span>
-              </div>
+          const yMin = Math.floor((p.balance - 5) / 10) * 10;
+          const yMax = Math.ceil((displayBalance + 5) / 10) * 10;
+          const yTicks: number[] = [];
+          for (let v = yMin; v <= yMax; v += 10) yTicks.push(v);
 
-              <div className="grid grid-cols-2 gap-3 pt-2 border-t border-[var(--border-card)]">
-                <div>
-                  <span className="text-[9px] uppercase tracking-wider text-[var(--text-muted)]">{monthLabel}</span>
-                  <div className="text-sm font-bold text-[var(--accent)] font-mono">+{formatBRL(p.profitMonth)}</div>
-                  <div className="text-[9px] text-[var(--text-muted)] font-mono mt-0.5">Saldo: {formatBRL(p.pMonthNet)}</div>
-                </div>
-                <div className="text-right">
-                  <span className="text-[9px] uppercase tracking-wider text-[var(--text-muted)]">1 ANO</span>
-                  <div className="text-sm font-bold text-[var(--accent)] font-mono">+{formatBRL(p.profitYear)}</div>
-                  <div className="text-[9px] text-[var(--text-muted)] font-mono mt-0.5">Saldo: {formatBRL(p.p1YearNet)}</div>
-                </div>
-              </div>
+          return (
+            <div 
+              key={p.id} 
+              style={{ backgroundColor: cardBg }}
+              className={'relative overflow-hidden rounded-[24px] border transition-all duration-300 ' + (isExpanded ? 'border-[var(--accent)]/60 shadow-[0_10px_40px_-10px_rgba(0,255,163,0.4)]' : 'border-[var(--accent)]/20 shadow-[0_10px_40px_-10px_rgba(0,255,163,0.1)]')}
+            >
+              <div className="absolute top-0 right-0 w-48 h-48 bg-[var(--accent)] opacity-[0.07] blur-[60px] rounded-full pointer-events-none"></div>
 
-              {p.taxAlerts && p.taxAlerts.length > 0 && (
-                <div className="mt-2.5 pt-2 border-t border-[var(--border-card)]/50 space-y-1.5">
-                  {p.taxAlerts.map((alert: TaxRegressiveAlert, idx: number) => (
-                    <div
-                      key={`${p.id}-tax-alert-${idx}`}
-                      className="rounded-lg bg-[var(--accent)]/10 border border-[var(--accent)]/20 p-2 text-left"
-                    >
-                      <div className="flex items-center justify-between gap-1">
-                        <span className="text-[10px] font-bold text-[var(--accent)] flex items-center gap-1.5">
-                          <span>{alert.type === 'IOF_ZERO' ? '🛡️' : '📉'}</span>
-                          <span>{alert.title[isEn ? 'en' : 'pt']}</span>
-                        </span>
-                        <span className="text-[8px] font-mono px-1.5 py-0.5 rounded bg-[var(--accent)]/20 text-[var(--text-primary)] font-bold">
-                          {alert.daysRemaining} {isEn ? 'd left' : 'd rest.'}
-                        </span>
-                      </div>
-                      <p className="text-[9px] text-[var(--text-muted)] leading-tight mt-1">
-                        {alert.description[isEn ? 'en' : 'pt']}
-                      </p>
-                      {alert.estimatedTaxSavings.toBRL() > 0 && (
-                        <p className="text-[8px] font-mono text-[var(--text-primary)] font-semibold mt-1">
-                          ✨ {isEn ? 'Est. tax savings if held:' : 'Economia estimada ao aguardar:'}{' '}
-                          <span className="text-[var(--accent)] font-bold">+{formatBRL(alert.estimatedTaxSavings.toBRL())}</span>
-                        </p>
-                      )}
+              <div className="relative z-10 p-5">
+                <div className="flex justify-between items-start mb-5">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-full bg-white flex items-center justify-center p-1.5 shadow-lg overflow-hidden">
+                      {getLogo(p.name) ? <img src={getLogo(p.name)!} alt={p.name} className="w-full h-full object-contain rounded-full" /> : <span className="text-xs">🏦</span>}
                     </div>
-                  ))}
+                    <div>
+                      <span style={{ ...txtStyle(16, 1), color: textPrimary }} className="font-bold tracking-tight block leading-tight">{p.name}</span>
+                      <span style={{ ...txtStyle(11, 0.6), color: textMuted }} className="font-mono tracking-wider">{formatBRL(p.baseBalance)}</span>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <div className="px-3 py-1 rounded-lg bg-white/5 border border-white/10 backdrop-blur-sm">
+                      <span style={{ ...txtStyle(11, 0.6), color: textMuted }} className="font-bold tracking-wide">{p.rateStr}</span>
+                    </div>
+                    <button type="button" onClick={(e) => { e.stopPropagation(); setModalMode('edit'); setSelectedAssetId(p.id); setModalOpen(true); }} className="hover:text-[var(--accent)] p-1" style={{ color: textMuted }}>⚙️</button>
+                  </div>
                 </div>
-              )}
 
-              <p className="text-[9px] text-[var(--text-muted)] mt-2 italic text-right">
-                {p.showBoth ? `IR ${(p.irRate * 100).toFixed(1)}%` : `Bruto · IR no resgate · ${p.days} dias`}
-              </p>
+                <div className="mb-5">
+                  <div className="flex items-center gap-2 mb-1">
+                    <span className="w-1.5 h-1.5 rounded-full bg-[var(--accent)] animate-pulse"></span>
+                    <span style={{ ...txtStyle(10, 0.5), color: textMuted }} className="uppercase tracking-[0.15em] font-bold">{p.showBoth ? 'Líquido / dia' : 'Rende / dia'}</span>
+                  </div>
+                  <div style={{ color: accent, fontSize: (isCustom ? (36 * settings.textSizeScale) + 'px' : '36px'), opacity: isCustom ? settings.textOpacity : 1 }} className="font-bold tracking-tighter leading-none">
+                    +{formatBRL(displayDaily)}
+                  </div>
+                </div>
+
+                <div className="flex justify-between items-center border-t border-white/5 pt-3">
+                  <div>
+                    <span style={{ ...txtStyle(9, 0.4), color: textMuted }} className="uppercase tracking-widest block mb-0.5">Hoje</span>
+                    <span style={{ ...txtStyle(11, 0.6), color: textMuted }} className="font-medium font-mono">{formatBRL(p.balance)}</span>
+                  </div>
+                  <div className="text-right">
+                    <span style={{ ...txtStyle(9, 0.4), color: textMuted }} className="uppercase tracking-widest block mb-0.5">{p.monthLabel}</span>
+                    <span style={{ ...txtStyle(11, 0.6), color: textMuted }} className="font-medium font-mono">{formatBRL(displayBalance)}</span>
+                  </div>
+                </div>
+
+                <button onClick={() => setExpandedId(isExpanded ? null : p.id)} className="w-full flex items-center justify-center mt-4 pt-3 border-t border-white/5 hover:text-[var(--accent)] transition-colors" style={{ color: textMuted }}>
+                  <ChevronDown className={'w-4 h-4 transition-transform duration-300 ' + (isExpanded ? 'rotate-180' : '')} />
+                </button>
+
+                <div className={'overflow-hidden transition-all duration-500 ease-in-out ' + (isExpanded ? 'max-h-[800px] opacity-100 mt-2' : 'max-h-0 opacity-0 mt-0')}>
+                  <div className="pt-3 border-t border-white/5 space-y-3">
+                    <div className={'rounded-xl border border-white/10 p-1 relative ' + settings.chartHeight} style={{ backgroundColor: accent + '10' }}>
+                      <ResponsiveContainer width="100%" height="100%">
+                        <AreaChart data={chartData} margin={{ top: 10, right: 0, left: 5, bottom: 0 }}>
+                          <defs>
+                            <linearGradient id={'acc-' + p.id} x1="0" y1="0" x2="0" y2="1">
+                              <stop offset="0%" stopColor={accent} stopOpacity={0.35} />
+                              <stop offset="100%" stopColor={accent} stopOpacity={0} />
+                            </linearGradient>
+                          </defs>
+
+                          {settings.showAxes && (
+                            <>
+                              <CartesianGrid strokeDasharray="2 4" stroke={isCustom ? "rgba(255,255,255,0.03)" : "rgba(0,0,0,0.05)"} vertical={false} />
+                              <XAxis dataKey="day" tick={{ fill: isCustom ? 'rgba(255,255,255,0.2)' : '#64748b', fontSize: 9, fontFamily: 'monospace' }} axisLine={false} tickLine={false} tickMargin={8} minTickGap={20} />
+                              <YAxis orientation="right" ticks={yTicks} domain={[yMin, yMax]} tick={{ fill: isCustom ? 'rgba(255,255,255,0.2)' : '#64748b', fontSize: 9, fontFamily: 'monospace' }} axisLine={false} tickLine={false} tickFormatter={(val) => (val / 1000).toFixed(2) + 'k'} width={40} />
+                            </>
+                          )}
+
+                          <Area type="monotone" dataKey="value" stroke={accent} strokeWidth={settings.lineThickness} fill={'url(#acc-' + p.id + ')'} isAnimationActive={false} dot={false} />
+                        </AreaChart>
+                      </ResponsiveContainer>
+                    </div>
+
+                    {settings.showProjections && (
+                      <div className="grid grid-cols-2 gap-2">
+                        <div className={`rounded-lg p-2.5 ${isCustom ? 'bg-white/5 border-white/10 backdrop-blur-sm' : 'bg-[var(--bg-app)] border-[var(--border-card)]'} border`}>
+                          <span style={{ ...txtStyle(8, 0.4), color: textMuted }} className="uppercase tracking-widest block mb-1">Lucro no mês</span>
+                          <span style={{ ...txtStyle(11, 0.6), color: textMuted }} className="font-medium font-mono">+{formatBRL(p.profitMonth)}</span>
+                        </div>
+                        <div className={`rounded-lg p-2.5 ${isCustom ? 'bg-white/5 border-white/10 backdrop-blur-sm' : 'bg-[var(--bg-app)] border-[var(--border-card)]'} border`}>
+                          <span style={{ ...txtStyle(8, 0.4), color: textMuted }} className="uppercase tracking-widest block mb-1">Projeção 1 ano</span>
+                          <span style={{ ...txtStyle(11, 0.6), color: textMuted }} className="font-medium font-mono">+{formatBRL(p.profitYear)}</span>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
             </div>
-          ))}
-        </div>
-      </section>
+          );
+        })}
+      </div>
 
-      <InvestmentPolicyModal 
-        isOpen={modalOpen} mode={modalMode} onClose={handleClose} onSave={handleSave} 
-        initialData={modalMode === 'edit' && selectedAssetId ? (() => {
-          const inv = projections.find(x => x.id === selectedAssetId);
-          const asset = normalizedAssets.find(x => x.id === selectedAssetId);
-          if (!inv || !asset) return undefined;
-          
-          const tiers = asset.investmentPolicy?.rateTiers || [];
-          const t1 = tiers[0] || { upTo: null, baseRateValue: 100, bonusRateValue: 0 };
-          const t2 = tiers[1] || { upTo: null, baseRateValue: 0, bonusRateValue: 0 };
-          
-          return {
-            name: inv.name, initialBalance: inv.balance,
-            indexer: asset.investmentPolicy?.indexer || 'CDI',
-            rateType: asset.investmentPolicy?.rateType || 'PERCENT_INDEXER',
-            dayCountConvention: asset.investmentPolicy?.dayCountConvention || 'BUSINESS_DAYS_252',
-            taxDisplayMode: asset.investmentPolicy?.taxDisplayMode || 'NET',
-            baseRateValue: t1.baseRateValue,
-            bonusRateValue: t1.bonusRateValue,
-            hasTier2: tiers.length > 1,
-            tier2Limit: t1.upTo ? Number(t1.upTo) : 0,
-            tier2BaseRate: t2.baseRateValue,
-            tier2BonusRate: t2.bonusRateValue,
-          };
-        })() : undefined}
-      />
+      <InvestmentPolicyModal isOpen={modalOpen} mode={modalMode} onClose={handleClose} onSave={handleSave} initialData={modalMode === 'edit' && selectedAssetId ? (() => {
+        const inv = projections.find(x => x.id === selectedAssetId);
+        const asset = normalizedAssets.find(x => x.id === selectedAssetId);
+        if (!inv || !asset) return undefined;
+        const tiers = asset.investmentPolicy?.rateTiers || [];
+        const t1 = tiers[0] || { upTo: null, baseRateValue: 100, bonusRateValue: 0 };
+        const t2 = tiers[1] || { upTo: null, baseRateValue: 0, bonusRateValue: 0 };
+        return {
+          name: inv.name, initialBalance: inv.balance,
+          indexer: asset.investmentPolicy?.indexer || 'CDI',
+          rateType: asset.investmentPolicy?.rateType || 'PERCENT_INDEXER',
+          dayCountConvention: asset.investmentPolicy?.dayCountConvention || 'BUSINESS_DAYS_252',
+          taxDisplayMode: asset.investmentPolicy?.taxDisplayMode || 'NET',
+          baseRateValue: t1.baseRateValue, bonusRateValue: t1.bonusRateValue,
+          hasTier2: tiers.length > 1, tier2Limit: t1.upTo ? Number(t1.upTo) : 0,
+          tier2BaseRate: t2.baseRateValue, tier2BonusRate: t2.bonusRateValue,
+        };
+      })() : undefined} />
     </>
   );
 }

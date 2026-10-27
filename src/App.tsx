@@ -17,6 +17,7 @@ import {
 import LoadingSpinner from './components/LoadingSpinner';
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { ProfileDrawer } from "./components/drawers/ProfileDrawer";
+import type { VisualSettings } from "./components/CardSettingsPanel";
 import { AddTransactionModal } from "./components/modals/AddTransactionModal";
 import { IngestionHub, ReviewModal } from "./components/modals/IngestionModals";
 import { AssetModal, AddAssetModal, AssetDeepDiveModal } from "./components/modals/AssetModals";
@@ -70,6 +71,50 @@ export default function ZenithApp() {
   const [isEditingTransaction, setIsEditingTransaction] = useState(false);
   const [selectedTransaction, setSelectedTransaction] = useState<any>(null);
   const [isProfileDrawerOpen, setIsProfileDrawerOpen] = useState(false);
+
+  const [visualSettings, setVisualSettings] = useState<VisualSettings>(() => {
+    const saved = localStorage.getItem('zenith_visual_settings');
+    return saved ? JSON.parse(saved) : {
+      isCustomEnabled: true,
+      chartHeight: 'h-64',
+      lineThickness: 0.5,
+      showAxes: true,
+      showProjections: true,
+      accentColor: '#00FFA3',
+      fontFamily: 'monospace',
+      cardBgOpacity: 0.8,
+      textColor: '#FFFFFF',
+      textSizeScale: 1.0,
+      textOpacity: 1.0,
+    };
+  });
+
+  useEffect(() => {
+    localStorage.setItem('zenith_visual_settings', JSON.stringify(visualSettings));
+  }, [visualSettings]);
+
+  // Aplica o tema Customizado Global (Verde Glass) em todo o app
+  useEffect(() => {
+    const root = document.documentElement;
+    if (visualSettings.isCustomEnabled) {
+      root.style.setProperty('--bg-app', '#0a1a12');
+      root.style.setProperty('--bg-card', 'rgba(10, 26, 18, 0.6)');
+      root.style.setProperty('--text-primary', '#FFFFFF');
+      root.style.setProperty('--text-muted', '#9CA3AF');
+      root.style.setProperty('--border-card', 'rgba(0, 255, 163, 0.2)');
+      root.style.setProperty('--accent', visualSettings.accentColor || '#00FFA3');
+    } else {
+      // Remove as variáveis customizadas, deixando o tema original do Zenith prevalecer
+      root.style.removeProperty('--bg-app');
+      root.style.removeProperty('--bg-card');
+      root.style.removeProperty('--text-primary');
+      root.style.removeProperty('--text-muted');
+      root.style.removeProperty('--border-card');
+      root.style.removeProperty('--accent');
+    }
+  }, [visualSettings.isCustomEnabled, visualSettings.accentColor]);
+
+
   const [drawerPageRequest, setDrawerPageRequest] = useState<'menu' | 'profile' | 'notifications' | 'settings' | 'ai_key' | 'trash'>('menu');
   const [isIngestionHubOpen, setIsIngestionHubOpen] = useState(false);
   const [isReviewModalOpen, setIsReviewModalOpen] = useState(false);
@@ -252,6 +297,7 @@ export default function ZenithApp() {
 
           {currentTab === 'Início' && (
             <HomeView
+              visualSettings={visualSettings}
               user={user}
               settings={settings}
               assets={assets}
@@ -336,6 +382,8 @@ export default function ZenithApp() {
             onSaveProfile={handleSaveProfile}
             userId={user.uid}
             currentConfig={settings?.zenith_config}
+            visualSettings={visualSettings}
+            onChangeVisualSettings={setVisualSettings}
             settingsLanguage={settings?.language}
             onLogout={handleLogout}
           />

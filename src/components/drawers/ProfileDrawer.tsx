@@ -1,3 +1,5 @@
+import { CardSettingsPanel } from '../CardSettingsPanel';
+import type { VisualSettings } from '../CardSettingsPanel';
 import React, { useState, useEffect, useRef, Suspense, lazy } from 'react';
 import { motion } from 'motion/react';
 import {
@@ -21,7 +23,7 @@ const HeritageSettings = lazy(() =>
   import('../HeritageSettings').then((module) => ({ default: module.HeritageSettings }))
 );
 
-export type DrawerPage = 'menu' | 'profile' | 'notifications' | 'settings' | 'ai_key' | 'trash';
+export type DrawerPage = 'menu' | 'profile' | 'notifications' | 'settings' | 'visual_settings' | 'ai_key' | 'trash';
 
 export function imageFileToAvatar(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -257,6 +259,8 @@ export function AiKeySection({ apiKey, error, onSave, onClearError, language }: 
 }
 
 export interface ProfileDrawerProps {
+  visualSettings?: VisualSettings;
+  onChangeVisualSettings?: (s: VisualSettings) => void;
   isOpen: boolean;
   onClose: () => void;
   initialPage?: DrawerPage;
@@ -295,7 +299,9 @@ export function ProfileDrawer({
   userId,
   currentConfig,
   settingsLanguage,
-  onLogout
+  onLogout,
+  visualSettings,
+  onChangeVisualSettings,
 }: ProfileDrawerProps) {
   const t = (pt: string, en: string) => (language === 'en-US' ? en : pt);
   const [activeDrawerPage, setActiveDrawerPage] = useState<DrawerPage>('menu');
@@ -366,6 +372,8 @@ export function ProfileDrawer({
         </div>
 
         <div className="flex-1 min-h-0 overflow-y-auto pr-1">
+
+  
           {activeDrawerPage === 'menu' && (
             <div className="space-y-5">
               <div className="flex items-center gap-3 p-4 bg-[var(--bg-app)] border border-[var(--border-card)] rounded-2xl">
@@ -410,16 +418,23 @@ export function ProfileDrawer({
           )}
 
           {activeDrawerPage === 'settings' && (
-            <Suspense fallback={<LoadingSpinner />}>
-              <HeritageSettings
-                onClose={goBack}
-                userId={userId}
-                currentConfig={currentConfig}
-                language={settingsLanguage}
-                chartFilter={chartFilter}
-                onChartFilterChange={onChartFilterChange}
-              />
-            </Suspense>
+            <>
+              {visualSettings && onChangeVisualSettings && (
+                <div className="p-4">
+                  <CardSettingsPanel settings={visualSettings} onChange={onChangeVisualSettings} />
+                </div>
+              )}
+              <Suspense fallback={<LoadingSpinner />}>
+                <HeritageSettings
+                  onClose={goBack}
+                  userId={userId}
+                  currentConfig={currentConfig}
+                  language={settingsLanguage}
+                  chartFilter={chartFilter}
+                  onChartFilterChange={onChartFilterChange}
+                />
+              </Suspense>
+            </>
           )}
 
           {activeDrawerPage === 'ai_key' && (
