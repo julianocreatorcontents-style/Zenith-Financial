@@ -6,6 +6,7 @@ import {
 import { motion, AnimatePresence, Reorder } from 'motion/react';
 import { doc, updateDoc } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType } from '../firebase';
+import { applyTheme } from '../lib/theme';
 
 interface ColorValue {
   hex: string;
@@ -355,6 +356,11 @@ export const HeritageSettings: React.FC<HeritageSettingsProps> = ({
     setLocalConfig(newConfig);
     // Instant sync for local storage
     localStorage.setItem(`zenith_config_${userId}`, JSON.stringify(newConfig));
+
+    // Aplicar tema imediatamente sem aguardar Firestore
+    if (field === 'tema_global') {
+      applyTheme(value as string);
+    }
     
     // Persist to Firestore
     await updateDoc(doc(db, 'settings', userId), {

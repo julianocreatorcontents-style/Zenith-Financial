@@ -5,7 +5,10 @@
   --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
 }
 
-:root {
+:root,
+.dark,
+[data-theme="dark"],
+html.dark {
   --bg-app: #0A0A0A;
   --bg-card: #111111;
   --bg-card-hover: #151515;
@@ -20,7 +23,9 @@
   --trend-yield: #9B51E0;
 }
 
-.light {
+.light,
+[data-theme="light"],
+html.light {
   --bg-app: #F5F5F5;
   --bg-card: #FFFFFF;
   --bg-card-hover: #FAFAFA;
@@ -34,7 +39,9 @@
   --trend-yield: #7B2CBF;
 }
 
-.high-contrast {
+.high-contrast,
+[data-theme="high-contrast"],
+html.high-contrast {
   --bg-app: #000000;
   --bg-card: #000000;
   --bg-card-hover: #111111;

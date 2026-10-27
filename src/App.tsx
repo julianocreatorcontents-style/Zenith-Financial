@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useCallback, lazy, Suspense } from 'react';
+import React, { useState, useCallback, lazy, Suspense, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   X, CreditCard, TrendingUp,
@@ -28,6 +28,7 @@ import { InvestmentsView } from "./views/InvestmentsView";
 import { AuthView } from "./views/AuthView";
 import { Asset } from "./types/app";
 import { useZenithData } from "./hooks/useZenithData";
+import { applyTheme } from "./lib/theme";
 
 const StorageTrashView = lazy(() => import('./views/StorageTrashView'));
 const ZenithIAView = lazy(() => import('./views/ZenithIAView'));
@@ -78,6 +79,12 @@ export default function ZenithApp() {
   const [chartFilterValue, setChartFilterValue] = useState<{ type: 'category' | 'asset' | null, value: string | null }>({ type: null, value: null });
   const [evolutionView, setEvolutionView] = useState<'historico' | 'projecao'>('historico');
   const [projectionTaxMode, setProjectionTaxMode] = useState<'liquido' | 'bruto'>('liquido');
+
+  // Sincronização global do tema (Escuro, Claro, Contraste)
+  useEffect(() => {
+    const tema = settings?.zenith_config?.master_states?.tema_global || settings?.theme || 'Escuro';
+    applyTheme(tema);
+  }, [settings?.zenith_config?.master_states?.tema_global, settings?.theme]);
 
   const openDrawer = useCallback((page: 'menu' | 'profile' | 'notifications' | 'settings' | 'ai_key' | 'trash' = 'menu') => {
     setDrawerPageRequest(page);
