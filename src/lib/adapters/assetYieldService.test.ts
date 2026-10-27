@@ -59,8 +59,8 @@ describe('assetYieldService — Âncora de Saldo e Rendimentos', () => {
       expect(policy).not.toBeNull();
       expect(policy?.policy.dayCountConvention).toBe('CALENDAR_DAYS_365');
       expect(policy?.policy.rateTiers).toHaveLength(2);
-      expect(policy?.policy.rateTiers[0].baseRateValue).toBe(110);
-      expect(policy?.policy.rateTiers[0].bonusRateValue).toBe(27);
+      expect(policy?.policy.rateTiers[0]!.baseRateValue).toBe(110);
+      expect(policy?.policy.rateTiers[0]!.bonusRateValue).toBe(27);
     });
 
     it('reconhece preset do Mercado Pago automaticamente pelo nome', () => {
@@ -72,7 +72,7 @@ describe('assetYieldService — Âncora de Saldo e Rendimentos', () => {
       });
       expect(policy).not.toBeNull();
       expect(policy?.policy.dayCountConvention).toBe('BUSINESS_DAYS_252');
-      expect(policy?.policy.rateTiers[0].baseRateValue).toBe(105);
+      expect(policy?.policy.rateTiers[0]!.baseRateValue).toBe(105);
     });
 
     it('retorna null para ativos físicos ou liquidez sem preset', () => {
