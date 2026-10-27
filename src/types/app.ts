@@ -22,14 +22,19 @@ export interface Asset {
   investmentPolicy?: any;
   investmentStartDate?: any;
   createdAt: any;
+  updatedAt?: any;
   change?: string;
   originalValue?: number;
+  baseBalance?: number;
   currentValue?: number;
   accumulatedYield?: number;
+  yieldSinceAnchor?: number;
   dailyYield?: number;
   daysInvested?: number;
   yieldPercent?: number;
   yieldStartDate?: Date | null;
+  monthEndValue?: number;
+  monthYieldRemaining?: number;
 }
 
 export interface UserProfile {

@@ -9,13 +9,17 @@ import { DEFAULT_CDI_ANNUAL_PERCENT } from './netWorthProjection';
 export type TaxDisplayMode = 'GROSS' | 'NET';
 
 export interface AssetYieldInfo {
+  baseBalance: number;
   principal: number;
   currentValue: number;
   accumulatedYield: number;
+  yieldSinceAnchor: number;
   dailyYield: number;
   daysInvested: number;
   yieldPercent: number;
   startDate: Date | null;
+  monthEndValue: number;
+  monthYieldRemaining: number;
 }
 
 export function parseAssetDate(value: RawTimestamp | any): Date | null {
@@ -130,25 +134,46 @@ export function resolveAssetPolicy(doc: RawAssetDoc): ResolvedAssetPolicy | null
   return null;
 }
 
+/**
+ * Calcula o rendimento do ativo considerando a data âncora (data do último saldo registrado,
+ * seja na criação ou edição).
+ *
+ * Exemplo real:
+ * - Aporte inicial: R$ 5.000,00 no dia 01/10
+ * - Saldo registrado no extrato do dia 25/10: R$ 5.082,12 (âncora)
+ * - Hoje (dia 27/10): soma rendimento dos dias decorridos desde a âncora (26 e 27/10)
+ * - Fim do mês (31/10): projeta rendimento dos dias restantes do mês de referência (28, 29, 30 e 31/10)
+ */
 export function calculateAssetYieldInfo(
   doc: RawAssetDoc,
   cdiAnnualPercent: number = DEFAULT_CDI_ANNUAL_PERCENT,
   today: Date = new Date()
 ): AssetYieldInfo {
-  const principal = Number(doc.valorInvestido ?? doc.value) || 0;
-  const startDate = parseAssetDate(doc.investmentStartDate) ?? parseAssetDate(doc.createdAt) ?? null;
+  const baseBalance = Number(doc.value) || 0;
+  const principal = Number(doc.valorInvestido ?? doc.value) || baseBalance;
+  const anchorDate =
+    parseAssetDate(doc.investmentStartDate) ??
+    parseAssetDate((doc as any).updatedAt) ??
+    parseAssetDate(doc.createdAt) ??
+    null;
+
+  const monthEnd = new Date(today.getFullYear(), today.getMonth() + 1, 0);
 
   const emptyResult: AssetYieldInfo = {
+    baseBalance,
     principal,
-    currentValue: Number(doc.value) || principal,
+    currentValue: baseBalance,
     accumulatedYield: 0,
+    yieldSinceAnchor: 0,
     dailyYield: 0,
     daysInvested: 0,
     yieldPercent: 0,
-    startDate,
+    startDate: anchorDate,
+    monthEndValue: baseBalance,
+    monthYieldRemaining: 0,
   };
 
-  if (principal <= 0 || !startDate) {
+  if (baseBalance <= 0 || !anchorDate) {
     return emptyResult;
   }
 
@@ -157,73 +182,110 @@ export function calculateAssetYieldInfo(
     return emptyResult;
   }
 
-  const daysInvested = resolved.policy.dayCountConvention === 'BUSINESS_DAYS_252'
-    ? countBusinessDays(startDate, today)
-    : countCalendarDays(startDate, today);
+  const isBusinessDays = resolved.policy.dayCountConvention === 'BUSINESS_DAYS_252';
 
-  const initialMoney = Money.fromBRL(principal);
+  // Dias decorridos desde a data âncora até hoje
+  const daysSinceAnchor = isBusinessDays
+    ? countBusinessDays(anchorDate, today)
+    : countCalendarDays(anchorDate, today);
 
-  // Daily yield for current position (today)
-  const initialDailyMoney = YieldCalculator.dailyYieldTiered(
-    initialMoney,
+  const baseMoney = Money.fromBRL(baseBalance);
+
+  // Rendimento diário atual (para hoje)
+  const currentDailyMoney = YieldCalculator.dailyYieldTiered(
+    baseMoney,
     cdiAnnualPercent,
     resolved.policy
   );
-  let dailyYield = Math.round(initialDailyMoney.toBRL() * 100) / 100;
+  let dailyYield = Math.round(currentDailyMoney.toBRL() * 100) / 100;
 
-  if (daysInvested <= 0) {
+  // Dias da âncora até o fechamento do mês de referência
+  const daysToMonthEnd = isBusinessDays
+    ? countBusinessDays(anchorDate, monthEnd)
+    : countCalendarDays(anchorDate, monthEnd);
+
+  // Projeção até o fim do mês
+  let monthEndValue = baseBalance;
+  if (daysToMonthEnd > 0) {
+    const monthEndMoney = YieldCalculator.projectTiered(
+      baseMoney,
+      cdiAnnualPercent,
+      resolved.policy,
+      daysToMonthEnd
+    );
+    monthEndValue = Math.round(monthEndMoney.toBRL() * 100) / 100;
+  }
+
+  if (daysSinceAnchor <= 0) {
+    const monthYieldRemaining = Math.round(Math.max(0, monthEndValue - baseBalance) * 100) / 100;
+    const historicalYield = Math.round(Math.max(0, baseBalance - principal) * 100) / 100;
+
     return {
+      baseBalance,
       principal,
-      currentValue: principal,
-      accumulatedYield: 0,
+      currentValue: baseBalance,
+      accumulatedYield: historicalYield,
+      yieldSinceAnchor: 0,
       dailyYield,
       daysInvested: 0,
       yieldPercent: 0,
-      startDate,
+      startDate: anchorDate,
+      monthEndValue,
+      monthYieldRemaining,
     };
   }
 
-  // Project accumulated balance across elapsed days
+  // Capitalização a partir do saldo base desde a data âncora
   const projectedMoney = YieldCalculator.projectTiered(
-    initialMoney,
+    baseMoney,
     cdiAnnualPercent,
     resolved.policy,
-    daysInvested
+    daysSinceAnchor
   );
-  const grossTotal = projectedMoney.toBRL();
-  const grossYield = Math.max(0, grossTotal - principal);
+  const grossToday = projectedMoney.toBRL();
+  const rawYieldSinceAnchor = Math.max(0, grossToday - baseBalance);
 
-  let accumulatedYield = grossYield;
+  let netYieldSinceAnchor = rawYieldSinceAnchor;
 
   if (resolved.taxDisplayMode === 'GROSS') {
-    const ir = IncomeTaxPolicy.calculate(Money.fromBRL(grossYield), daysInvested).toBRL();
-    const iof = IofPolicy.calculate(Money.fromBRL(grossYield), daysInvested).toBRL();
-    accumulatedYield = Math.max(0, grossYield - ir - iof);
+    const ir = IncomeTaxPolicy.calculate(Money.fromBRL(rawYieldSinceAnchor), daysSinceAnchor).toBRL();
+    const iof = IofPolicy.calculate(Money.fromBRL(rawYieldSinceAnchor), daysSinceAnchor).toBRL();
+    netYieldSinceAnchor = Math.max(0, rawYieldSinceAnchor - ir - iof);
   }
 
-  accumulatedYield = Math.round(accumulatedYield * 100) / 100;
-  const currentValue = Math.round((principal + accumulatedYield) * 100) / 100;
+  const yieldSinceAnchor = Math.round(netYieldSinceAnchor * 100) / 100;
+  const currentValue = Math.round((baseBalance + yieldSinceAnchor) * 100) / 100;
 
-  // Daily yield for today's updated balance
-  const currentDailyMoney = YieldCalculator.dailyYieldTiered(
+  // Atualiza rendimento diário estimado para o novo saldo
+  const updatedDailyMoney = YieldCalculator.dailyYieldTiered(
     Money.fromBRL(currentValue),
     cdiAnnualPercent,
     resolved.policy
   );
-  dailyYield = Math.round(currentDailyMoney.toBRL() * 100) / 100;
+  dailyYield = Math.round(updatedDailyMoney.toBRL() * 100) / 100;
 
-  const yieldPercent = principal > 0
-    ? Math.round((accumulatedYield / principal) * 10000) / 100
+  // Rendimento restante do mês = saldo projetado no fim do mês - saldo de hoje
+  const monthYieldRemaining = Math.round(Math.max(0, monthEndValue - currentValue) * 100) / 100;
+
+  // Rendimento total acumulado (desde o aporte inicial histórico, se informado)
+  const totalYield = Math.round(Math.max(0, currentValue - principal) * 100) / 100;
+
+  const yieldPercent = baseBalance > 0
+    ? Math.round((yieldSinceAnchor / baseBalance) * 10000) / 100
     : 0;
 
   return {
+    baseBalance,
     principal,
     currentValue,
-    accumulatedYield,
+    accumulatedYield: totalYield > 0 ? totalYield : yieldSinceAnchor,
+    yieldSinceAnchor,
     dailyYield,
-    daysInvested,
+    daysInvested: daysSinceAnchor,
     yieldPercent,
-    startDate,
+    startDate: anchorDate,
+    monthEndValue,
+    monthYieldRemaining,
   };
 }
 
@@ -234,21 +296,25 @@ export function enrichAsset<T extends { value?: number; valorInvestido?: number;
 ): T & {
   valorInvestido: number;
   originalValue: number;
+  baseBalance: number;
   currentValue: number;
   accumulatedYield: number;
+  yieldSinceAnchor: number;
   dailyYield: number;
   daysInvested: number;
   yieldPercent: number;
   yieldStartDate: Date | null;
+  monthEndValue: number;
+  monthYieldRemaining: number;
   change?: string;
 } {
   const info = calculateAssetYieldInfo(asset as any, cdiAnnualPercent, today);
 
-  const formattedYield = info.accumulatedYield.toLocaleString('pt-BR', {
+  const formattedYield = info.yieldSinceAnchor.toLocaleString('pt-BR', {
     style: 'currency',
     currency: 'BRL',
   });
-  const change = info.accumulatedYield > 0
+  const change = info.yieldSinceAnchor > 0
     ? `+${formattedYield} (+${info.yieldPercent.toFixed(2)}%)`
     : asset.change;
 
@@ -257,12 +323,16 @@ export function enrichAsset<T extends { value?: number; valorInvestido?: number;
     value: info.currentValue,
     valorInvestido: info.principal,
     originalValue: info.principal,
+    baseBalance: info.baseBalance,
     currentValue: info.currentValue,
     accumulatedYield: info.accumulatedYield,
+    yieldSinceAnchor: info.yieldSinceAnchor,
     dailyYield: info.dailyYield,
     daysInvested: info.daysInvested,
     yieldPercent: info.yieldPercent,
     yieldStartDate: info.startDate,
+    monthEndValue: info.monthEndValue,
+    monthYieldRemaining: info.monthYieldRemaining,
     change,
   };
 }

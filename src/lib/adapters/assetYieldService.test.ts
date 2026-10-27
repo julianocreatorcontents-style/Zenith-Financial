@@ -8,7 +8,7 @@ import {
   enrichAsset,
 } from './assetYieldService';
 
-describe('assetYieldService', () => {
+describe('assetYieldService — Âncora de Saldo e Rendimentos', () => {
   describe('parseAssetDate', () => {
     it('lida com Date nativo', () => {
       const d = new Date('2026-10-15T00:00:00Z');
@@ -36,15 +36,14 @@ describe('assetYieldService', () => {
 
   describe('countCalendarDays e countBusinessDays', () => {
     it('conta dias corridos corretamente', () => {
-      const start = new Date(2026, 9, 10); // 10/10/2026
-      const end = new Date(2026, 9, 20);   // 20/10/2026
-      expect(countCalendarDays(start, end)).toBe(10);
+      const start = new Date(2026, 9, 25); // 25/10/2026
+      const end = new Date(2026, 9, 27);   // 27/10/2026
+      expect(countCalendarDays(start, end)).toBe(2);
     });
 
     it('conta dias úteis pulando finais de semana', () => {
-      // 16/10/2026 é sexta-feira, 19/10/2026 é segunda-feira
-      const start = new Date(2026, 9, 16);
-      const end = new Date(2026, 9, 19);
+      const start = new Date(2026, 9, 23); // sexta
+      const end = new Date(2026, 9, 26);   // segunda
       expect(countBusinessDays(start, end)).toBe(1);
     });
   });
@@ -54,7 +53,7 @@ describe('assetYieldService', () => {
       const policy = resolveAssetPolicy({
         id: '1',
         name: 'Conta 99Pay Rendimento',
-        value: 5080.12,
+        value: 5082.12,
         uid: 'user-1',
       });
       expect(policy).not.toBeNull();
@@ -87,72 +86,88 @@ describe('assetYieldService', () => {
     });
   });
 
-  describe('calculateAssetYieldInfo — Exemplo Real 99Pay', () => {
-    it('calcula o saldo atualizado e rendimento diário de R$ 5.080,12 após 10 dias', () => {
-      const startDate = new Date(2026, 9, 17); // 17 de Outubro
-      const today = new Date(2026, 9, 27);     // 27 de Outubro (10 dias corridos)
+  describe('Cenário Real 99Pay — Âncora no dia 25/10 e rendimento dos dias seguintes', () => {
+    it('soma os rendimentos dos dias decorridos (26 e 27/10) sobre o saldo base registrado no dia 25 (R$ 5.082,12)', () => {
+      const anchorDate = new Date(2026, 9, 25); // 25 de Outubro (corte do extrato)
+      const today = new Date(2026, 9, 27);      // Hoje: 27 de Outubro (2 dias decorridos)
 
       const asset = {
         id: 'asset-99pay',
         name: '99Pay',
-        value: 5080.12,
-        valorInvestido: 5080.12,
-        investmentStartDate: startDate,
+        value: 5082.12,          // Saldo registrado no extrato do dia 25
+        valorInvestido: 5000.00, // Aporte original feito no dia 01/10
+        investmentStartDate: anchorDate,
         uid: 'user-1',
       };
 
       const info = calculateAssetYieldInfo(asset, 13.65, today);
 
-      expect(info.principal).toBe(5080.12);
-      expect(info.daysInvested).toBe(10);
-      // Saldo projetado após 10 dias de 5080.12 com faixas 137% até 5k e 80% excedente
-      expect(info.currentValue).toBeCloseTo(5103.87, 1);
-      expect(info.accumulatedYield).toBeCloseTo(23.75, 1);
+      expect(info.baseBalance).toBe(5082.12);
+      expect(info.principal).toBe(5000.00);
+      expect(info.daysInvested).toBe(2);
+
+      // Rendimento diário na 99Pay: ~R$ 2,37/dia
       expect(info.dailyYield).toBeCloseTo(2.37, 1);
-      expect(info.yieldPercent).toBeGreaterThan(0.4);
+
+      // Em 2 dias decorridos (26 e 27): soma ~R$ 4,74
+      expect(info.yieldSinceAnchor).toBeCloseTo(4.74, 1);
+      expect(info.currentValue).toBeCloseTo(5086.86, 1);
+
+      // Rendimento total desde o aporte de R$ 5.000: R$ 82,12 + R$ 4,74 = R$ 86,86
+      expect(info.accumulatedYield).toBeCloseTo(86.86, 1);
+
+      // Projeção para o fim do mês de referência (31/10): 6 dias desde a âncora
+      expect(info.monthEndValue).toBeCloseTo(5096.34, 1);
+      // Rendimento restante do mês (dias 28, 29, 30 e 31): 4 dias adicionais ~R$ 9,48
+      expect(info.monthYieldRemaining).toBeCloseTo(9.48, 1);
     });
 
-    it('no dia do aporte (0 dias decorridos), saldo é igual ao aporte', () => {
+    it('quando o ativo acabou de ser criado/editado hoje (0 dias decorridos), saldo é o próprio saldo registrado', () => {
       const today = new Date(2026, 9, 27);
       const asset = {
-        id: 'asset-new',
+        id: 'asset-editado',
         name: '99Pay',
-        value: 5080.12,
+        value: 5086.86,
+        valorInvestido: 5000.00,
         investmentStartDate: today,
         uid: 'user-1',
       };
 
       const info = calculateAssetYieldInfo(asset, 13.65, today);
-      expect(info.currentValue).toBe(5080.12);
-      expect(info.accumulatedYield).toBe(0);
-      expect(info.dailyYield).toBeCloseTo(2.36, 1); // Rende ~2.36 no primeiro dia
+      expect(info.currentValue).toBe(5086.86);
+      expect(info.yieldSinceAnchor).toBe(0);
       expect(info.daysInvested).toBe(0);
+      expect(info.accumulatedYield).toBeCloseTo(86.86, 1);
+      expect(info.dailyYield).toBeCloseTo(2.37, 1);
     });
   });
 
   describe('enrichAsset', () => {
-    it('enriquece o objeto do ativo atualizando value e preservando originalValue', () => {
-      const startDate = new Date(2026, 9, 17);
+    it('atualiza value dinamicamente e fornece métricas da âncora e do mês', () => {
+      const anchorDate = new Date(2026, 9, 25);
       const today = new Date(2026, 9, 27);
 
       const raw = {
         id: 'asset-99pay',
         name: '99Pay',
-        value: 5080.12,
-        investmentStartDate: startDate,
+        value: 5082.12,
+        valorInvestido: 5000.00,
+        investmentStartDate: anchorDate,
         type: 'investment',
-        detail: 'Conta 99Pay',
+        detail: 'Conta 99Pay Rendimento',
         uid: 'user-1',
       };
 
       const enriched = enrichAsset(raw, 13.65, today);
 
-      expect(enriched.originalValue).toBe(5080.12);
-      expect(enriched.valorInvestido).toBe(5080.12);
-      expect(enriched.currentValue).toBeCloseTo(5103.87, 1);
+      expect(enriched.baseBalance).toBe(5082.12);
+      expect(enriched.valorInvestido).toBe(5000.00);
+      expect(enriched.currentValue).toBeCloseTo(5086.86, 1);
       expect(enriched.value).toBe(enriched.currentValue);
-      expect(enriched.accumulatedYield).toBeCloseTo(23.75, 1);
-      expect(enriched.dailyYield).toBeCloseTo(2.37, 1);
+      expect(enriched.yieldSinceAnchor).toBeCloseTo(4.74, 1);
+      expect(enriched.accumulatedYield).toBeCloseTo(86.86, 1);
+      expect(enriched.monthEndValue).toBeCloseTo(5096.34, 1);
+      expect(enriched.monthYieldRemaining).toBeCloseTo(9.48, 1);
       expect(enriched.change).toContain('+R$');
     });
   });

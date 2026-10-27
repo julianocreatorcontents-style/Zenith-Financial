@@ -481,7 +481,12 @@ export function useZenithData() {
   }, [user]);
 
   const updateAsset = useCallback(async (id: string, data: any) => {
-    await updateDoc(doc(db, 'assets', id), data).catch((e: any) => handleFirestoreError(e, OperationType.UPDATE, `assets/${id}`));
+    const updatePayload = {
+      ...data,
+      investmentStartDate: data.investmentStartDate ?? new Date(),
+      updatedAt: serverTimestamp(),
+    };
+    await updateDoc(doc(db, 'assets', id), updatePayload).catch((e: any) => handleFirestoreError(e, OperationType.UPDATE, `assets/${id}`));
   }, []);
 
   const deleteAsset = useCallback(async (id: string) => {

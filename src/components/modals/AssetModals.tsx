@@ -175,31 +175,53 @@ export function AssetModal({
             </div>
 
             {((asset.accumulatedYield && asset.accumulatedYield > 0) || (asset.dailyYield && asset.dailyYield > 0) || asset.daysInvested !== undefined) && (
-              <div className="grid grid-cols-2 gap-2 rounded-2xl bg-[var(--bg-app)] p-3 border border-[var(--border-card)] text-left">
-                <div>
-                  <span className="text-[9px] uppercase font-bold text-[var(--text-muted)] tracking-wider block">{t("Aporte Original", "Initial Deposit")}</span>
-                  <span className="text-xs font-mono font-bold text-[var(--text-primary)]">
-                    {privacyMode ? '••••••' : ((asset.originalValue ?? asset.valorInvestido ?? asset.value) ?? 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
-                  </span>
+              <div className="space-y-2">
+                <div className="grid grid-cols-2 gap-2 rounded-2xl bg-[var(--bg-app)] p-3 border border-[var(--border-card)] text-left">
+                  <div>
+                    <span className="text-[9px] uppercase font-bold text-[var(--text-muted)] tracking-wider block">{t("Saldo na Data Âncora", "Anchor Balance")}</span>
+                    <span className="text-xs font-mono font-bold text-[var(--text-primary)]">
+                      {privacyMode ? '••••••' : (asset.baseBalance ?? asset.valorInvestido ?? asset.value ?? 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                    </span>
+                    {startDateStr && (
+                      <span className="text-[9px] text-[var(--text-muted)] block mt-0.5">
+                        {new Date(startDateStr + 'T12:00:00').toLocaleDateString('pt-BR')}
+                      </span>
+                    )}
+                  </div>
+                  <div>
+                    <span className="text-[9px] uppercase font-bold text-[var(--text-muted)] tracking-wider block">{t("Rendimento Somado", "Yield Since Anchor")}</span>
+                    <span className="text-xs font-mono font-bold text-[var(--accent)]">
+                      {privacyMode ? '••••••' : (asset.yieldSinceAnchor ? `+${asset.yieldSinceAnchor.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}` : 'R$ 0,00')}
+                    </span>
+                    <span className="text-[9px] text-[var(--accent)] block mt-0.5">
+                      {asset.daysInvested ?? 0} {t("dias decorridos", "days elapsed")}
+                    </span>
+                  </div>
+                  <div>
+                    <span className="text-[9px] uppercase font-bold text-[var(--text-muted)] tracking-wider block">{t("Rendimento Diário", "Daily Yield")}</span>
+                    <span className="text-xs font-mono font-bold text-[var(--accent)]">
+                      {privacyMode ? '••••••' : (asset.dailyYield ? `+${asset.dailyYield.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}/dia` : 'R$ 0,00/dia')}
+                    </span>
+                  </div>
+                  <div>
+                    <span className="text-[9px] uppercase font-bold text-[var(--text-muted)] tracking-wider block">{t("Projeção Fim do Mês", "Month-End Projection")}</span>
+                    <span className="text-xs font-mono font-bold text-[var(--text-secondary)]">
+                      {privacyMode ? '••••••' : (asset.monthEndValue ? (asset.monthEndValue).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }) : 'R$ 0,00')}
+                    </span>
+                    {asset.monthYieldRemaining && asset.monthYieldRemaining > 0 ? (
+                      <span className="text-[9px] text-[var(--text-muted)] block mt-0.5">
+                        +{asset.monthYieldRemaining.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })} {t("restantes", "remaining")}
+                      </span>
+                    ) : null}
+                  </div>
                 </div>
-                <div>
-                  <span className="text-[9px] uppercase font-bold text-[var(--text-muted)] tracking-wider block">{t("Rendimento Acumulado", "Accumulated Yield")}</span>
-                  <span className="text-xs font-mono font-bold text-[var(--accent)]">
-                    {privacyMode ? '••••••' : (asset.accumulatedYield ? `+${asset.accumulatedYield.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}` : 'R$ 0,00')}
-                  </span>
-                </div>
-                <div>
-                  <span className="text-[9px] uppercase font-bold text-[var(--text-muted)] tracking-wider block">{t("Rendimento Diário", "Daily Yield")}</span>
-                  <span className="text-xs font-mono font-bold text-[var(--accent)]">
-                    {privacyMode ? '••••••' : (asset.dailyYield ? `+${asset.dailyYield.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}/dia` : 'R$ 0,00/dia')}
-                  </span>
-                </div>
-                <div>
-                  <span className="text-[9px] uppercase font-bold text-[var(--text-muted)] tracking-wider block">{t("Tempo Investido", "Days Invested")}</span>
-                  <span className="text-xs font-mono font-bold text-[var(--text-secondary)]">
-                    {asset.daysInvested ?? 0} {t("dias", "days")}
-                  </span>
-                </div>
+
+                {asset.valorInvestido && asset.baseBalance && asset.valorInvestido < asset.baseBalance && (
+                  <div className="flex justify-between items-center px-3 py-1.5 rounded-xl bg-[var(--accent)]/5 border border-[var(--accent)]/20 text-[10px]">
+                    <span className="text-[var(--text-muted)]">{t("Aporte Inicial:", "Initial Deposit:")} <strong className="text-[var(--text-primary)] font-mono">{asset.valorInvestido.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</strong></span>
+                    <span className="text-[var(--accent)] font-bold">{t("Rendimento Total:", "Total Yield:")} +{(asset.accumulatedYield ?? 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</span>
+                  </div>
+                )}
               </div>
             )}
 
