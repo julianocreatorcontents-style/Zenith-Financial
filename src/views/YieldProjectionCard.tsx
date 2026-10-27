@@ -111,6 +111,9 @@ export function YieldProjectionCard({
       const days = inv.daysInvested(today);
       const grossDaily = YieldCalculator.dailyYieldTiered(inv.currentBalance, cdiAnnualPercent, inv.policy);
       const daysInYear = inv.policy.dayCountConvention === 'CALENDAR_DAYS_365' ? 365 : 252;
+      const daysToProjectConvention = inv.policy.dayCountConvention === 'BUSINESS_DAYS_252'
+        ? Math.max(1, Math.round((daysToProject * 252) / 365))
+        : daysToProject;
       
       let irRate = 0; let totalTax = 0; let futureIrRate = 0;
       // CORREÇÃO: Desconta IR mesmo no dia 0
@@ -121,9 +124,9 @@ export function YieldProjectionCard({
       }
 
       const netDaily = totalTax > 0 ? grossDaily.multiply(1 - totalTax) : grossDaily;
-      const pMonthGross = YieldCalculator.projectTiered(inv.currentBalance, cdiAnnualPercent, inv.policy, daysToProject);
+      const pMonthGross = YieldCalculator.projectTiered(inv.currentBalance, cdiAnnualPercent, inv.policy, daysToProjectConvention);
       const p1YearGross = YieldCalculator.projectTiered(inv.currentBalance, cdiAnnualPercent, inv.policy, daysInYear);
-      const pMonthNet = totalTax > 0 ? YieldCalculator.projectTiered(inv.currentBalance, cdiAnnualPercent, buildNetPolicy(inv.policy, totalTax), daysToProject) : pMonthGross;
+      const pMonthNet = totalTax > 0 ? YieldCalculator.projectTiered(inv.currentBalance, cdiAnnualPercent, buildNetPolicy(inv.policy, totalTax), daysToProjectConvention) : pMonthGross;
       const p1YearNet = futureIrRate > 0 ? YieldCalculator.projectTiered(inv.currentBalance, cdiAnnualPercent, buildNetPolicy(inv.policy, futureIrRate), daysInYear) : p1YearGross;
 
       const profitMonth = pMonthNet.subtract(inv.currentBalance);

@@ -324,11 +324,13 @@ export function useZenithData() {
       const batch = writeBatch(db);
       snap.docs.forEach((d) => {
         const tx = d.data() as Transaction;
+        const val = Number(tx.value) || 0;
         if (tx.type === 'in' || tx.type === 'yield') {
-          currentBal += tx.value;
+          currentBal += val;
         } else if (tx.type === 'out') {
-          currentBal -= tx.value;
+          currentBal -= val;
         }
+        currentBal = Math.round(currentBal * 100) / 100;
         batch.update(d.ref, { partialBalance: currentBal });
       });
       await batch.commit();

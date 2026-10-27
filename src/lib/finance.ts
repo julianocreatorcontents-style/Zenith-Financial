@@ -52,7 +52,9 @@ export const calculateNetWorth = (
 
 export const calculateTotals = (transactions: any[], month: number, year: number, assets: any[] = []) => {
   const filtered = transactions.filter(t => {
-    const d = t.date?.toDate ? t.date.toDate() : new Date();
+    const rawDate = t?.date;
+    const d = rawDate?.toDate ? rawDate.toDate() : (rawDate ? new Date(rawDate) : null);
+    if (!d || Number.isNaN(d.getTime())) return false;
     return d.getMonth() === month && d.getFullYear() === year;
   });
   
@@ -60,12 +62,12 @@ export const calculateTotals = (transactions: any[], month: number, year: number
 
   const investmentTotal = assets
     .filter(a => a.type === 'investment')
-    .reduce((acc, a) => sum(acc, a.value ?? 0), 0);
+    .reduce((acc, a) => sum(acc, Number(a.value) || 0), 0);
 
   return {
-    in: filtered.filter(t => t.type === 'in').reduce((acc, t) => sum(acc, t.value ?? 0), 0),
-    out: filtered.filter(t => t.type === 'out').reduce((acc, t) => sum(acc, t.value ?? 0), 0),
-    yield: filtered.filter(t => t.type === 'yield').reduce((acc, t) => sum(acc, t.value ?? 0), 0),
+    in: filtered.filter(t => t.type === 'in').reduce((acc, t) => sum(acc, Number(t.value) || 0), 0),
+    out: filtered.filter(t => t.type === 'out').reduce((acc, t) => sum(acc, Number(t.value) || 0), 0),
+    yield: filtered.filter(t => t.type === 'yield').reduce((acc, t) => sum(acc, Number(t.value) || 0), 0),
     investments: investmentTotal
   };
 };
@@ -262,7 +264,7 @@ export const calculateCashFlowData = (transactions: any[]) => {
       .reduce((acc, t) => Math.round((acc + (t.value ?? 0)) * 100) / 100, 0);
 
     return {
-      value: Math.round(income - expense),
+      value: roundCurrency(income - expense),
       hasData: monthTx.length > 0
     };
   };
@@ -275,7 +277,7 @@ export const calculateCashFlowData = (transactions: any[]) => {
 
   let projection = 0;
   if (monthsWithData.length >= 3) {
-    projection = Math.round(monthsWithData.reduce((acc, m) => acc + m.value, 0) / 3);
+    projection = roundCurrency(monthsWithData.reduce((acc, m) => acc + m.value, 0) / 3);
   } else if (previousMonths[1]?.hasData) {
     projection = previousMonths[1].value;
   } else if (previousMonths[0]?.hasData) {

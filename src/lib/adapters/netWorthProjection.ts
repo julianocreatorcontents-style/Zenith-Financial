@@ -69,13 +69,25 @@ function buildNetPolicy(policy: YieldPolicy, irRate: number): YieldPolicy {
 }
 
 /**
+ * Converte dias corridos em dias de projeção da convenção do ativo (dias úteis ou corridos).
+ * Ativos em BUSINESS_DAYS_252 capitalizam apenas em dias úteis (~252/365 do calendário).
+ */
+function getConventionDays(calendarDays: number, policy: YieldPolicy): number {
+  if (policy.dayCountConvention === 'BUSINESS_DAYS_252') {
+    return Math.max(1, Math.round((calendarDays * 252) / 365));
+  }
+  return calendarDays;
+}
+
+/**
  * Projeta o saldo líquido (após IR regressivo e IOF) de um único investimento
  * para um horizonte de `futureDays` dias a partir de hoje.
  *
  * - IOF: aplica-se apenas nos primeiros 29 dias corridos após o investimento;
  *   como estamos projetando meses futuros, `alreadyInvested + futureDays`
  *   determina o período total.
- * - IR: taxa regressiva baseada no total de dias ao resgatar.
+ * - IR: taxa regressiva baseada no total de dias ao resgatar (dias corridos).
+ * - Capitalização: respeita a convenção de dias do ativo (dias úteis ou corridos).
  */
 function projectNetBalance(
   investment: Investment,
@@ -83,21 +95,23 @@ function projectNetBalance(
   alreadyInvested: number,
   futureDays: number,
 ): number {
+  const compoundDays = getConventionDays(futureDays, investment.policy);
+
   if (investment.taxDisplayMode !== 'NET') {
     return YieldCalculator.projectTiered(
       investment.currentBalance,
       cdiAnnualPercent,
       investment.policy,
-      futureDays,
+      compoundDays,
     ).toBRL();
   }
 
   const totalDays = Math.max(1, alreadyInvested + futureDays);
 
-  // IR regressivo com base no total de dias ao resgatar
+  // IR regressivo com base no total de dias ao resgatar (dias corridos)
   const irRate = IncomeTaxPolicy.rateFor(totalDays);
 
-  // IOF: só incide nos primeiros 29 dias do investimento, e diminui diariamente
+  // IOF: só incide nos primeiros 29 dias do investimento, e diminui diariamente (dias corridos)
   const iofRate = totalDays <= 29 ? IofPolicy.rateFor(totalDays) : 0;
 
   // Taxa combinada de imposto (IR + IOF), limitada a 100%
@@ -109,7 +123,7 @@ function projectNetBalance(
     investment.currentBalance,
     cdiAnnualPercent,
     netPolicy,
-    futureDays,
+    compoundDays,
   ).toBRL();
 }
 
@@ -171,12 +185,14 @@ export function calculateNetWorthProjection(
           : investment.startDate;
       const alreadyInvested = investment.daysInvested(evaluationDate);
 
+      const compoundDays = getConventionDays(futureDays, investment.policy);
+
       // Projeção bruta (sem impostos)
       projectedGross += YieldCalculator.projectTiered(
         investment.currentBalance,
         cdiAnnualPercent,
         investment.policy,
-        futureDays,
+        compoundDays,
       ).toBRL();
 
       // Projeção líquida (com IR + IOF regressivos por ativo)

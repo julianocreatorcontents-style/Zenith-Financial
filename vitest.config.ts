@@ -6,7 +6,7 @@ export default defineConfig({
   test: {
     include: [
       'src/domain/**/*.test.ts',
-      'src/lib/adapters/**/*.test.ts',
+      'src/lib/**/*.test.ts',
     ],
     environment: 'node',
   },
