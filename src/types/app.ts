@@ -111,6 +111,9 @@ export interface ChartSlot {
   projectionTargetYear?: number | string;
   projectionTargetMonth?: number | string;
   projectionIncludeCashFlow?: boolean;
+  evolutionViewMode?: 'historico' | 'projecao';
+  projectionTaxMode?: 'liquido' | 'bruto';
+  monthlyContribution?: number;
 }
 
 export interface ZenithConfig {

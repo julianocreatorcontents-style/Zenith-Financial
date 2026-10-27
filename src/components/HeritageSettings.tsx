@@ -43,6 +43,9 @@ interface ChartSlot {
   projectionTargetYear?: number | string;
   projectionTargetMonth?: number | string;
   projectionIncludeCashFlow?: boolean;
+  evolutionViewMode?: 'historico' | 'projecao';
+  projectionTaxMode?: 'liquido' | 'bruto';
+  monthlyContribution?: number;
 }
 
 interface MasterStates {
@@ -86,7 +89,7 @@ export const HeritageSettings: React.FC<HeritageSettingsProps> = ({
       visible: true, 
       type: 'LineChart',
       visualType: 'Área',
-      color: 'var(--accent)',
+      color: '#00FFA3',
       opacity: 80,
       isGradient: true,
       granularity: 'Mês',
@@ -194,7 +197,7 @@ export const HeritageSettings: React.FC<HeritageSettingsProps> = ({
       visible: true, 
       type: 'MetricCard',
       visualType: 'Linha',
-      color: 'var(--accent)',
+      color: '#00FFA3',
       opacity: 100,
       isGradient: false,
       granularity: 'Mês',
@@ -738,6 +741,66 @@ export const HeritageSettings: React.FC<HeritageSettingsProps> = ({
                                             >
                                               <div className={`absolute top-1 w-3 h-3 rounded-full bg-white transition-all ${item.projectionIncludeCashFlow !== false ? 'left-6' : 'left-1'}`} />
                                             </button>
+                                          </div>
+
+                                          {/* Modo de Visualização */}
+                                          <div className="space-y-1">
+                                            <label className="text-[8px] font-bold text-[var(--text-muted)] uppercase tracking-widest">Modo de Visualização</label>
+                                            <div className="flex rounded-xl border border-[var(--border-card)] bg-[var(--bg-app)] p-0.5">
+                                              <button
+                                                onClick={() => updateChartConfig(id, { evolutionViewMode: 'historico' }, isMetric)}
+                                                className={`flex-1 rounded-lg px-3 py-1.5 text-[9px] font-bold uppercase tracking-wider transition-colors ${(item.evolutionViewMode ?? 'historico') === 'historico' ? 'bg-[var(--accent)] text-[var(--bg-app)]' : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'}`}
+                                              >
+                                                Histórico
+                                              </button>
+                                              <button
+                                                onClick={() => updateChartConfig(id, { evolutionViewMode: 'projecao' }, isMetric)}
+                                                className={`flex-1 rounded-lg px-3 py-1.5 text-[9px] font-bold uppercase tracking-wider transition-colors ${item.evolutionViewMode === 'projecao' ? 'bg-[var(--accent)] text-[var(--bg-app)]' : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'}`}
+                                              >
+                                                Projeção
+                                              </button>
+                                            </div>
+                                          </div>
+
+                                          {/* Líquido / Bruto */}
+                                          <div className="space-y-1">
+                                            <label className="text-[8px] font-bold text-[var(--text-muted)] uppercase tracking-widest">Exibição de Impostos</label>
+                                            <div className="flex rounded-xl border border-[var(--border-card)] bg-[var(--bg-app)] p-0.5">
+                                              <button
+                                                onClick={() => updateChartConfig(id, { projectionTaxMode: 'liquido' }, isMetric)}
+                                                className={`flex-1 rounded-lg px-3 py-1.5 text-[9px] font-bold uppercase tracking-wider transition-colors ${(item.projectionTaxMode ?? 'liquido') === 'liquido' ? 'bg-[var(--accent)] text-[var(--bg-app)]' : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'}`}
+                                              >
+                                                Líquido
+                                              </button>
+                                              <button
+                                                onClick={() => updateChartConfig(id, { projectionTaxMode: 'bruto' }, isMetric)}
+                                                className={`flex-1 rounded-lg px-3 py-1.5 text-[9px] font-bold uppercase tracking-wider transition-colors ${item.projectionTaxMode === 'bruto' ? 'bg-[var(--accent)] text-[var(--bg-app)]' : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'}`}
+                                              >
+                                                Bruto
+                                              </button>
+                                            </div>
+                                          </div>
+
+                                          {/* Aporte Mensal */}
+                                          <div className="flex items-center justify-between p-2.5 rounded-xl bg-[var(--bg-card)] border border-[var(--border-card)]">
+                                            <div className="pr-2">
+                                              <p className="text-[9px] font-bold text-[var(--text-primary)]">Aporte Mensal Recorrente</p>
+                                              <p className="text-[8px] text-[var(--text-muted)] leading-tight">
+                                                Simula aportes fixos mensais na projeção patrimonial
+                                              </p>
+                                            </div>
+                                            <div className="flex items-center gap-1 bg-[var(--bg-app)] border border-[var(--border-card)] rounded-xl px-2 py-1.5 shrink-0">
+                                              <span className="text-[9px] text-[var(--text-muted)]">R$</span>
+                                              <input
+                                                type="number"
+                                                min={0}
+                                                step={100}
+                                                value={item.monthlyContribution || ''}
+                                                onChange={(e) => updateChartConfig(id, { monthlyContribution: Math.max(0, Number(e.target.value) || 0) }, isMetric)}
+                                                placeholder="0"
+                                                className="w-20 bg-transparent text-[10px] font-mono font-bold text-[var(--text-primary)] text-right outline-none"
+                                              />
+                                            </div>
                                           </div>
                                         </div>
                                       )}

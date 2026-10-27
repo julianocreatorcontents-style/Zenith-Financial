@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useCallback } from 'react';
+import React, { useMemo, useCallback } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   Eye,
@@ -10,7 +10,6 @@ import {
   Car,
   ArrowUpRight,
   ArrowRightLeft,
-  TrendingUp,
 } from 'lucide-react';
 import {
   ResponsiveContainer,
@@ -60,10 +59,10 @@ interface HomeViewProps {
   chartData: any[];
   projectionData: any[];
   cashFlowData: any[];
-  evolutionView: 'historico' | 'projecao';
-  setEvolutionView: (v: 'historico' | 'projecao') => void;
-  projectionTaxMode: 'liquido' | 'bruto';
-  setProjectionTaxMode: (m: 'liquido' | 'bruto') => void;
+  evolutionView?: 'historico' | 'projecao';
+  setEvolutionView?: (v: 'historico' | 'projecao') => void;
+  projectionTaxMode?: 'liquido' | 'bruto';
+  setProjectionTaxMode?: (m: 'liquido' | 'bruto') => void;
   chartFilterValue: { type: 'category' | 'asset' | null; value: string | null };
   setChartFilterValue: React.Dispatch<React.SetStateAction<{ type: 'category' | 'asset' | null; value: string | null }>>;
   marketRate: MarketRateState;
@@ -93,10 +92,10 @@ export const HomeView: React.FC<HomeViewProps> = ({
   chartData,
   projectionData,
   cashFlowData,
-  evolutionView,
-  setEvolutionView,
-  projectionTaxMode,
-  setProjectionTaxMode,
+  evolutionView: _evolutionViewProp,
+  setEvolutionView: _setEvolutionViewProp,
+  projectionTaxMode: _projectionTaxModeProp,
+  setProjectionTaxMode: _setProjectionTaxModeProp,
   chartFilterValue,
   setChartFilterValue,
   marketRate,
@@ -113,9 +112,13 @@ export const HomeView: React.FC<HomeViewProps> = ({
   onCreateAsset,
   t
 }) => {
-  const [monthlyContribution, setMonthlyContribution] = useState<number>(0);
-
   const evolChartConfig = settings?.zenith_config?.charts?.['CHART_EVOL_PATRIMONIO'];
+
+  // Ler estado do modo de visualização e impostos diretamente da config persistida
+  const evolutionView = evolChartConfig?.evolutionViewMode ?? 'historico';
+  const projectionTaxMode = evolChartConfig?.projectionTaxMode ?? 'liquido';
+  const monthlyContribution = evolChartConfig?.monthlyContribution ?? 0;
+
   const targetYear = evolChartConfig?.projectionTargetYear ? Number(evolChartConfig.projectionTargetYear) : (new Date().getFullYear() + 1);
   const targetMonth = evolChartConfig?.projectionTargetMonth !== undefined ? Number(evolChartConfig.projectionTargetMonth) : 11;
   const now = new Date();
@@ -831,54 +834,12 @@ export const HomeView: React.FC<HomeViewProps> = ({
           <span className="text-xs font-medium text-[var(--text-secondary)]">
             {settings?.customTerms?.['Saldo'] || (evolutionView === 'projecao' ? t("Projeção Patrimonial", "Net Worth Forecast") : t("Evolução do Patrimônio", "Net Worth Evolution"))}
           </span>
-          <div className="flex flex-wrap items-center gap-1.5">
-            {evolutionView === 'projecao' && (
-              <>
-                <div className="flex shrink-0 rounded-xl border border-[var(--border-card)] bg-[var(--bg-app)] p-0.5">
-                  <button
-                    onClick={() => setProjectionTaxMode('liquido')}
-                    className={`rounded-lg px-2 py-1 text-[9px] font-bold uppercase tracking-wider transition-colors ${projectionTaxMode === 'liquido' ? 'bg-[var(--accent)] text-[var(--bg-app)]' : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'}`}
-                  >
-                    {t('Líquido', 'Net')}
-                  </button>
-                  <button
-                    onClick={() => setProjectionTaxMode('bruto')}
-                    className={`rounded-lg px-2 py-1 text-[9px] font-bold uppercase tracking-wider transition-colors ${projectionTaxMode === 'bruto' ? 'bg-[var(--accent)] text-[var(--bg-app)]' : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'}`}
-                  >
-                    {t('Bruto', 'Gross')}
-                  </button>
-                </div>
-                <div className="flex items-center gap-1.5 bg-[var(--bg-app)] border border-[var(--border-card)] rounded-xl px-2 py-1">
-                  <TrendingUp size={10} className="text-[var(--accent)] shrink-0" />
-                  <span className="text-[9px] font-bold text-[var(--text-muted)] uppercase tracking-wider">{t('Aporte/mês', 'Monthly')}</span>
-                  <input
-                    type="number"
-                    min={0}
-                    step={100}
-                    value={monthlyContribution || ''}
-                    onChange={(e) => setMonthlyContribution(Math.max(0, Number(e.target.value) || 0))}
-                    placeholder="0"
-                    className="w-16 bg-transparent text-[9px] font-mono font-bold text-[var(--text-primary)] text-right outline-none"
-                  />
-                  <span className="text-[9px] text-[var(--text-muted)]">R$</span>
-                </div>
-              </>
-            )}
-            <div className="flex shrink-0 rounded-xl border border-[var(--border-card)] bg-[var(--bg-app)] p-0.5">
-              <button
-                onClick={() => setEvolutionView('historico')}
-                className={`rounded-lg px-2 py-1 text-[9px] font-bold uppercase tracking-wider transition-colors ${evolutionView === 'historico' ? 'bg-[var(--accent)] text-[var(--bg-app)]' : 'text-[var(--text-muted)]'}`}
-              >
-                {t('Histórico', 'History')}
-              </button>
-              <button
-                onClick={() => setEvolutionView('projecao')}
-                className={`rounded-lg px-2 py-1 text-[9px] font-bold uppercase tracking-wider transition-colors ${evolutionView === 'projecao' ? 'bg-[var(--accent)] text-[var(--bg-app)]' : 'text-[var(--text-muted)]'}`}
-              >
-                {t('Projeção', 'Forecast')}
-              </button>
-            </div>
-          </div>
+          {evolutionView === 'projecao' && (
+            <span className="text-[9px] font-bold px-2 py-0.5 rounded-lg bg-[var(--accent)]/10 text-[var(--accent)] uppercase tracking-wider">
+              {projectionTaxMode === 'liquido' ? t('Líquido', 'Net') : t('Bruto', 'Gross')}
+              {monthlyContribution > 0 && ` · R$ ${monthlyContribution}/mês`}
+            </span>
+          )}
         </div>
         <div className="flex items-center gap-3 mb-2">
           <h2 className="text-3xl font-mono tracking-tighter font-medium text-[var(--text-primary)]">
