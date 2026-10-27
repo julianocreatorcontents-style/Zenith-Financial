@@ -236,6 +236,7 @@ export function useZenithData() {
               'Saúde': { id: 'Saúde', nome: 'Saúde', cor_destaque: { hex: '#E91E63' }, visivel_no_dash: true, config_avancada: {}, ia_insights_buffer: {} }
             },
             dashboard_order: [
+              'CHART_EVOL_PATRIMONIO',
               'METRIC_ENTRADAS',
               'METRIC_SAIDAS',
               'METRIC_RENDIMENTOS',

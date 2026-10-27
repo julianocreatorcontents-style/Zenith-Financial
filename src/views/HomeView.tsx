@@ -115,15 +115,25 @@ export const HomeView: React.FC<HomeViewProps> = ({
 }) => {
   const [monthlyContribution, setMonthlyContribution] = useState<number>(0);
 
+  const evolChartConfig = settings?.zenith_config?.charts?.['CHART_EVOL_PATRIMONIO'];
+  const targetYear = evolChartConfig?.projectionTargetYear ? Number(evolChartConfig.projectionTargetYear) : (new Date().getFullYear() + 1);
+  const targetMonth = evolChartConfig?.projectionTargetMonth !== undefined ? Number(evolChartConfig.projectionTargetMonth) : 11;
+  const now = new Date();
+  const monthsDiff = (targetYear - now.getFullYear()) * 12 + (targetMonth - now.getMonth());
+  const projectionMonths = Math.max(1, Math.min(120, monthsDiff));
+  const includeCashFlow = evolChartConfig?.projectionIncludeCashFlow !== false;
+
   const computedProjectionData = useMemo(() => {
     if (evolutionView !== 'projecao') return projectionData;
     return calculateNetWorthProjection({
       assets,
       transactions,
       cdiAnnualPercent: marketRate.cdiAnnualPercent,
+      months: projectionMonths,
       monthlyContribution,
+      includeCashFlow,
     });
-  }, [evolutionView, assets, transactions, marketRate.cdiAnnualPercent, monthlyContribution, projectionData]);
+  }, [evolutionView, assets, transactions, marketRate.cdiAnnualPercent, monthlyContribution, projectionMonths, includeCashFlow, projectionData]);
 
   const resolveStyle = useCallback((catId: string, propertyName: string, defaultValue?: any) => {
     const config = settings?.zenith_config;
@@ -819,7 +829,7 @@ export const HomeView: React.FC<HomeViewProps> = ({
       <section className="bg-[var(--bg-card)] border border-[var(--border-card)] rounded-[32px] p-5 sm:p-6 relative overflow-hidden">
         <div className="flex flex-wrap items-center justify-between gap-2 mb-1">
           <span className="text-xs font-medium text-[var(--text-secondary)]">
-            {settings?.customTerms?.['Saldo'] || t("Evolução do Patrimônio", "Net Worth Evolution")}
+            {settings?.customTerms?.['Saldo'] || (evolutionView === 'projecao' ? t("Projeção Patrimonial", "Net Worth Forecast") : t("Evolução do Patrimônio", "Net Worth Evolution"))}
           </span>
           <div className="flex flex-wrap items-center gap-1.5">
             {evolutionView === 'projecao' && (
@@ -872,7 +882,14 @@ export const HomeView: React.FC<HomeViewProps> = ({
         </div>
         <div className="flex items-center gap-3 mb-2">
           <h2 className="text-3xl font-mono tracking-tighter font-medium text-[var(--text-primary)]">
-            {privacyMode ? '••••••••' : (metrics.netWorth ?? 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+            {privacyMode ? '••••••••' : (
+              evolutionView === 'projecao' && computedProjectionData.length > 1
+                ? (projectionTaxMode === 'liquido'
+                    ? (computedProjectionData[computedProjectionData.length - 1].valueNet ?? 0)
+                    : (computedProjectionData[computedProjectionData.length - 1].value ?? 0)
+                  ).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
+                : (metrics.netWorth ?? 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
+            )}
           </h2>
           <button 
             onClick={onTogglePrivacy} 
@@ -880,6 +897,11 @@ export const HomeView: React.FC<HomeViewProps> = ({
           >
             {privacyMode ? <EyeOff size={14} /> : <Eye size={14} />}
           </button>
+          {evolutionView === 'projecao' && computedProjectionData.length > 1 && (
+            <span className="text-[10px] font-mono px-2 py-0.5 rounded-md bg-[var(--accent)]/10 text-[var(--accent)] font-bold">
+              {computedProjectionData[computedProjectionData.length - 1].name}
+            </span>
+          )}
         </div>
         {renderChart('CHART_EVOL_PATRIMONIO')}
       </section>

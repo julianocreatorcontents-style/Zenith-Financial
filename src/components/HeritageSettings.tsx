@@ -40,6 +40,9 @@ interface ChartSlot {
   predictiveInsights?: boolean;
   tooltipsEnabled?: boolean;
   touchToZoom?: boolean;
+  projectionTargetYear?: number | string;
+  projectionTargetMonth?: number | string;
+  projectionIncludeCashFlow?: boolean;
 }
 
 interface MasterStates {
@@ -233,6 +236,7 @@ export const HeritageSettings: React.FC<HeritageSettingsProps> = ({
   };
 
   const DEFAULT_DASHBOARD_ORDER = [
+    'CHART_EVOL_PATRIMONIO',
     'METRIC_ENTRADAS',
     'METRIC_SAIDAS',
     'METRIC_RENDIMENTOS',
@@ -303,9 +307,10 @@ export const HeritageSettings: React.FC<HeritageSettingsProps> = ({
 
     const mergedCategories = { ...defaultCategories, ...(base.categories || {}) };
     
-    const mergedDashboardOrder = base.dashboard_order && base.dashboard_order.length > 0 
-      ? Array.from(new Set([...base.dashboard_order, ...DEFAULT_DASHBOARD_ORDER]))
+    const rawOrder = base.dashboard_order && base.dashboard_order.length > 0 
+      ? base.dashboard_order 
       : DEFAULT_DASHBOARD_ORDER;
+    const mergedDashboardOrder = Array.from(new Set(['CHART_EVOL_PATRIMONIO', ...rawOrder, ...DEFAULT_DASHBOARD_ORDER]));
 
     return { 
       ...base, 
@@ -674,6 +679,68 @@ export const HeritageSettings: React.FC<HeritageSettingsProps> = ({
                                           </button>
                                         </div>
                                       </div>
+
+                                      {/* Projeção Patrimonial Dedicada */}
+                                      {id === 'CHART_EVOL_PATRIMONIO' && (
+                                        <div className="space-y-3 pt-3 border-t border-[var(--border-card)]">
+                                          <div className="flex items-center gap-2">
+                                            <Sparkles size={14} className="text-[var(--accent)]" />
+                                            <p className="text-[9px] text-[var(--accent)] uppercase font-black tracking-widest">
+                                              Filtros da Projeção Patrimonial
+                                            </p>
+                                          </div>
+                                          <div className="grid grid-cols-2 gap-2">
+                                            <div className="space-y-1">
+                                              <label className="text-[8px] font-bold text-[var(--text-muted)] uppercase tracking-widest">Ano Alvo</label>
+                                              <select
+                                                value={item.projectionTargetYear ?? new Date().getFullYear() + 1}
+                                                onChange={(e) => updateChartConfig(id, { projectionTargetYear: Number(e.target.value) }, isMetric)}
+                                                className="w-full bg-[var(--bg-app)] border border-[var(--border-card)] rounded-xl p-2 text-[10px] text-[var(--text-primary)] outline-none cursor-pointer"
+                                              >
+                                                {[2026, 2027, 2028, 2029, 2030, 2031, 2032].map(y => (
+                                                  <option key={y} value={y}>{y}</option>
+                                                ))}
+                                              </select>
+                                            </div>
+                                            <div className="space-y-1">
+                                              <label className="text-[8px] font-bold text-[var(--text-muted)] uppercase tracking-widest">Mês Alvo</label>
+                                              <select
+                                                value={item.projectionTargetMonth ?? 11}
+                                                onChange={(e) => updateChartConfig(id, { projectionTargetMonth: Number(e.target.value) }, isMetric)}
+                                                className="w-full bg-[var(--bg-app)] border border-[var(--border-card)] rounded-xl p-2 text-[10px] text-[var(--text-primary)] outline-none cursor-pointer"
+                                              >
+                                                <option value={11}>Dezembro (Fim do ano)</option>
+                                                <option value={0}>Janeiro</option>
+                                                <option value={1}>Fevereiro</option>
+                                                <option value={2}>Março</option>
+                                                <option value={3}>Abril</option>
+                                                <option value={4}>Maio</option>
+                                                <option value={5}>Junho</option>
+                                                <option value={6}>Julho</option>
+                                                <option value={7}>Agosto</option>
+                                                <option value={8}>Setembro</option>
+                                                <option value={9}>Outubro</option>
+                                                <option value={10}>Novembro</option>
+                                              </select>
+                                            </div>
+                                          </div>
+                                          <div className="flex items-center justify-between p-2.5 rounded-xl bg-[var(--bg-card)] border border-[var(--border-card)]">
+                                            <div className="pr-2">
+                                              <p className="text-[9px] font-bold text-[var(--text-primary)]">Fluxo de Caixa Previsto</p>
+                                              <p className="text-[8px] text-[var(--text-muted)] leading-tight">
+                                                Soma entradas/saídas agendadas e média histórica recente ao rendimento dos investimentos
+                                              </p>
+                                            </div>
+                                            <button
+                                              type="button"
+                                              onClick={() => updateChartConfig(id, { projectionIncludeCashFlow: item.projectionIncludeCashFlow === false ? true : false }, isMetric)}
+                                              className={`w-10 h-5 rounded-full transition-all relative shrink-0 ${item.projectionIncludeCashFlow !== false ? 'bg-[var(--accent)]' : 'bg-[var(--bg-card-hover)]'}`}
+                                            >
+                                              <div className={`absolute top-1 w-3 h-3 rounded-full bg-white transition-all ${item.projectionIncludeCashFlow !== false ? 'left-6' : 'left-1'}`} />
+                                            </button>
+                                          </div>
+                                        </div>
+                                      )}
                                     </motion.div>
                                   )}
                                 </AnimatePresence>

@@ -108,6 +108,9 @@ export interface ChartSlot {
   predictiveInsights?: boolean;
   tooltipsEnabled?: boolean;
   touchToZoom?: boolean;
+  projectionTargetYear?: number | string;
+  projectionTargetMonth?: number | string;
+  projectionIncludeCashFlow?: boolean;
 }
 
 export interface ZenithConfig {

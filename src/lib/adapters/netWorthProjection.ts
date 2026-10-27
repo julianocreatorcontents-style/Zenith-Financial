@@ -6,7 +6,7 @@ import { IofPolicy } from '../../domain/tax/IofPolicy';
 import { Money } from '../../domain/money/Money';
 import type { Investment } from '../../domain/investment/Investment';
 import type { YieldPolicy } from '../../domain/yield/YieldPolicy';
-import { calculateNetWorth } from '../finance';
+import { calculateNetWorth, calculateCashFlowData } from '../finance';
 
 export const DEFAULT_CDI_ANNUAL_PERCENT = 13.65;
 
@@ -45,6 +45,7 @@ export interface NetWorthProjectionInput {
   months?: number;
   from?: Date;
   monthlyContribution?: number;
+  includeCashFlow?: boolean;
 }
 
 const roundCurrency = (value: number) => Math.round(value * 100) / 100;
@@ -137,6 +138,7 @@ export function calculateNetWorthProjection(
     months = 12,
     from = new Date(),
     monthlyContribution = 0,
+    includeCashFlow = false,
   } = input;
 
   const today = startOfLocalDay(from);
@@ -167,6 +169,20 @@ export function calculateNetWorthProjection(
 
   const safeMonths = Math.max(0, Math.floor(months));
   const safeContribution = Math.max(0, Number(monthlyContribution) || 0);
+
+  // Média histórica de fluxo de caixa dos últimos meses para projeção de contas
+  let historicalMonthlySavings = 0;
+  if (includeCashFlow && transactions.length > 0) {
+    const cashFlowData = calculateCashFlowData(transactions);
+    const pastValues = cashFlowData.filter((d) => !d.isPredicted).map((d) => d.value);
+    if (pastValues.length > 0) {
+      historicalMonthlySavings = roundCurrency(
+        pastValues.reduce((a, b) => a + b, 0) / pastValues.length,
+      );
+    }
+  }
+
+  let cumulativeCashFlow = 0;
 
   for (let offset = 1; offset <= safeMonths; offset++) {
     const target = new Date(today.getFullYear(), today.getMonth() + offset, 0);
@@ -202,6 +218,38 @@ export function calculateNetWorthProjection(
         alreadyInvested,
         futureDays,
       );
+    }
+
+    // Fluxo de caixa previsto (entradas e saídas agendadas ou tendência média)
+    if (includeCashFlow) {
+      const targetMonth = target.getMonth();
+      const targetYear = target.getFullYear();
+      const monthTx = transactions.filter((t) => {
+        const rawDate = t?.date;
+        const d = rawDate?.toDate
+          ? rawDate.toDate()
+          : rawDate
+            ? new Date(rawDate)
+            : null;
+        return (
+          d &&
+          !Number.isNaN(d.getTime()) &&
+          d.getMonth() === targetMonth &&
+          d.getFullYear() === targetYear
+        );
+      });
+
+      if (monthTx.length > 0) {
+        const inVal = monthTx
+          .filter((t) => t.type === 'in' || t.type === 'yield')
+          .reduce((acc, t) => acc + (Number(t.value) || 0), 0);
+        const outVal = monthTx
+          .filter((t) => t.type === 'out')
+          .reduce((acc, t) => acc + (Number(t.value) || 0), 0);
+        cumulativeCashFlow += inVal - outVal;
+      } else {
+        cumulativeCashFlow += historicalMonthlySavings;
+      }
     }
 
     // Projeção de aportes recorrentes mensais (se informados)
@@ -241,8 +289,8 @@ export function calculateNetWorthProjection(
 
     points.push({
       name: monthLabel,
-      value: roundCurrency(nonInvestmentNetWorth + projectedGross + contributionsGross),
-      valueNet: roundCurrency(nonInvestmentNetWorth + projectedNet + contributionsNet),
+      value: roundCurrency(nonInvestmentNetWorth + projectedGross + contributionsGross + cumulativeCashFlow),
+      valueNet: roundCurrency(nonInvestmentNetWorth + projectedNet + contributionsNet + cumulativeCashFlow),
       date: `${dateLabel} · Projeção`,
       projected: true,
       contributedTotal: totalContributed > 0 ? roundCurrency(totalContributed) : undefined,
