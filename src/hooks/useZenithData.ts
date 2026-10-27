@@ -27,6 +27,7 @@ import {
   calculateNetWorth
 } from '../lib/finance';
 import { calculateNetWorthProjection } from '../lib/adapters/netWorthProjection';
+import { enrichAsset } from '../lib/adapters/assetYieldService';
 import { getCachedCdiRate, fetchLiveCdiRate } from '../lib/adapters/marketRateService';
 import type { MarketRateState } from '../lib/adapters/marketRateService';
 import { mapSpreadsheetRow } from '../lib/spreadsheetParser';
@@ -43,7 +44,7 @@ export interface FirestoreIssue {
 export function useZenithData() {
   const [user, setUser] = useState<User | null>(null);
   const [profile, setProfile] = useState<UserProfile | null>(null);
-  const [assets, setAssets] = useState<Asset[]>([]);
+  const [rawAssets, setRawAssets] = useState<Asset[]>([]);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [ddas, setDdas] = useState<DDA[]>([]);
   const [settings, setSettings] = useState<Settings | null>(null);
@@ -146,16 +147,21 @@ export function useZenithData() {
   // 4. Assets Listener
   useEffect(() => {
     if (!user) {
-      setAssets([]);
+      setRawAssets([]);
       return;
     }
     const q = query(collection(db, 'assets'), where('uid', '==', user.uid), orderBy('createdAt', 'desc'));
     const unsub = onSnapshot(q, (snap) => {
       const docs = snap.docs.map(d => ({ id: d.id, ...d.data() } as Asset));
-      setAssets(docs);
+      setRawAssets(docs);
     }, (e) => handleFirestoreError(e, OperationType.LIST, 'assets'));
     return unsub;
   }, [user]);
+
+  // Dynamic enrichment: compounds daily yield from deposit date to today
+  const assets = useMemo(() => {
+    return rawAssets.map(asset => enrichAsset(asset, marketRate.cdiAnnualPercent));
+  }, [rawAssets, marketRate.cdiAnnualPercent]);
 
   // 5. Transactions Listener
   useEffect(() => {
@@ -464,9 +470,12 @@ export function useZenithData() {
   // Operações de Ativos
   const createAsset = useCallback(async (data: any) => {
     if (!user) return;
+    const now = new Date();
     await addDoc(collection(db, 'assets'), {
       ...data,
       uid: user.uid,
+      valorInvestido: data.valorInvestido ?? data.value,
+      investmentStartDate: data.investmentStartDate ?? now,
       createdAt: serverTimestamp()
     }).catch((e: any) => handleFirestoreError(e, OperationType.CREATE, 'assets'));
   }, [user]);

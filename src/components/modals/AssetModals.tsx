@@ -47,6 +47,17 @@ export function AssetModal({
   const [isEditing, setIsEditing] = useState(false);
   const [formData, setFormData] = useState({ ...asset });
 
+  const rawStartDate = asset.investmentStartDate ?? asset.createdAt;
+  const initialDateStr = (() => {
+    try {
+      const d = rawStartDate?.toDate ? rawStartDate.toDate() : rawStartDate ? new Date(rawStartDate) : new Date();
+      return d instanceof Date && !Number.isNaN(d.getTime()) ? d.toISOString().split('T')[0] : new Date().toISOString().split('T')[0];
+    } catch {
+      return new Date().toISOString().split('T')[0];
+    }
+  })();
+  const [startDateStr, setStartDateStr] = useState(initialDateStr);
+
   const handleSave = () => {
     if (!formData.name.trim()) {
       alert(t('Por favor, insira um nome para o ativo.', 'Please enter a name for the asset.'));
@@ -56,7 +67,26 @@ export function AssetModal({
       alert(t('O valor não pode ser negativo.', 'The value cannot be negative.'));
       return;
     }
-    const { id, ...updateData } = formData;
+    const {
+      id,
+      change,
+      currentValue,
+      accumulatedYield,
+      dailyYield,
+      daysInvested,
+      yieldPercent,
+      yieldStartDate,
+      originalValue,
+      ...updateData
+    } = formData;
+
+    if (startDateStr) {
+      updateData.investmentStartDate = new Date(startDateStr + 'T12:00:00');
+    }
+    if (updateData.valorInvestido === undefined && updateData.value !== undefined) {
+      updateData.valorInvestido = updateData.value;
+    }
+
     onSave(asset.id, updateData);
   };
 
@@ -87,19 +117,32 @@ export function AssetModal({
               <input value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} className="mt-1 w-full bg-[var(--bg-app)] border border-[var(--border-card)] rounded-xl p-3 text-[var(--text-primary)] text-base sm:text-sm focus:border-[var(--accent)] outline-none" />
             </div>
             <div>
-              <label className="text-[10px] uppercase font-bold text-[var(--text-muted)] tracking-widest">{t("Valor (R$)", "Value (R$)")}</label>
+              <label className="text-[10px] uppercase font-bold text-[var(--text-muted)] tracking-widest">{t("Aporte Original (R$)", "Original Deposit (R$)")}</label>
               <div className="relative mt-1">
                 <span className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--text-muted)] text-xs font-bold">R$</span>
                 <input
                   type="text"
-                  value={(formData.value ?? 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  value={(formData.valorInvestido ?? formData.value ?? 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                   onChange={e => {
                     const val = e.target.value.replace(/\D/g, '');
-                    setFormData({...formData, value: parseInt(val || '0') / 100});
+                    const num = parseInt(val || '0') / 100;
+                    setFormData({...formData, valorInvestido: num, value: num});
                   }}
                   className="w-full bg-[var(--bg-app)] border border-[var(--border-card)] rounded-xl p-3 pl-10 text-[var(--text-primary)] text-base sm:text-sm focus:border-[var(--accent)] outline-none font-mono"
                 />
               </div>
+            </div>
+            <div>
+              <label className="text-[10px] uppercase font-bold text-[var(--text-muted)] tracking-widest">{t("Data do Aporte / Registro", "Deposit / Registration Date")}</label>
+              <input
+                type="date"
+                value={startDateStr}
+                onChange={e => {
+                  setStartDateStr(e.target.value);
+                  setFormData({...formData, investmentStartDate: e.target.value ? new Date(e.target.value + 'T12:00:00') : new Date()});
+                }}
+                className="mt-1 w-full bg-[var(--bg-app)] border border-[var(--border-card)] rounded-xl p-3 text-[var(--text-primary)] text-base sm:text-sm focus:border-[var(--accent)] outline-none font-mono"
+              />
             </div>
             <div>
               <label className="text-[10px] uppercase font-bold text-[var(--text-muted)] tracking-widest">{t("Tipo", "Type")}</label>
@@ -130,6 +173,36 @@ export function AssetModal({
               </p>
               {asset.change && <p className="text-xs font-bold text-[var(--accent)]">{asset.change} {t("no período", "in period")}</p>}
             </div>
+
+            {((asset.accumulatedYield && asset.accumulatedYield > 0) || (asset.dailyYield && asset.dailyYield > 0) || asset.daysInvested !== undefined) && (
+              <div className="grid grid-cols-2 gap-2 rounded-2xl bg-[var(--bg-app)] p-3 border border-[var(--border-card)] text-left">
+                <div>
+                  <span className="text-[9px] uppercase font-bold text-[var(--text-muted)] tracking-wider block">{t("Aporte Original", "Initial Deposit")}</span>
+                  <span className="text-xs font-mono font-bold text-[var(--text-primary)]">
+                    {privacyMode ? '••••••' : ((asset.originalValue ?? asset.valorInvestido ?? asset.value) ?? 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-[9px] uppercase font-bold text-[var(--text-muted)] tracking-wider block">{t("Rendimento Acumulado", "Accumulated Yield")}</span>
+                  <span className="text-xs font-mono font-bold text-[var(--accent)]">
+                    {privacyMode ? '••••••' : (asset.accumulatedYield ? `+${asset.accumulatedYield.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}` : 'R$ 0,00')}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-[9px] uppercase font-bold text-[var(--text-muted)] tracking-wider block">{t("Rendimento Diário", "Daily Yield")}</span>
+                  <span className="text-xs font-mono font-bold text-[var(--accent)]">
+                    {privacyMode ? '••••••' : (asset.dailyYield ? `+${asset.dailyYield.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}/dia` : 'R$ 0,00/dia')}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-[9px] uppercase font-bold text-[var(--text-muted)] tracking-wider block">{t("Tempo Investido", "Days Invested")}</span>
+                  <span className="text-xs font-mono font-bold text-[var(--text-secondary)]">
+                    {asset.daysInvested ?? 0} {t("dias", "days")}
+                  </span>
+                </div>
+              </div>
+            )}
+
             <div className="h-px bg-[var(--border-card)]" />
             <p className="text-sm leading-relaxed text-[var(--text-secondary)]">{asset.detail}</p>
             <button onClick={() => setIsEditing(true)} className="w-full rounded-2xl bg-[var(--text-primary)] py-4 text-[10px] font-black uppercase tracking-widest text-[var(--bg-app)] transition-colors hover:bg-[var(--accent)] sm:py-5">
@@ -217,7 +290,13 @@ export function AddAssetModal({
   onApiKeyError,
 }: AddAssetModalProps) {
   const t = (pt: string, en: string) => (language === 'en-US' ? en : pt);
-  const [formData, setFormData] = useState({ name: '', value: 0, type: 'liquidity', detail: '' });
+  const [formData, setFormData] = useState({
+    name: '',
+    value: 0,
+    type: 'liquidity',
+    detail: '',
+    startDate: new Date().toISOString().split('T')[0],
+  });
   const [isExtracting, setIsExtracting] = useState(false);
   const [extractionStage, setExtractionStage] = useState('');
   const [extractionProgress, setExtractionProgress] = useState(0);
@@ -233,7 +312,14 @@ export function AddAssetModal({
       alert(t('O valor não pode ser negativo.', 'The value cannot be negative.'));
       return;
     }
-    onAdd(formData);
+    onAdd({
+      name: formData.name,
+      value: formData.value,
+      valorInvestido: formData.value,
+      type: formData.type,
+      detail: formData.detail,
+      investmentStartDate: formData.startDate ? new Date(formData.startDate + 'T12:00:00') : new Date(),
+    });
   };
 
   const handleFileUpload = async (file: File) => {
@@ -408,10 +494,20 @@ export function AddAssetModal({
         <div className="space-y-4">
           <div>
             <label className="text-[10px] uppercase font-bold text-[var(--text-muted)] tracking-widest">{t("Nome", "Name")}</label>
-            <input placeholder={t("Ex: Carteira de Ações", "Ex: Stock Wallet")} value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} className="mt-1 w-full bg-[var(--bg-app)] border border-[var(--border-card)] rounded-xl p-3 text-[var(--text-primary)] text-base sm:text-sm focus:border-[var(--accent)] outline-none" />
+            <input placeholder={t("Ex: Carteira 99Pay, Tesouro Selic...", "Ex: 99Pay, Treasury...")} value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} className="mt-1 w-full bg-[var(--bg-app)] border border-[var(--border-card)] rounded-xl p-3 text-[var(--text-primary)] text-base sm:text-sm focus:border-[var(--accent)] outline-none" />
+            {formData.name.toLowerCase().includes('99pay') && (
+              <p className="mt-1 text-[10px] font-bold text-[var(--accent)] flex items-center gap-1">
+                <Sparkles size={12} /> {t("Preset 99Pay detectado: 137% CDI até R$ 5k + 80% excedente (Rendimento Diário Automático)", "99Pay detected: 137% CDI up to 5k + 80% remainder (Daily Yield)")}
+              </p>
+            )}
+            {formData.name.toLowerCase().includes('mercado pago') && (
+              <p className="mt-1 text-[10px] font-bold text-[var(--accent)] flex items-center gap-1">
+                <Sparkles size={12} /> {t("Preset Mercado Pago detectado: 105% CDI até R$ 20k (Rendimento Diário Automático)", "Mercado Pago detected: 105% CDI up to 20k (Daily Yield)")}
+              </p>
+            )}
           </div>
           <div>
-            <label className="text-[10px] uppercase font-bold text-[var(--text-muted)] tracking-widest">{t("Valor (R$)", "Value (R$)")}</label>
+            <label className="text-[10px] uppercase font-bold text-[var(--text-muted)] tracking-widest">{t("Valor / Aporte Original (R$)", "Value / Original Deposit (R$)")}</label>
             <div className="relative mt-1">
               <span className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--text-muted)] text-xs font-bold">R$</span>
               <input
@@ -424,6 +520,15 @@ export function AddAssetModal({
                 className="w-full bg-[var(--bg-app)] border border-[var(--border-card)] rounded-xl p-3 pl-10 text-[var(--text-primary)] text-base sm:text-sm focus:border-[var(--accent)] outline-none font-mono"
               />
             </div>
+          </div>
+          <div>
+            <label className="text-[10px] uppercase font-bold text-[var(--text-muted)] tracking-widest">{t("Data do Aporte / Registro", "Deposit / Registration Date")}</label>
+            <input
+              type="date"
+              value={formData.startDate}
+              onChange={e => setFormData({...formData, startDate: e.target.value})}
+              className="mt-1 w-full bg-[var(--bg-app)] border border-[var(--border-card)] rounded-xl p-3 text-[var(--text-primary)] text-base sm:text-sm focus:border-[var(--accent)] outline-none font-mono"
+            />
           </div>
           <div>
             <label className="text-[10px] uppercase font-bold text-[var(--text-muted)] tracking-widest">{t("Tipo", "Type")}</label>
@@ -484,7 +589,36 @@ export function AssetDeepDiveModal({ asset, onClose, language }: AssetDeepDiveMo
           </button>
         </div>
 
-        <div className="space-y-8">
+        <div className="space-y-6">
+          {((asset.accumulatedYield && asset.accumulatedYield > 0) || (asset.dailyYield && asset.dailyYield > 0) || asset.originalValue) && (
+            <div className="grid grid-cols-2 gap-3 rounded-3xl bg-white/5 border border-white/10 p-5">
+              <div>
+                <p className="text-[10px] uppercase font-bold text-white/40 tracking-wider mb-1">{t("Aporte Original", "Initial Deposit")}</p>
+                <p className="text-lg font-mono font-bold text-white">
+                  {((asset.originalValue ?? asset.valorInvestido ?? asset.value) ?? 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                </p>
+              </div>
+              <div>
+                <p className="text-[10px] uppercase font-bold text-white/40 tracking-wider mb-1">{t("Saldo Atual", "Current Balance")}</p>
+                <p className="text-lg font-mono font-bold text-[var(--accent)]">
+                  {(asset.value ?? 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                </p>
+              </div>
+              <div>
+                <p className="text-[10px] uppercase font-bold text-white/40 tracking-wider mb-1">{t("Rendimento Acumulado", "Accumulated Yield")}</p>
+                <p className="text-sm font-mono font-bold text-[var(--accent)]">
+                  +{((asset.accumulatedYield ?? 0)).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })} ({asset.yieldPercent ? `+${asset.yieldPercent.toFixed(2)}%` : '+0.00%'})
+                </p>
+              </div>
+              <div>
+                <p className="text-[10px] uppercase font-bold text-white/40 tracking-wider mb-1">{t("Rendimento Diário", "Daily Yield")}</p>
+                <p className="text-sm font-mono font-bold text-white">
+                  +{(asset.dailyYield ?? 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}/dia
+                </p>
+              </div>
+            </div>
+          )}
+
           <div className="bg-[var(--accent)]/10 border border-[var(--accent)]/30 p-6 rounded-[32px] flex justify-between items-center">
             <div>
               <p className="text-[10px] font-bold text-[var(--accent)] uppercase tracking-widest mb-1">{t("Rentabilidade Real", "Real Profitability")}</p>

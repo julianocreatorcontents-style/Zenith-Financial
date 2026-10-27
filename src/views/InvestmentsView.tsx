@@ -74,7 +74,13 @@ export function InvestmentsView({
                 </div>
                 <div className="text-right">
                   <p className="text-sm font-mono font-bold text-[var(--text-primary)]">{(asset.value ?? 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</p>
-                  <p className="text-[10px] text-[var(--accent)] font-bold">+1.2%</p>
+                  <p className="text-[10px] text-[var(--accent)] font-bold">
+                    {asset.accumulatedYield && asset.accumulatedYield > 0
+                      ? `+${asset.accumulatedYield.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })} (+${asset.yieldPercent?.toFixed(2) ?? '0.00'}%)`
+                      : asset.dailyYield && asset.dailyYield > 0
+                        ? `+${asset.dailyYield.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}/dia`
+                        : (asset.change || '+0.00%')}
+                  </p>
                 </div>
               </button>
             );

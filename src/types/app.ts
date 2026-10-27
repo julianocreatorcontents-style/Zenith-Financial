@@ -18,7 +18,18 @@ export interface Asset {
   vencimento?: any;
   subcategoria?: string;
   estrategia?: string;
+  strategy?: 'FIXED_INCOME_TIERED' | 'FIXED_INCOME_SIMPLE';
+  investmentPolicy?: any;
+  investmentStartDate?: any;
   createdAt: any;
+  change?: string;
+  originalValue?: number;
+  currentValue?: number;
+  accumulatedYield?: number;
+  dailyYield?: number;
+  daysInvested?: number;
+  yieldPercent?: number;
+  yieldStartDate?: Date | null;
 }
 
 export interface UserProfile {
