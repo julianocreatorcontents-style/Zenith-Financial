@@ -150,10 +150,29 @@ export const calculateEvolutionData = (
   const isCurrentMonth = anchorYear === now.getFullYear() && anchorMonth === now.getMonth();
   const lastDate = isCurrentMonth ? today : monthEnd;
 
-  const datedTransactions = transactions
+  const totalAssets = calculateTotalAssets(assets);
+
+  if (period === 'Anos') {
+    const points: EvolutionPoint[] = [];
+    for (let offset = 11; offset >= 0; offset--) {
+      const monthDate = new Date(anchorYear, anchorMonth - offset, 1);
+      const m = monthDate.getMonth();
+      const y = monthDate.getFullYear();
+      points.push({
+        name: `${MONTHS_SHORT[m]}/${String(y).slice(-2)}`,
+        value: calculateNetWorth(assets, transactions, m, y),
+        date: `${MONTHS_PT[m]} de ${y}`
+      });
+    }
+    return points;
+  }
+
+  // Filtrar apenas as transações pertencentes ao mês e ano âncora (ex: Outubro/2026)
+  const monthTransactions = transactions
     .map(transaction => {
       const date = parseTransactionDate(transaction?.date);
       if (!date) return null;
+      if (date.getFullYear() !== anchorYear || date.getMonth() !== anchorMonth) return null;
       const value = Number(transaction?.value) || 0;
       const flow = transaction?.type === 'out'
         ? -value
@@ -164,30 +183,16 @@ export const calculateEvolutionData = (
     })
     .filter((item): item is { date: Date; flow: number } => item !== null);
 
-  const currentNetWorth = calculateNetWorth(assets, transactions);
+  // Valor do patrimônio no dia especificado:
+  // Ativos totais + entradas + rendimentos - saídas acumuladas desde o início do mês até o final do dia analisado.
   const valueAt = (date: Date) => {
     const cutoff = endOfLocalDay(date).getTime();
-    const futureFlow = datedTransactions.reduce(
-      (sum, transaction) => transaction.date.getTime() > cutoff ? sum + transaction.flow : sum,
+    const accumulatedMonthFlow = monthTransactions.reduce(
+      (sum, transaction) => transaction.date.getTime() <= cutoff ? sum + transaction.flow : sum,
       0
     );
-    return roundCurrency(currentNetWorth - futureFlow);
+    return roundCurrency(totalAssets + accumulatedMonthFlow);
   };
-
-  if (period === 'Anos') {
-    const points: EvolutionPoint[] = [];
-    for (let offset = 11; offset >= 0; offset--) {
-      const monthDate = new Date(anchorYear, anchorMonth - offset, 1);
-      const isCurrent = monthDate.getFullYear() === now.getFullYear() && monthDate.getMonth() === now.getMonth();
-      const pointDate = isCurrent ? today : new Date(monthDate.getFullYear(), monthDate.getMonth() + 1, 0);
-      points.push({
-        name: `${MONTHS_SHORT[monthDate.getMonth()]}/${String(monthDate.getFullYear()).slice(-2)}`,
-        value: valueAt(pointDate),
-        date: `${MONTHS_PT[monthDate.getMonth()]} de ${monthDate.getFullYear()}`
-      });
-    }
-    return points;
-  }
 
   let start = monthStart;
   let end = lastDate;

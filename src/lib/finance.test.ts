@@ -6,6 +6,7 @@ import {
   calculateVariation,
   calculateCashFlowData,
   calculateRealProfitability,
+  calculateEvolutionData,
 } from './finance';
 
 describe('finance utils', () => {
@@ -112,6 +113,50 @@ describe('finance utils', () => {
       const currentMonthPoint = points[currentMonthIndex];
 
       expect(currentMonthPoint?.value).toBe(700.25);
+    });
+  });
+
+  describe('calculateEvolutionData', () => {
+    it('calcula evolução diária acumulativa do mês sem contaminação de outros meses', () => {
+      const assets = [{ value: 10000 }];
+      const now = new Date();
+      const currentMonth = now.getMonth();
+      const currentYear = now.getFullYear();
+
+      const txs = [
+        { type: 'in', value: 2000, date: new Date(currentYear, currentMonth, 5) },
+        { type: 'yield', value: 100, date: new Date(currentYear, currentMonth, 10) },
+        { type: 'out', value: 500, date: new Date(currentYear, currentMonth, 15) },
+        // Transação de outro mês (não deve impactar o mês atual)
+        { type: 'in', value: 50000, date: new Date(currentYear, currentMonth + 1, 1) },
+      ];
+
+      const points = calculateEvolutionData(assets, txs, { period: 'Meses', month: 'Atual', day: 'Todos' });
+      expect(points.length).toBeGreaterThan(0);
+
+      // Ponto do dia 01 (antes de qualquer transação): deve ser igual ao total de ativos
+      const p1 = points.find(p => p.name === '01');
+      if (p1 && typeof p1.value === 'number') {
+        expect(p1.value).toBe(10000);
+      }
+
+      // No dia da última transação ou hoje, deve bater com calculateNetWorth do mês
+      const expectedNetWorth = calculateNetWorth(assets, txs, currentMonth, currentYear);
+      expect(expectedNetWorth).toBe(11600); // 10000 + 2000 + 100 - 500
+
+      // O ponto de hoje no gráfico
+      const todayDay = now.getDate().toString().padStart(2, '0');
+      const todayPoint = points.find(p => p.name === todayDay);
+      if (todayPoint && typeof todayPoint.value === 'number') {
+        expect(todayPoint.value).toBe(expectedNetWorth);
+      }
+    });
+
+    it('em período Anos retorna pontos com o cálculo exato do patrimônio de cada mês', () => {
+      const assets = [{ value: 20000 }];
+      const points = calculateEvolutionData(assets, [], { period: 'Anos' });
+      expect(points).toHaveLength(12);
+      expect(points.every(p => p.value === 20000)).toBe(true);
     });
   });
 });
