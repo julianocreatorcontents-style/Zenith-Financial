@@ -80,7 +80,7 @@ export function resolveAssetPolicy(doc: RawAssetDoc): ResolvedAssetPolicy | null
   const nameLower = (doc.name || '').toLowerCase();
 
   // 2. Known Preset: 99Pay
-  // 110% CDI base + 27% CDI bônus até R$ 5.000 (137% total), 80% CDI no excedente, 365 dias corridos, NET.
+  // 110% CDI base + 27% CDI bônus até R$ 5.000 (137% total), 80% CDI no excedente, 365 dias corridos, GROSS.
   if (nameLower.includes('99pay') || nameLower.includes('99 pay')) {
     return {
       strategy: 'FIXED_INCOME_TIERED',
@@ -93,7 +93,7 @@ export function resolveAssetPolicy(doc: RawAssetDoc): ResolvedAssetPolicy | null
           { upTo: null, baseRateValue: 80, bonusRateValue: 0 },
         ],
       },
-      taxDisplayMode: 'NET',
+      taxDisplayMode: 'GROSS',
     };
   }
 
@@ -247,10 +247,17 @@ export function calculateAssetYieldInfo(
 
   let netYieldSinceAnchor = rawYieldSinceAnchor;
 
-  if (resolved.taxDisplayMode === 'GROSS') {
+  // CORREÇÃO: GROSS mostra bruto (sem impostos). NET desconta impostos.
+  if (resolved.taxDisplayMode === 'NET') {
     const ir = IncomeTaxPolicy.calculate(Money.fromBRL(rawYieldSinceAnchor), daysSinceAnchor).toBRL();
-    const iof = IofPolicy.calculate(Money.fromBRL(rawYieldSinceAnchor), daysSinceAnchor).toBRL();
+    // IOF só é aplicado nos primeiros 29 dias
+    const iof = daysSinceAnchor < 30 
+      ? IofPolicy.calculate(Money.fromBRL(rawYieldSinceAnchor), daysSinceAnchor).toBRL() 
+      : 0;
     netYieldSinceAnchor = Math.max(0, rawYieldSinceAnchor - ir - iof);
+  } else {
+    // GROSS (99Pay): exibe o rendimento bruto sem descontar impostos
+    netYieldSinceAnchor = rawYieldSinceAnchor;
   }
 
   const yieldSinceAnchor = Math.round(netYieldSinceAnchor * 100) / 100;
