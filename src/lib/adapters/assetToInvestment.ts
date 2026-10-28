@@ -34,6 +34,7 @@ export interface RawAssetDoc {
     }>;
   };
   investmentStartDate?: RawTimestamp;
+  isFlexible?: boolean;
 }
 
 export function assetToInvestment(doc: RawAssetDoc): Investment | null {
@@ -68,6 +69,7 @@ export function assetToInvestment(doc: RawAssetDoc): Investment | null {
     startDate,
     policy,
     taxDisplayMode: doc.investmentPolicy.taxDisplayMode,
+    isFlexible: doc.isFlexible ?? false,
   });
 }
 

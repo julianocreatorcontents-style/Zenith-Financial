@@ -1,8 +1,8 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { 
   auth, db, googleProvider, signInWithPopup, signOut, 
   signInWithEmailAndPassword, createUserWithEmailAndPassword, updateProfile,
-  collection, addDoc, doc, setDoc, updateDoc, deleteDoc, onSnapshot, query, where, orderBy, serverTimestamp,
+  collection, addDoc, doc, getDoc, setDoc, updateDoc, deleteDoc, onSnapshot, query, where, orderBy, serverTimestamp,
   handleFirestoreError, OperationType, getDocs, writeBatch, limit,
   FIRESTORE_ERROR_EVENT
 } from '../firebase';
@@ -24,7 +24,12 @@ import {
   calculateEvolutionData, 
   calculateCashFlowData,
   calculateMonthBalance,
-  calculateNetWorth
+  calculateNetWorth,
+  parseTransactionDate,
+  parseTransactionAmount,
+  isExpenseTransaction,
+  isIncomeTransaction,
+  isYieldTransaction
 } from '../lib/finance';
 import { calculateNetWorthProjection } from '../lib/adapters/netWorthProjection';
 import { enrichAsset } from '../lib/adapters/assetYieldService';
@@ -169,9 +174,16 @@ export function useZenithData() {
       setTransactions([]);
       return;
     }
-    const q = query(collection(db, 'transactions'), where('uid', '==', user.uid), orderBy('date', 'desc'));
+    // Query sem orderBy composto para garantir funcionamento no Spark Plan sem exigir índice manual
+    const q = query(collection(db, 'transactions'), where('uid', '==', user.uid));
     const unsub = onSnapshot(q, (snap) => {
       const docs = snap.docs.map(d => ({ id: d.id, ...d.data() } as Transaction));
+      docs.sort((a, b) => {
+        const da = parseTransactionDate(a.date || a.createdAt)?.getTime() || 0;
+        const db = parseTransactionDate(b.date || b.createdAt)?.getTime() || 0;
+        return db - da;
+      });
+      console.log('[DEBUG-5] onSnapshot transactions carregadas:', docs.length);
       setTransactions(docs);
     }, (e) => handleFirestoreError(e, OperationType.LIST, 'transactions'));
     return unsub;
@@ -332,9 +344,9 @@ export function useZenithData() {
       snap.docs.forEach((d) => {
         const tx = d.data() as Transaction;
         const val = Number(tx.value) || 0;
-        if (tx.type === 'in' || tx.type === 'yield') {
+        if (isIncomeTransaction(tx) || isYieldTransaction(tx)) {
           currentBal += val;
-        } else if (tx.type === 'out') {
+        } else if (isExpenseTransaction(tx)) {
           currentBal -= val;
         }
         currentBal = Math.round(currentBal * 100) / 100;
@@ -346,7 +358,86 @@ export function useZenithData() {
     }
   }, []);
 
-  // Mover para a lixeira com exclusão atômica
+  // Ajuste atômico no saldo e valor investido da conta de origem/destino
+  const adjustAssetBalance = useCallback(async (assetId: string, amount: number, isAddition: boolean) => {
+    if (!assetId || amount <= 0) return;
+    try {
+      const assetRef = doc(db, 'assets', assetId);
+      const snap = await getDoc(assetRef);
+      if (!snap.exists()) return;
+      const currentVal = Number(snap.data().value) || 0;
+      const currentInvested = Number(snap.data().valorInvestido ?? snap.data().value) || currentVal;
+      const delta = isAddition ? amount : -amount;
+      const newVal = Math.max(0, Math.round((currentVal + delta) * 100) / 100);
+      const newInvested = Math.max(0, Math.round((currentInvested + delta) * 100) / 100);
+
+      await updateDoc(assetRef, {
+        value: newVal,
+        valorInvestido: newInvested,
+        investmentStartDate: new Date(),
+        updatedAt: serverTimestamp()
+      });
+    } catch (err) {
+      console.error(`[ASSET_SYNC] Erro ao sincronizar ativo ${assetId}:`, err);
+    }
+  }, []);
+
+  // 11. CRON: Aplicação de Transações Agendadas / Pendentes (Contas a Pagar)
+  useEffect(() => {
+    if (!user) return;
+
+    let isMounted = true;
+    const processScheduledTransactions = async () => {
+      try {
+        const q = query(
+          collection(db, 'transactions'),
+          where('uid', '==', user.uid)
+        );
+        const snap = await getDocs(q);
+        if (snap.empty || !isMounted) return;
+
+        const now = new Date();
+        const endOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
+        let hasChanges = false;
+
+        for (const txDoc of snap.docs) {
+          if (!isMounted) break;
+          const tx = { id: txDoc.id, ...txDoc.data() } as Transaction;
+          if (tx.applied === true && tx.status === 'Confirmado') continue;
+
+          const txDate = parseTransactionDate(tx.date);
+          if (txDate && txDate.getTime() <= endOfToday.getTime()) {
+            if (tx.assetId) {
+              const isOut = isExpenseTransaction(tx);
+              await adjustAssetBalance(tx.assetId, Number(tx.value) || 0, !isOut);
+            }
+
+            await updateDoc(doc(db, 'transactions', tx.id), { 
+              applied: true,
+              status: 'Confirmado'
+            });
+            hasChanges = true;
+          }
+        }
+
+        if (hasChanges && isMounted) {
+          await recalculateBalances(user.uid);
+        }
+      } catch (err) {
+        console.error('[CRON] Erro ao processar transações agendadas:', err);
+      }
+    };
+
+    processScheduledTransactions();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [user, adjustAssetBalance, recalculateBalances]);
+
+  // Limpeza de lançamentos antigos pagos solicitada pelo usuário (manter apenas o lançamento Copel)
+
+  // Mover para a lixeira com exclusão atômica e reversão do saldo no ativo
   const moveToTrash = useCallback(async (item: any, collectionName: string) => {
     try {
       if (!user) return;
@@ -362,10 +453,20 @@ export function useZenithData() {
       batch.delete(doc(db, collectionName, item.id));
 
       await batch.commit();
+
+      // Se for transação aplicada a um ativo, reverte o impacto financeiro no ativo
+      if (collectionName === 'transactions' && item.applied && item.assetId) {
+        const isOut = isExpenseTransaction(item);
+        await adjustAssetBalance(item.assetId, Number(item.value) || 0, isOut);
+      }
+
+      if (collectionName === 'transactions') {
+        await recalculateBalances(user.uid);
+      }
     } catch (e) {
       handleFirestoreError(e, OperationType.DELETE, `${collectionName}/${item.id}`);
     }
-  }, [user]);
+  }, [user, adjustAssetBalance, recalculateBalances]);
 
   // Alternar modo de privacidade
   const togglePrivacyMode = useCallback(() => {
@@ -496,23 +597,53 @@ export function useZenithData() {
   // Operações de Transações
   const addTransaction = useCallback(async (data: any) => {
     if (!user) return;
+    const now = new Date();
+    const endOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
+    const txDate = parseTransactionDate(data.date) || now;
+    const isFuture = txDate.getTime() > endOfToday.getTime();
+    const applied = !isFuture;
+
+    console.log('[DEBUG-3] addTransaction entrada data:', JSON.stringify(data, null, 2));
+    console.log('[DEBUG-3] txDate:', txDate.toISOString(), '| endOfToday:', endOfToday.toISOString(), '| isFuture:', isFuture, '| applied:', applied);
+
     const newTxRef = doc(collection(db, 'transactions'));
     const txData = { 
       ...data, 
       uid: user.uid, 
-      date: data.date ? Timestamp.fromDate(new Date(data.date + 'T12:00:00')) : serverTimestamp() 
+      applied,
+      status: isFuture ? 'Futuro' : 'Confirmado',
+      date: data.date ? Timestamp.fromDate(txDate) : serverTimestamp() 
     };
+
+    console.log('Salvando no Firestore:', txData);
+    console.log('[DEBUG-3] Payload final para Firestore:', JSON.stringify({...txData, date: String(txData.date) }, null, 2));
+
     await setDoc(newTxRef, txData).catch(e => handleFirestoreError(e, OperationType.CREATE, 'transactions'));
+    console.log('[DEBUG-3] setDoc concluído. assetId:', data.assetId, '| type:', data.type, '| applied:', applied);
+
+    if (applied && data.assetId) {
+      const isOut = isExpenseTransaction(data);
+      await adjustAssetBalance(data.assetId, Number(data.value) || 0, !isOut);
+    }
+
     await recalculateBalances(user.uid);
-  }, [user, recalculateBalances]);
+  }, [user, adjustAssetBalance, recalculateBalances]);
 
   const updateTransaction = useCallback(async (selectedTx: any, data: any) => {
     if (!user) return;
+    const now = new Date();
+    const endOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
+    const txDate = parseTransactionDate(data.date) || now;
+    const isFuture = txDate.getTime() > endOfToday.getTime();
+    const applied = !isFuture;
+
     const txRef = doc(db, 'transactions', selectedTx.id);
     const txData = { 
       ...data, 
       uid: user.uid, 
-      date: data.date ? Timestamp.fromDate(new Date(data.date + 'T12:00:00')) : serverTimestamp() 
+      applied,
+      status: isFuture ? 'Futuro' : 'Confirmado',
+      date: data.date ? Timestamp.fromDate(txDate) : serverTimestamp() 
     };
     
     if (selectedTx.categoria_primaria !== data.categoria_primaria) {
@@ -525,9 +656,21 @@ export function useZenithData() {
       }).catch(e => console.error("Error saving rule:", e));
     }
 
+    // Reverte impacto antigo se estava aplicado a uma conta
+    if (selectedTx.applied && selectedTx.assetId) {
+      const wasOut = isExpenseTransaction(selectedTx);
+      await adjustAssetBalance(selectedTx.assetId, Number(selectedTx.value) || 0, wasOut);
+    }
+
+    // Aplica novo impacto na nova ou mesma conta
+    if (applied && data.assetId) {
+      const isOut = isExpenseTransaction(data);
+      await adjustAssetBalance(data.assetId, Number(data.value) || 0, !isOut);
+    }
+
     await updateDoc(txRef, txData).catch(e => handleFirestoreError(e, OperationType.UPDATE, `transactions/${selectedTx.id}`));
     await recalculateBalances(user.uid);
-  }, [user, recalculateBalances]);
+  }, [user, adjustAssetBalance, recalculateBalances]);
 
   const confirmPendingTransaction = useCallback(async (updatedTx?: any) => {
     const dataToSave = updatedTx || pendingTransaction;
@@ -645,6 +788,7 @@ export function useZenithData() {
     const prevYear = currentMonth === 0 ? currentYear - 1 : currentYear;
 
     const currentTotals = calculateTotals(transactions, currentMonth, currentYear, assets);
+    console.log('[DEBUG-4] currentTotals no mês:', currentTotals, '| transactions total:', transactions.length);
     const prevTotals = calculateTotals(transactions, prevMonth, prevYear, assets);
 
     const monthBalance = calculateMonthBalance(transactions, currentMonth, currentYear);
@@ -702,7 +846,10 @@ export function useZenithData() {
     return Math.max(0, Math.min(100, Math.round((metrics.investments / total) * 100)));
   }, [assets, metrics.investments]);
 
-  const cashFlowData = useMemo(() => calculateCashFlowData(transactions), [transactions]);
+  const cashFlowData = useMemo(() => {
+    console.log('[DEBUG-4] Calculando cashFlowData com transações:', transactions.length);
+    return calculateCashFlowData(transactions);
+  }, [transactions]);
 
   const t = useCallback((pt: string, en: string) => {
     return settings?.language === 'en-US' ? en : pt;

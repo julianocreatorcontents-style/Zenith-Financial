@@ -53,6 +53,8 @@ export interface Transaction {
   type: 'in' | 'out' | 'yield';
   date: any; // Firestore timestamp
   uid: string;
+  assetId?: string;
+  applied?: boolean;
   category?: string;
   partialBalance?: number;
   categoria_primaria?: string;

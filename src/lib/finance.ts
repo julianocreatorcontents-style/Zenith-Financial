@@ -11,6 +11,114 @@ export const calculateRealProfitability = (nominalRate: number, inflationRate: n
 
 const roundCurrency = (value: number) => Math.round(value * 100) / 100;
 
+export const parseTransactionAmount = (value: any): number => {
+  if (typeof value === 'number') return Number.isFinite(value) ? Math.abs(value) : 0;
+  if (!value) return 0;
+  const str = String(value).trim();
+  const cleaned = str.replace(/[R$\s]/g, '');
+  if (cleaned.includes(',') && !cleaned.includes('.')) {
+    const num = parseFloat(cleaned.replace(',', '.'));
+    return Number.isFinite(num) ? Math.abs(num) : 0;
+  }
+  if (cleaned.includes('.') && cleaned.includes(',')) {
+    const num = parseFloat(cleaned.replace(/\./g, '').replace(',', '.'));
+    return Number.isFinite(num) ? Math.abs(num) : 0;
+  }
+  const num = parseFloat(cleaned);
+  return Number.isFinite(num) ? Math.abs(num) : 0;
+};
+
+export const parseTransactionDate = (value: any): Date | null => {
+  if (!value) return null;
+  if (value instanceof Date) return Number.isNaN(value.getTime()) ? null : value;
+  if (typeof value?.toDate === 'function') {
+    const d = value.toDate();
+    return Number.isNaN(d.getTime()) ? null : d;
+  }
+  // Firestore Timestamp serializado: seconds ou _seconds
+  const seconds = typeof value?.seconds === 'number'
+    ? value.seconds
+    : (typeof value?._seconds === 'number' ? value._seconds : null);
+  if (seconds !== null) {
+    const d = new Date(seconds * 1000);
+    return Number.isNaN(d.getTime()) ? null : d;
+  }
+  if (typeof value === 'number') {
+    const d = value > 1e11 ? new Date(value) : new Date(value * 1000);
+    return Number.isNaN(d.getTime()) ? null : d;
+  }
+  if (typeof value === 'string') {
+    const str = value.trim();
+    if (!str) return null;
+
+    // Formato brasileiro DD/MM/YYYY ou DD-MM-YYYY
+    const brMatch = /^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})/.exec(str);
+    if (brMatch) {
+      const day = parseInt(brMatch[1], 10);
+      const month = parseInt(brMatch[2], 10) - 1;
+      let year = parseInt(brMatch[3], 10);
+      if (year < 100) year += 2000;
+      const d = new Date(year, month, day, 12, 0, 0);
+      if (!Number.isNaN(d.getTime())) return d;
+    }
+
+    // Formato ISO YYYY-MM-DD
+    const normalized = str.includes('T') ? str : `${str}T12:00:00`;
+    const d = new Date(normalized);
+    return Number.isNaN(d.getTime()) ? null : d;
+  }
+  const d = new Date(value);
+  return Number.isNaN(d.getTime()) ? null : d;
+};
+
+export const isExpenseTransaction = (tx: any): boolean => {
+  const type = String(tx?.type ?? '').toLowerCase().trim();
+  if (type === 'out' || type === 'saida' || type === 'saída' || type === 'despesa' || type === 'debito') {
+    return true;
+  }
+  if (type === 'in' || type === 'entrada' || type === 'receita' || type === 'credito' || type === 'yield' || type === 'rendimento') {
+    return false;
+  }
+  // Inferência para transações sem type explícito
+  const cat = String(tx?.categoria_primaria || tx?.category || '').toLowerCase();
+  if (['moradia', 'energia', 'água', 'agua', 'alimentação', 'alimentacao', 'mercado', 'transporte', 'lazer', 'saúde', 'saude', 'educação', 'educacao', 'outros'].includes(cat)) {
+    return true;
+  }
+  const lbl = String(tx?.label || '').toLowerCase();
+  if (lbl.includes('copel') || lbl.includes('fatura') || lbl.includes('conta') || lbl.includes('compra') || lbl.includes('pagamento') || lbl.includes('débito') || lbl.includes('debito')) {
+    return true;
+  }
+  return false;
+};
+
+export const isIncomeTransaction = (tx: any): boolean => {
+  const type = String(tx?.type ?? '').toLowerCase().trim();
+  if (type === 'in' || type === 'entrada' || type === 'receita' || type === 'credito') {
+    return true;
+  }
+  if (type === 'out' || type === 'saida' || type === 'saída' || type === 'despesa' || type === 'debito' || type === 'yield' || type === 'rendimento') {
+    return false;
+  }
+  const cat = String(tx?.categoria_primaria || tx?.category || '').toLowerCase();
+  if (['salário', 'salario', 'receita', 'ganho'].includes(cat)) {
+    return true;
+  }
+  const lbl = String(tx?.label || '').toLowerCase();
+  if (lbl.includes('salário') || lbl.includes('salario') || lbl.includes('pix recebido') || lbl.includes('depósito') || lbl.includes('deposito')) {
+    return true;
+  }
+  return false;
+};
+
+export const isYieldTransaction = (tx: any): boolean => {
+  const type = String(tx?.type ?? '').toLowerCase().trim();
+  if (type === 'yield' || type === 'rendimento') {
+    return true;
+  }
+  const cat = String(tx?.categoria_primaria || tx?.category || '').toLowerCase();
+  return cat === 'investimentos' || cat === 'rendimentos';
+};
+
 export const calculateTotalAssets = (assets: any[] = []) => {
   return roundCurrency(assets.reduce((acc, asset) => acc + (Number(asset?.value) || 0), 0));
 };
@@ -23,13 +131,17 @@ export const calculateMonthBalance = (
   let balance = 0;
 
   transactions.forEach((transaction) => {
-    const rawDate = transaction?.date;
-    const date = rawDate?.toDate ? rawDate.toDate() : (rawDate ? new Date(rawDate) : null);
-    if (!date || Number.isNaN(date.getTime())) return;
+    const rawDate = transaction?.date || transaction?.createdAt || transaction?.timestamp || transaction?.data;
+    const date = parseTransactionDate(rawDate);
+    if (!date) return;
     if (date.getMonth() !== month || date.getFullYear() !== year) return;
 
-    const value = Number(transaction?.value) || 0;
-    balance += transaction?.type === 'out' ? -value : value;
+    const value = parseTransactionAmount(transaction?.value);
+    if (isExpenseTransaction(transaction)) {
+      balance -= value;
+    } else if (isIncomeTransaction(transaction) || isYieldTransaction(transaction)) {
+      balance += value;
+    }
   });
 
   return roundCurrency(balance);
@@ -37,24 +149,43 @@ export const calculateMonthBalance = (
 
 /**
  * Single source of truth for net worth:
- * total assets (investments + accounts + physical) + current month balance.
+ * Total de ativos consolidados + saldo de transações não aplicadas diretamente às contas no mês.
  */
 export const calculateNetWorth = (
   assets: any[] = [],
   transactions: any[] = [],
-  month?: number,
-  year?: number
+  month: number = new Date().getMonth(),
+  year: number = new Date().getFullYear()
 ) => {
-  return roundCurrency(
-    calculateTotalAssets(assets) + calculateMonthBalance(transactions, month, year)
-  );
+  const totalAssets = calculateTotalAssets(assets);
+
+  let unappliedBalance = 0;
+  transactions.forEach((transaction) => {
+    const rawDate = transaction?.date || transaction?.createdAt || transaction?.timestamp || transaction?.data;
+    const date = parseTransactionDate(rawDate);
+    if (!date) return;
+    if (date.getMonth() !== month || date.getFullYear() !== year) return;
+
+    // Se a transação já foi aplicada a um ativo específico, o saldo já está em totalAssets
+    const isAppliedToAsset = Boolean(transaction?.applied && transaction?.assetId);
+    if (!isAppliedToAsset) {
+      const value = parseTransactionAmount(transaction?.value);
+      if (isExpenseTransaction(transaction)) {
+        unappliedBalance -= value;
+      } else if (isIncomeTransaction(transaction) || isYieldTransaction(transaction)) {
+        unappliedBalance += value;
+      }
+    }
+  });
+
+  return roundCurrency(totalAssets + unappliedBalance);
 };
 
 export const calculateTotals = (transactions: any[], month: number, year: number, assets: any[] = []) => {
   const filtered = transactions.filter(t => {
-    const rawDate = t?.date;
-    const d = rawDate?.toDate ? rawDate.toDate() : (rawDate ? new Date(rawDate) : null);
-    if (!d || Number.isNaN(d.getTime())) return false;
+    const rawDate = t?.date || t?.createdAt || t?.timestamp || t?.data;
+    const d = parseTransactionDate(rawDate);
+    if (!d) return false;
     return d.getMonth() === month && d.getFullYear() === year;
   });
   
@@ -65,9 +196,9 @@ export const calculateTotals = (transactions: any[], month: number, year: number
     .reduce((acc, a) => sum(acc, Number(a.value) || 0), 0);
 
   return {
-    in: filtered.filter(t => t.type === 'in').reduce((acc, t) => sum(acc, Number(t.value) || 0), 0),
-    out: filtered.filter(t => t.type === 'out').reduce((acc, t) => sum(acc, Number(t.value) || 0), 0),
-    yield: filtered.filter(t => t.type === 'yield').reduce((acc, t) => sum(acc, Number(t.value) || 0), 0),
+    in: filtered.filter(t => isIncomeTransaction(t)).reduce((acc, t) => sum(acc, parseTransactionAmount(t.value)), 0),
+    out: filtered.filter(t => isExpenseTransaction(t)).reduce((acc, t) => sum(acc, parseTransactionAmount(t.value)), 0),
+    yield: filtered.filter(t => isYieldTransaction(t)).reduce((acc, t) => sum(acc, parseTransactionAmount(t.value)), 0),
     investments: investmentTotal
   };
 };
@@ -79,8 +210,20 @@ export const calculateVariation = (current: number, previous: number) => {
 };
 
 export const getMiniChartData = (transactions: any[], type: string) => {
-  const filtered = transactions.filter(t => t.type === type).slice(0, 10).reverse();
-  return filtered.map(t => ({ v: Number(t.value) || 0 }));
+  const isOut = type === 'out';
+  const isIn = type === 'in';
+  const filtered = transactions
+    .filter(t => isOut ? isExpenseTransaction(t) : (isIn ? isIncomeTransaction(t) : isYieldTransaction(t)))
+    .slice(0, 10)
+    .reverse();
+
+  if (filtered.length === 0) return [];
+  const points = filtered.map(t => ({ v: parseTransactionAmount(t.value) }));
+  // Garante que o Recharts consiga desenhar uma linha/área mesmo com apenas 1 lançamento
+  if (points.length === 1) {
+    return [{ v: 0 }, points[0]];
+  }
+  return points;
 };
 
 export type EvolutionChartFilter = {
@@ -110,12 +253,6 @@ const addLocalDays = (date: Date, days: number) => {
   return next;
 };
 
-const parseTransactionDate = (value: any): Date | null => {
-  if (!value) return null;
-  const date = value?.toDate ? value.toDate() : value instanceof Date ? value : new Date(value);
-  return date instanceof Date && !Number.isNaN(date.getTime()) ? date : null;
-};
-
 const parseDayRange = (value?: string): [number, number] | null => {
   if (!value || value === 'Todos') return null;
   const match = /^(\d{1,2})\s*-\s*(\d{1,2})$/.exec(value.trim());
@@ -141,7 +278,6 @@ export const calculateEvolutionData = (
   let anchorMonth = now.getMonth();
   if (selectedMonth >= 0) {
     anchorMonth = selectedMonth;
-    // Selecting a month later than the current one means the most recent occurrence.
     if (anchorMonth > now.getMonth()) anchorYear -= 1;
   }
 
@@ -170,28 +306,37 @@ export const calculateEvolutionData = (
   // Filtrar apenas as transações pertencentes ao mês e ano âncora (ex: Outubro/2026)
   const monthTransactions = transactions
     .map(transaction => {
-      const date = parseTransactionDate(transaction?.date);
+      const rawDate = transaction?.date || transaction?.createdAt || transaction?.timestamp || transaction?.data;
+      const date = parseTransactionDate(rawDate);
       if (!date) return null;
       if (date.getFullYear() !== anchorYear || date.getMonth() !== anchorMonth) return null;
-      const value = Number(transaction?.value) || 0;
-      const flow = transaction?.type === 'out'
+      const value = parseTransactionAmount(transaction?.value);
+      const flow = isExpenseTransaction(transaction)
         ? -value
-        : transaction?.type === 'in' || transaction?.type === 'yield'
+        : isIncomeTransaction(transaction) || isYieldTransaction(transaction)
           ? value
           : 0;
-      return { date, flow };
+      const isAppliedToAsset = Boolean(transaction?.applied && transaction?.assetId);
+      return { date, flow, isAppliedToAsset };
     })
-    .filter((item): item is { date: Date; flow: number } => item !== null);
+    .filter((item): item is { date: Date; flow: number; isAppliedToAsset: boolean } => item !== null);
 
   // Valor do patrimônio no dia especificado:
-  // Ativos totais + entradas + rendimentos - saídas acumuladas desde o início do mês até o final do dia analisado.
+  // Se a transação já foi aplicada a um ativo, ela já está refletida no saldo atual totalAssets.
+  // Portanto, para dias anteriores ao evento, revertemos o fluxo que ocorreu depois daquele dia.
+  // Para transações ainda não aplicadas aos ativos, somamos os fluxos ocorridos até aquele dia.
   const valueAt = (date: Date) => {
     const cutoff = endOfLocalDay(date).getTime();
-    const accumulatedMonthFlow = monthTransactions.reduce(
-      (sum, transaction) => transaction.date.getTime() <= cutoff ? sum + transaction.flow : sum,
-      0
-    );
-    return roundCurrency(totalAssets + accumulatedMonthFlow);
+
+    const futureAppliedFlow = monthTransactions
+      .filter(t => t.isAppliedToAsset && t.date.getTime() > cutoff)
+      .reduce((sum, t) => sum + t.flow, 0);
+
+    const accumulatedUnappliedFlow = monthTransactions
+      .filter(t => !t.isAppliedToAsset && t.date.getTime() <= cutoff)
+      .reduce((sum, t) => sum + t.flow, 0);
+
+    return roundCurrency(totalAssets - futureAppliedFlow + accumulatedUnappliedFlow);
   };
 
   let start = monthStart;
@@ -256,17 +401,18 @@ export const calculateCashFlowData = (transactions: any[]) => {
 
   const getMonthValue = (month: number, year: number) => {
     const monthTx = transactions.filter(t => {
-      const txDate = t.date?.toDate ? t.date.toDate() : (t.date ? new Date(t.date) : null);
-      if (!txDate || isNaN(txDate.getTime())) return false;
+      const rawDate = t?.date || t?.createdAt || t?.timestamp || t?.data;
+      const txDate = parseTransactionDate(rawDate);
+      if (!txDate) return false;
       return txDate.getMonth() === month && txDate.getFullYear() === year;
     });
 
     const income = monthTx
-      .filter(t => t.type === 'in' || t.type === 'yield')
-      .reduce((acc, t) => Math.round((acc + (t.value ?? 0)) * 100) / 100, 0);
+      .filter(t => isIncomeTransaction(t) || isYieldTransaction(t))
+      .reduce((acc, t) => Math.round((acc + parseTransactionAmount(t.value)) * 100) / 100, 0);
     const expense = monthTx
-      .filter(t => t.type === 'out')
-      .reduce((acc, t) => Math.round((acc + (t.value ?? 0)) * 100) / 100, 0);
+      .filter(t => isExpenseTransaction(t))
+      .reduce((acc, t) => Math.round((acc + parseTransactionAmount(t.value)) * 100) / 100, 0);
 
     return {
       value: roundCurrency(income - expense),

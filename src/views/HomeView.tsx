@@ -27,6 +27,7 @@ import {
 } from 'recharts';
 import type { MarketRateState } from '../lib/adapters/marketRateService';
 import { calculateNetWorthProjection } from '../lib/adapters/netWorthProjection';
+import { parseTransactionDate, isExpenseTransaction } from '../lib/finance';
 import { Asset, Transaction, DDA, Settings, ChartSlot } from '../types/app';
 import {
   DDASuggestion,
@@ -655,8 +656,8 @@ export const HomeView: React.FC<HomeViewProps> = ({
         const currentYear = now.getFullYear();
         
         const monthExpenses = transactions.filter(t => {
-          const d = t.date?.toDate ? t.date.toDate() : (t.date instanceof Date ? t.date : new Date());
-          return t.type === 'out' && d.getMonth() === currentMonth && d.getFullYear() === currentYear;
+          const d = parseTransactionDate(t.date);
+          return isExpenseTransaction(t) && d && d.getMonth() === currentMonth && d.getFullYear() === currentYear;
         });
 
         const categoryData = monthExpenses.reduce((acc: any[], t: any) => {
@@ -774,7 +775,14 @@ export const HomeView: React.FC<HomeViewProps> = ({
                         {tx.type === 'in' ? <ArrowUpRight size={14} /> : <ArrowRightLeft size={14} className="rotate-90" />}
                       </div>
                       <div>
-                        <p className="text-[11px] font-medium text-[var(--text-primary)]">{tx.label}</p>
+                        <div className="flex items-center gap-1.5">
+                          <p className="text-[11px] font-medium text-[var(--text-primary)]">{tx.label}</p>
+                          {tx.applied === false && (
+                            <span className="text-[8px] px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-400 font-bold uppercase tracking-wider">
+                              {t("Agendado", "Scheduled")}
+                            </span>
+                          )}
+                        </div>
                         <p className="text-[8px] text-[var(--text-muted)] uppercase font-bold">{getTransactionCategory(tx)}</p>
                       </div>
                     </div>

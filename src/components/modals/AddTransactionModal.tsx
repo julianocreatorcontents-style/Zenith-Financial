@@ -6,6 +6,26 @@ export interface AddTransactionModalProps {
   onAdd: (data: any) => void;
   initialData?: any;
   language?: string;
+  assets?: any[];
+}
+
+function formatLocalDate(input?: any): string {
+  if (!input) {
+    const d = new Date();
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+  }
+  if (typeof input === 'string') {
+    return input.includes('T') ? input.split('T')[0] : input;
+  }
+  const d = input.toDate ? input.toDate() : new Date(input);
+  if (Number.isNaN(d.getTime())) return formatLocalDate();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
 }
 
 export function AddTransactionModal({
@@ -13,14 +33,19 @@ export function AddTransactionModal({
   onAdd,
   initialData,
   language = 'pt-BR',
+  assets = [],
 }: AddTransactionModalProps) {
   const t = (pt: string, en: string) => (language === 'en-US' ? en : pt);
+  const selectableAssets = (assets || []).filter(
+    (a: any) => a.type === 'liquidity' || a.type === 'investment'
+  );
   const [formData, setFormData] = useState({
     label: initialData?.label || '',
     value: initialData?.value || 0,
     type: initialData?.type || 'out' as 'in' | 'out' | 'yield',
+    assetId: initialData?.assetId || (selectableAssets.length === 1 ? selectableAssets[0].id : ''),
     categoria_primaria: initialData?.categoria_primaria || initialData?.category || 'Outros',
-    date: initialData?.date ? (initialData.date.toDate ? initialData.date.toDate().toISOString().split('T')[0] : initialData.date) : new Date().toISOString().split('T')[0]
+    date: formatLocalDate(initialData?.date)
   });
   const [displayValue, setDisplayValue] = useState(initialData?.value ? (initialData.value ?? 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }) : '');
 
@@ -37,6 +62,12 @@ export function AddTransactionModal({
       alert(t('Preencha todos os campos corretamente.', 'Fill in all fields correctly.'));
       return;
     }
+    if (formData.type === 'out' && !formData.assetId) {
+      alert(t('Selecione a conta de origem.', 'Select the source account.'));
+      return;
+    }
+    console.log('Dados do Formulário:', formData);
+    console.log('[DEBUG-1] Modal formData enviado:', JSON.stringify(formData, null, 2));
     onAdd(formData);
   };
 
@@ -104,6 +135,25 @@ export function AddTransactionModal({
             ))}
           </div>
         </div>
+
+        {formData.type === 'out' && (
+          <div>
+            <label className="text-[10px] uppercase font-bold text-[var(--text-muted)] tracking-widest">{t("Conta de Origem", "Source Account")}</label>
+            <select
+              required
+              className="mt-1 w-full bg-[var(--bg-app)] border border-[var(--border-card)] rounded-xl p-3 text-[var(--text-primary)] text-base sm:text-sm focus:border-[var(--accent)] outline-none transition-colors sm:p-4"
+              value={formData.assetId}
+              onChange={(e) => setFormData({ ...formData, assetId: e.target.value })}
+            >
+              <option value="">{t("Selecione uma conta...", "Select an account...")}</option>
+              {selectableAssets.map((asset: any) => (
+                <option key={asset.id} value={asset.id}>
+                  {asset.name} {asset.value !== undefined ? `(R$ ${Number(asset.value).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })})` : ''}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
 
         <div>
           <label className="text-[10px] uppercase font-bold text-[var(--text-muted)] tracking-widest">{t("Categoria", "Category")}</label>

@@ -11,6 +11,7 @@ export interface InvestmentInput {
   startDate: Date;
   policy: YieldPolicy;
   taxDisplayMode: TaxDisplayMode;
+  isFlexible?: boolean;
 }
 
 const MS_PER_DAY = 86_400_000;
@@ -23,6 +24,7 @@ export class Investment {
   readonly startDate: Date;
   readonly policy: YieldPolicy;
   readonly taxDisplayMode: TaxDisplayMode;
+  readonly isFlexible: boolean;
 
   private constructor(input: InvestmentInput) {
     this.id = input.id;
@@ -32,6 +34,7 @@ export class Investment {
     this.startDate = input.startDate;
     this.policy = input.policy;
     this.taxDisplayMode = input.taxDisplayMode;
+    this.isFlexible = input.isFlexible ?? false;
   }
 
   static create(input: InvestmentInput): Investment {

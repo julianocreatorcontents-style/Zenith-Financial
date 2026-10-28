@@ -7,14 +7,50 @@ import {
   calculateCashFlowData,
   calculateRealProfitability,
   calculateEvolutionData,
+  getMiniChartData,
+  parseTransactionDate,
+  isExpenseTransaction,
+  isIncomeTransaction,
 } from './finance';
 
 describe('finance utils', () => {
   describe('calculateRealProfitability', () => {
     it('calcula rentabilidade real segundo a fórmula de Fisher', () => {
-      // (1 + 0.10) / (1 + 0.05) - 1 = 1.10 / 1.05 - 1 = 0.047619...
       const real = calculateRealProfitability(10, 5);
       expect(real).toBeCloseTo(0.047619, 5);
+    });
+  });
+
+  describe('parseTransactionDate', () => {
+    it('faz parse correto de Timestamp, Date, seconds e string local', () => {
+      const d = new Date(2026, 9, 28, 12, 0, 0);
+      expect(parseTransactionDate(d)?.getTime()).toBe(d.getTime());
+      expect(parseTransactionDate({ toDate: () => d })?.getTime()).toBe(d.getTime());
+      expect(parseTransactionDate({ seconds: Math.floor(d.getTime() / 1000) })?.getTime()).toBe(
+        Math.floor(d.getTime() / 1000) * 1000
+      );
+      const parsedStr = parseTransactionDate('2026-10-28');
+      expect(parsedStr?.getFullYear()).toBe(2026);
+      expect(parsedStr?.getMonth()).toBe(9); // Outubro
+      expect(parsedStr?.getDate()).toBe(28);
+    });
+
+    it('retorna null para valores nulos ou inválidos', () => {
+      expect(parseTransactionDate(null)).toBeNull();
+      expect(parseTransactionDate(undefined)).toBeNull();
+      expect(parseTransactionDate('data-invalida')).toBeNull();
+    });
+  });
+
+  describe('isExpenseTransaction', () => {
+    it('reconhece variações de tipo de saída', () => {
+      expect(isExpenseTransaction({ type: 'out' })).toBe(true);
+      expect(isExpenseTransaction({ type: 'saida' })).toBe(true);
+      expect(isExpenseTransaction({ type: 'Saída' })).toBe(true);
+      expect(isExpenseTransaction({ type: 'despesa' })).toBe(true);
+      expect(isExpenseTransaction({ type: 'in' })).toBe(false);
+      expect(isIncomeTransaction({ type: 'in' })).toBe(true);
+      expect(isIncomeTransaction({ type: 'entrada' })).toBe(true);
     });
   });
 
@@ -54,7 +90,7 @@ describe('finance utils', () => {
 
       const assets = [
         { type: 'investment', value: 50000 },
-        { type: 'checking', value: 2000 }, // não é investimento
+        { type: 'checking', value: 2000 },
       ];
 
       const totals = calculateTotals(txs, 5, 2026, assets);
@@ -77,7 +113,7 @@ describe('finance utils', () => {
   });
 
   describe('calculateNetWorth', () => {
-    it('consolida todos os ativos mais o saldo do mês', () => {
+    it('consolida todos os ativos mais o saldo do mês para transações unapplied', () => {
       const assets = [
         { value: 10000 },
         { value: 5000.5 },
@@ -89,6 +125,28 @@ describe('finance utils', () => {
 
       const nw = calculateNetWorth(assets, txs, 0, 2026);
       expect(nw).toBe(15800.5);
+    });
+
+    it('não duplica dedução de transações já aplicadas a uma conta de ativo', () => {
+      // Ex: Saldo do MP já foi descontado de 1000 para 850 pelo pagamento Copel
+      const assets = [{ id: 'mp-1', value: 850 }];
+      const txs = [
+        { id: 'tx-copel', type: 'out', value: 150, date: new Date(2026, 9, 15), applied: true, assetId: 'mp-1' },
+      ];
+
+      const nw = calculateNetWorth(assets, txs, 9, 2026);
+      // Não deve subtrair 150 novamente, mantendo 850
+      expect(nw).toBe(850);
+    });
+  });
+
+  describe('getMiniChartData', () => {
+    it('retorna 2 pontos para renderização suave quando houver apenas 1 transação', () => {
+      const txs = [{ type: 'out', value: 150 }];
+      const data = getMiniChartData(txs, 'out');
+      expect(data).toHaveLength(2);
+      expect(data[0].v).toBe(0);
+      expect(data[1].v).toBe(150);
     });
   });
 
@@ -127,29 +185,55 @@ describe('finance utils', () => {
         { type: 'in', value: 2000, date: new Date(currentYear, currentMonth, 5) },
         { type: 'yield', value: 100, date: new Date(currentYear, currentMonth, 10) },
         { type: 'out', value: 500, date: new Date(currentYear, currentMonth, 15) },
-        // Transação de outro mês (não deve impactar o mês atual)
         { type: 'in', value: 50000, date: new Date(currentYear, currentMonth + 1, 1) },
       ];
 
       const points = calculateEvolutionData(assets, txs, { period: 'Meses', month: 'Atual', day: 'Todos' });
       expect(points.length).toBeGreaterThan(0);
 
-      // Ponto do dia 01 (antes de qualquer transação): deve ser igual ao total de ativos
       const p1 = points.find(p => p.name === '01');
       if (p1 && typeof p1.value === 'number') {
         expect(p1.value).toBe(10000);
       }
 
-      // No dia da última transação ou hoje, deve bater com calculateNetWorth do mês
       const expectedNetWorth = calculateNetWorth(assets, txs, currentMonth, currentYear);
-      expect(expectedNetWorth).toBe(11600); // 10000 + 2000 + 100 - 500
+      expect(expectedNetWorth).toBe(11600);
 
-      // O ponto de hoje no gráfico
       const todayDay = now.getDate().toString().padStart(2, '0');
       const todayPoint = points.find(p => p.name === todayDay);
       if (todayPoint && typeof todayPoint.value === 'number') {
         expect(todayPoint.value).toBe(expectedNetWorth);
       }
+    });
+
+    it('sincroniza curva com saldo descontado para transações aplicadas no mês', () => {
+      // Ativo começa com 10.000. Copel (-150) foi paga no dia 15 e descontada do saldo do ativo (hoje tem 9.850).
+      const assets = [{ id: 'mp-1', value: 9850 }];
+      const now = new Date();
+      const currentMonth = now.getMonth();
+      const currentYear = now.getFullYear();
+
+      const txs = [
+        { id: 'tx-copel', type: 'out', value: 150, date: new Date(currentYear, currentMonth, 15, 12), applied: true, assetId: 'mp-1' },
+      ];
+
+      const points = calculateEvolutionData(assets, txs, { period: 'Meses', month: 'Atual', day: 'Todos' });
+
+      // No dia 01 (antes do pagamento da Copel): o saldo era 10.000
+      const p1 = points.find(p => p.name === '01');
+      if (p1 && typeof p1.value === 'number') {
+        expect(p1.value).toBe(10000);
+      }
+
+      // No dia 15 em diante (ou hoje): o saldo é 9.850
+      const todayDay = now.getDate().toString().padStart(2, '0');
+      const todayPoint = points.find(p => p.name === todayDay);
+      if (todayPoint && typeof todayPoint.value === 'number') {
+        expect(todayPoint.value).toBe(9850);
+      }
+
+      // Sincronizado perfeitamente com calculateNetWorth
+      expect(calculateNetWorth(assets, txs, currentMonth, currentYear)).toBe(9850);
     });
 
     it('em período Anos retorna pontos com o cálculo exato do patrimônio de cada mês', () => {

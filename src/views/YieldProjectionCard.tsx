@@ -137,7 +137,7 @@ export function YieldProjectionCard({ assets, cdiAnnualPercent = 13.65, rateSour
       const daysToProjectConvention = inv.policy.dayCountConvention === 'BUSINESS_DAYS_252' ? Math.max(1, Math.round((daysToProject * 252) / 365)) : daysToProject;
 
       let irRate = 0; let totalTax = 0; let futureIrRate = 0;
-      const taxDays = inv.taxDaysInvested(today);
+      const taxDays = inv.daysInvested(today);
       if (inv.taxDisplayMode === 'NET') {
         irRate = IncomeTaxPolicy.rateFor(Math.max(taxDays, 1));
         totalTax = Math.min(irRate + (taxDays >= 1 ? IofPolicy.rateFor(taxDays) : 0), 1);

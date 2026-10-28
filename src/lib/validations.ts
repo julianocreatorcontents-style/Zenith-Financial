@@ -12,7 +12,9 @@ export const TransactionSchema = z.object({
   value: z.number().positive("O valor deve ser sempre um número positivo"),
   type: z.enum(['in', 'out', 'yield']),
   date: z.any(), // Firestore Timestamp ou Date
-  uid: z.string().min(1, "UID do usuário é obrigatório"),
+  uid: z.string().min(1, "UID do usuário é obrigatório").optional(),
+  assetId: z.string().optional(),
+  applied: z.boolean().optional(),
   partialBalance: z.number().optional(),
   categoria_primaria: z.string().max(50, "Categoria muito longa").optional(),
   etiqueta_personalizada: z.string().max(100, "Etiqueta muito longa").optional(),
@@ -23,7 +25,18 @@ export const TransactionSchema = z.object({
     tendencia: z.enum(['Alta', 'Baixa', 'Estável']).optional()
   }).optional(),
   createdAt: z.any().optional()
-});
+}).refine(
+  (data) => {
+    if (data.type === 'out') {
+      return Boolean(data.assetId && data.assetId.trim().length > 0);
+    }
+    return true;
+  },
+  {
+    message: "Conta de origem (assetId) é obrigatória para despesas (saídas)",
+    path: ["assetId"],
+  }
+);
 
 export const UserProfileSchema = z.object({
   uid: z.string(),

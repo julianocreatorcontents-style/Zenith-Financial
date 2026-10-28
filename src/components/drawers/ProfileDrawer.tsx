@@ -321,6 +321,7 @@ export function ProfileDrawer({
     profile: t('Meu Perfil', 'My Profile'),
     notifications: t('Notificações', 'Notifications'),
     settings: t('Configurações', 'Settings'),
+    visual_settings: t('Aparência Visual', 'Visual Settings'),
     ai_key: t('Chave da IA', 'AI Key'),
     trash: t('Armazenamento e Lixeira', 'Storage & Trash')
   };

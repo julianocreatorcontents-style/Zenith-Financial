@@ -9,6 +9,7 @@ import {
   Edit3,
   Trash2,
 } from 'lucide-react';
+import { parseTransactionDate, isExpenseTransaction } from '../lib/finance';
 
 export interface WalletTransactionsViewProps {
   transactions: any[];
@@ -32,16 +33,14 @@ export function WalletTransactionsView({
   const previousMonthDate = new Date(currentYear, currentMonth - 1, 1);
 
   const getTransactionDate = (tx: any): Date | null => {
-    if (!tx?.date) return null;
-    const date = tx.date?.toDate ? tx.date.toDate() : new Date(tx.date);
-    return Number.isNaN(date.getTime()) ? null : date;
+    return parseTransactionDate(tx?.date);
   };
 
   const monthBalance = transactions.reduce((acc: number, tx: any) => {
     const date = getTransactionDate(tx);
     if (!date || date.getMonth() !== currentMonth || date.getFullYear() !== currentYear) return acc;
     const value = Number(tx.value) || 0;
-    return acc + (tx.type === 'out' ? -value : value);
+    return acc + (isExpenseTransaction(tx) ? -value : value);
   }, 0);
 
   const filteredTransactions = transactions.filter((tx: any) => {
@@ -53,6 +52,7 @@ export function WalletTransactionsView({
     }
     return date.getMonth() === previousMonthDate.getMonth() && date.getFullYear() === previousMonthDate.getFullYear();
   });
+
 
   const getIcon = (cat: string) => {
     switch (cat) {
@@ -139,7 +139,7 @@ export function WalletTransactionsView({
               </p>
             </div>
           ) : filteredTransactions.map((tx: any, idx: number) => {
-            const isIncome = tx.type !== 'out';
+            const isIncome = !isExpenseTransaction(tx);
             const value = Math.abs(Number(tx.value) || 0);
             const date = getTransactionDate(tx);
 
@@ -158,7 +158,14 @@ export function WalletTransactionsView({
                     {getIcon(tx.categoria_primaria)}
                   </div>
                   <div>
-                    <p className="text-sm font-medium text-[var(--text-primary)]">{tx.label}</p>
+                    <div className="flex items-center gap-2">
+                      <p className="text-sm font-medium text-[var(--text-primary)]">{tx.label}</p>
+                      {tx.applied === false && (
+                        <span className="text-[9px] px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-400 font-bold uppercase tracking-wider">
+                          {t("Agendado", "Scheduled")}
+                        </span>
+                      )}
+                    </div>
                     <p className="text-[10px] text-[var(--text-muted)] uppercase font-bold tracking-wider">
                       {date ? date.toLocaleDateString('pt-BR') : t("Recente", "Recent")}
                     </p>
