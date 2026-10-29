@@ -183,7 +183,6 @@ export function useZenithData() {
         const db = parseTransactionDate(b.date || b.createdAt)?.getTime() || 0;
         return db - da;
       });
-      console.log('[DEBUG-5] onSnapshot transactions carregadas:', docs.length);
       setTransactions(docs);
     }, (e) => handleFirestoreError(e, OperationType.LIST, 'transactions'));
     return unsub;
@@ -603,9 +602,6 @@ export function useZenithData() {
     const isFuture = txDate.getTime() > endOfToday.getTime();
     const applied = !isFuture;
 
-    console.log('[DEBUG-3] addTransaction entrada data:', JSON.stringify(data, null, 2));
-    console.log('[DEBUG-3] txDate:', txDate.toISOString(), '| endOfToday:', endOfToday.toISOString(), '| isFuture:', isFuture, '| applied:', applied);
-
     const newTxRef = doc(collection(db, 'transactions'));
     const txData = { 
       ...data, 
@@ -615,11 +611,7 @@ export function useZenithData() {
       date: data.date ? Timestamp.fromDate(txDate) : serverTimestamp() 
     };
 
-    console.log('Salvando no Firestore:', txData);
-    console.log('[DEBUG-3] Payload final para Firestore:', JSON.stringify({...txData, date: String(txData.date) }, null, 2));
-
     await setDoc(newTxRef, txData).catch(e => handleFirestoreError(e, OperationType.CREATE, 'transactions'));
-    console.log('[DEBUG-3] setDoc concluído. assetId:', data.assetId, '| type:', data.type, '| applied:', applied);
 
     if (applied && data.assetId) {
       const isOut = isExpenseTransaction(data);
@@ -788,7 +780,6 @@ export function useZenithData() {
     const prevYear = currentMonth === 0 ? currentYear - 1 : currentYear;
 
     const currentTotals = calculateTotals(transactions, currentMonth, currentYear, assets);
-    console.log('[DEBUG-4] currentTotals no mês:', currentTotals, '| transactions total:', transactions.length);
     const prevTotals = calculateTotals(transactions, prevMonth, prevYear, assets);
 
     const monthBalance = calculateMonthBalance(transactions, currentMonth, currentYear);
@@ -847,7 +838,6 @@ export function useZenithData() {
   }, [assets, metrics.investments]);
 
   const cashFlowData = useMemo(() => {
-    console.log('[DEBUG-4] Calculando cashFlowData com transações:', transactions.length);
     return calculateCashFlowData(transactions);
   }, [transactions]);
 

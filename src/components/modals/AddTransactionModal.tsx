@@ -62,12 +62,10 @@ export function AddTransactionModal({
       alert(t('Preencha todos os campos corretamente.', 'Fill in all fields correctly.'));
       return;
     }
-    if (formData.type === 'out' && !formData.assetId) {
+    if ((formData.type === 'out' || formData.type === 'in') && !formData.assetId) {
       alert(t('Selecione a conta de origem.', 'Select the source account.'));
       return;
     }
-    console.log('Dados do Formulário:', formData);
-    console.log('[DEBUG-1] Modal formData enviado:', JSON.stringify(formData, null, 2));
     onAdd(formData);
   };
 
@@ -136,9 +134,9 @@ export function AddTransactionModal({
           </div>
         </div>
 
-        {formData.type === 'out' && (
+        {(formData.type === 'out' || formData.type === 'in') && (
           <div>
-            <label className="text-[10px] uppercase font-bold text-[var(--text-muted)] tracking-widest">{t("Conta de Origem", "Source Account")}</label>
+            <label className="text-[10px] uppercase font-bold text-[var(--text-muted)] tracking-widest">{formData.type === 'in' ? t("Conta de Destino", "Destination Account") : t("Conta de Origem", "Source Account")}</label>
             <select
               required
               className="mt-1 w-full bg-[var(--bg-app)] border border-[var(--border-card)] rounded-xl p-3 text-[var(--text-primary)] text-base sm:text-sm focus:border-[var(--accent)] outline-none transition-colors sm:p-4"

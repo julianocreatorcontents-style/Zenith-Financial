@@ -1,4 +1,4 @@
-import React, { useMemo, useCallback } from 'react';
+import React, { useMemo, useCallback, useEffect, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   Eye,
@@ -10,6 +10,9 @@ import {
   Car,
   ArrowUpRight,
   ArrowRightLeft,
+  List,
+  LayoutGrid,
+  GalleryHorizontal,
 } from 'lucide-react';
 import {
   ResponsiveContainer,
@@ -32,6 +35,7 @@ import { Asset, Transaction, DDA, Settings, ChartSlot } from '../types/app';
 import {
   DDASuggestion,
   MiniMetricCard,
+  AssetMiniCard,
   SummaryCard,
   HomeInvestmentCard
 } from '../components/dashboard/MetricCards';
@@ -116,6 +120,12 @@ export const HomeView: React.FC<HomeViewProps> = ({
   t,
   visualSettings,
 }) => {
+  const [activePortfolioIndex, setActivePortfolioIndex] = useState(0);
+  const [activeMetricIndex, setActiveMetricIndex] = useState(0);
+  const [homeLayout, setHomeLayout] = useState<'lista' | 'grade' | 'carrossel'>('lista');
+  const carouselRef = useRef<HTMLDivElement>(null);
+  const carouselScrollFrame = useRef<number | null>(null);
+
   const evolChartConfig = settings?.zenith_config?.charts?.['CHART_EVOL_PATRIMONIO'];
 
   // Ler estado do modo de visualização e impostos diretamente da config persistida
@@ -171,6 +181,30 @@ export const HomeView: React.FC<HomeViewProps> = ({
     return paletas[tema]?.["accent"] || 'var(--accent)';
   }, [settings?.zenith_config]);
 
+  const portfolioMetrics = useMemo(() => {
+    const inv = assets.filter((a: any) => a.type === 'investment');
+    const totalBalance = inv.reduce((s: number, a: any) => s + (a.currentValue || 0), 0);
+    const dailyTotal = inv.reduce((s: number, a: any) => s + (a.dailyYield || 0), 0);
+    const monthTotal = inv.reduce((s: number, a: any) => s + (a.monthYieldRemaining || 0), 0);
+    const yearTotal = dailyTotal * 365;
+    const avgPercent = inv.length > 0 ? (inv.reduce((s: number, a: any) => s + (a.yieldPercent || 0), 0) / inv.length) : 0;
+    return { totalBalance, dailyTotal, monthTotal, yearTotal, avgPercent, count: inv.length };
+  }, [assets]);
+
+  const totalCardChartData = useMemo(
+    () => chartData.filter((p: any) => typeof p.value === 'number').slice(-10).map((p: any) => ({ v: p.value as number })),
+    [chartData]
+  );
+
+  const totalCardOverlayDetails = useMemo(() => [
+    { label: 'Rende/dia', value: '+R$ ' + portfolioMetrics.dailyTotal.toFixed(2) },
+    { label: 'Até fim do mês', value: '+R$ ' + portfolioMetrics.monthTotal.toFixed(2) },
+    { label: 'Projeção anual', value: '+R$ ' + portfolioMetrics.yearTotal.toFixed(2) },
+    { label: 'Ativos', value: portfolioMetrics.count.toString() },
+  ], [portfolioMetrics]);
+
+  const openSettings = useCallback(() => openDrawer('settings'), [openDrawer]);
+
   const orderedDashboardItems = useMemo(() => {
     const order = settings?.zenith_config?.dashboard_order || [];
     const chartsConfig = settings?.zenith_config?.charts || {};
@@ -203,6 +237,115 @@ export const HomeView: React.FC<HomeViewProps> = ({
       return item?.visible !== false;
     });
   }, [settings?.zenith_config?.dashboard_order, settings?.zenith_config?.charts, settings?.zenith_config?.metrics]);
+
+  const metricIds = useMemo(
+    () => orderedDashboardItems.filter(id => id.startsWith('METRIC_') && id !== 'METRIC_RENDIMENTOS'),
+    [orderedDashboardItems]
+  );
+
+  const assetItemIds = useMemo(
+    () => assets.filter((a: any) => a.type === 'investment').map((a: any) => 'ASSET_' + a.id),
+    [assets]
+  );
+
+  const portfolioItems = useMemo(
+    () => [...assetItemIds],
+    [assetItemIds]
+  );
+
+  const flowMetrics = useMemo(
+    () => metricIds.filter((id) => {
+      const cfg = (settings?.zenith_config?.metrics as any)?.[id];
+      return cfg?.visible !== false;
+    }),
+    [metricIds, settings?.zenith_config?.metrics]
+  );
+
+  const metricItems = useMemo(
+    () => ['METRIC_TOTAL_CARTEIRA', ...flowMetrics, ...portfolioItems],
+    [flowMetrics, portfolioItems]
+  );
+
+  const topMetricItems = useMemo(
+    () => ['METRIC_TOTAL_CARTEIRA', ...flowMetrics],
+    [flowMetrics]
+  );
+
+  const carouselItems = portfolioItems;
+
+  const remainingDashboardItems = useMemo(
+    () => orderedDashboardItems.filter(id => !['METRIC_ENTRADAS','METRIC_SAIDAS','METRIC_TOTAL_CARTEIRA'].includes(id) && !id.startsWith('ASSET_')),
+    [orderedDashboardItems]
+  );
+
+  const metricLayoutClass =
+    homeLayout === 'grade'
+      ? 'grid grid-cols-2 gap-4 w-full max-w-2xl mx-auto'
+      : homeLayout === 'carrossel'
+        ? 'flex overflow-x-auto snap-x snap-mandatory gap-4 w-full pb-8 pt-2 px-4 [&::-webkit-scrollbar]:hidden'
+        : 'flex flex-col gap-4 w-full max-w-md mx-auto';
+
+  const handleMetricCarouselScroll = useCallback(() => {
+    if (carouselScrollFrame.current !== null) return;
+
+    carouselScrollFrame.current = requestAnimationFrame(() => {
+      carouselScrollFrame.current = null;
+      const el = carouselRef.current;
+      if (!el || carouselItems.length === 0) return;
+
+      const setWidth = el.scrollWidth / 3;
+      if (setWidth > 0) {
+        if (el.scrollLeft < setWidth * 0.5) el.scrollLeft += setWidth;
+        else if (el.scrollLeft > setWidth * 1.5) el.scrollLeft -= setWidth;
+      }
+
+      const center = el.scrollLeft + el.clientWidth / 2;
+      let closestIndex = 0;
+      let closestDistance = Infinity;
+      Array.from(el.children).forEach((child, index) => {
+        const node = child as HTMLElement;
+        const childCenter = node.offsetLeft + node.offsetWidth / 2;
+        const distance = Math.abs(childCenter - center);
+        if (distance < closestDistance) {
+          closestDistance = distance;
+          closestIndex = index;
+        }
+      });
+      setActiveMetricIndex(closestIndex % carouselItems.length);
+    });
+  }, [carouselItems.length]);
+
+  useEffect(() => {
+    return () => {
+      if (carouselScrollFrame.current !== null) {
+        cancelAnimationFrame(carouselScrollFrame.current);
+      }
+    };
+  }, []);
+
+  const scrollToMetric = useCallback((index: number) => {
+    const el = carouselRef.current;
+    if (!el || carouselItems.length === 0) return;
+    const target = el.children[carouselItems.length + index] as HTMLElement | undefined;
+    if (!target) return;
+    el.scrollTo({
+      left: target.offsetLeft - (el.clientWidth - target.offsetWidth) / 2,
+      behavior: 'smooth',
+    });
+  }, [carouselItems.length]);
+
+  useEffect(() => {
+    if (homeLayout !== 'carrossel') return;
+    const el = carouselRef.current;
+    if (!el || carouselItems.length === 0) return;
+
+    const frame = requestAnimationFrame(() => {
+      const firstOfMiddleSet = el.children[carouselItems.length] as HTMLElement | undefined;
+      el.scrollLeft = firstOfMiddleSet?.offsetLeft ?? el.scrollWidth / 3;
+      setActiveMetricIndex(0);
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [homeLayout, carouselItems.length]);
 
   const filteredRecentTransactions = useMemo(() => {
     let filtered = [...transactions];
@@ -263,6 +406,31 @@ export const HomeView: React.FC<HomeViewProps> = ({
     );
     const opacity = (metricConfig.opacity || 100) / 100;
 
+    if (id === 'METRIC_TOTAL_CARTEIRA') {
+      return (
+        <MiniMetricCard
+          key={id}
+          id="total-carteira"
+          label="Total da Carteira"
+          value={portfolioMetrics.totalBalance.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+          percent={'+' + portfolioMetrics.avgPercent.toFixed(2) + '%'}
+          trend="up"
+          data={totalCardChartData}
+          color="var(--accent)"
+          opacity={1}
+          privacy={privacyMode}
+          onSettings={openSettings}
+          overlayDetails={totalCardOverlayDetails}
+        />
+      );
+    }
+    if (id.startsWith('ASSET_')) {
+      const assetId = id.replace('ASSET_', '');
+      const asset = assets.find((a: any) => a.id === assetId);
+      if (!asset) return null;
+      return <AssetMiniCard key={id} asset={asset} cdiAnnualPercent={marketRate.cdiAnnualPercent} privacy={privacyMode} onSettings={() => openDrawer('settings')} />;
+    }
+
     switch (id) {
       case 'METRIC_SALDO':
         return (
@@ -277,7 +445,7 @@ export const HomeView: React.FC<HomeViewProps> = ({
             color={mainColor}
             opacity={opacity}
             privacy={privacyMode}
-            onSettings={() => openDrawer('settings')}
+            onSettings={openSettings}
             resolveStyle={resolveStyle}
           />
         );
@@ -294,7 +462,7 @@ export const HomeView: React.FC<HomeViewProps> = ({
             color={mainColor}
             opacity={opacity}
             privacy={privacyMode}
-            onSettings={() => openDrawer('settings')}
+            onSettings={openSettings}
             resolveStyle={resolveStyle}
           />
         );
@@ -311,7 +479,7 @@ export const HomeView: React.FC<HomeViewProps> = ({
             color={mainColor}
             opacity={opacity}
             privacy={privacyMode}
-            onSettings={() => openDrawer('settings')}
+            onSettings={openSettings}
             resolveStyle={resolveStyle}
             isExpense={true}
           />
@@ -344,7 +512,7 @@ export const HomeView: React.FC<HomeViewProps> = ({
             color={mainColor}
             opacity={opacity}
             privacy={privacyMode}
-            onSettings={() => openDrawer('settings')}
+            onSettings={openSettings}
             resolveStyle={resolveStyle}
           />
         );
@@ -826,6 +994,30 @@ export const HomeView: React.FC<HomeViewProps> = ({
 
   return (
     <>
+      {/* CONTROLE DE LAYOUT */}
+      <div className="flex items-center justify-between gap-3 w-full max-w-md mx-auto sm:max-w-2xl">
+        <span className="text-[10px] font-bold uppercase tracking-widest text-[var(--text-muted)]">
+          {t('Layout', 'Layout')}
+        </span>
+        <div className="flex items-center gap-1 bg-[var(--bg-card)] border border-[var(--border-card)] rounded-2xl p-1">
+          {([
+            { id: 'lista', icon: List, label: t('Lista', 'List') },
+            { id: 'grade', icon: LayoutGrid, label: t('Grade', 'Grid') },
+            { id: 'carrossel', icon: GalleryHorizontal, label: t('Carrossel', 'Carousel') },
+          ] as const).map(({ id, icon: Icon, label }) => (
+            <button
+              key={id}
+              onClick={() => setHomeLayout(id)}
+              aria-label={label}
+              aria-pressed={homeLayout === id}
+              className={`p-2 rounded-xl transition-colors ${homeLayout === id ? 'bg-[var(--accent)]/15 text-[var(--accent)]' : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'}`}
+            >
+              <Icon size={16} />
+            </button>
+          ))}
+        </div>
+      </div>
+
       {/* DDA SUGGESTIONS */}
       <AnimatePresence>
         {ddas.filter(d => d.status === 'pending').map((dda, idx) => (
@@ -880,13 +1072,59 @@ export const HomeView: React.FC<HomeViewProps> = ({
       </section>
 
       {/* DASHBOARD INTEGRADO (DYNAMIC ORDER) */}
-      <div className="space-y-6">
-        {orderedDashboardItems.map((id, index) => (
-          <React.Fragment key={`dash-${id}-${index}`}>
-            {id.startsWith('METRIC_') ? renderMetric(id) : renderChart(id)}
-          </React.Fragment>
-        ))}
-      </div>
+      {metricItems.length > 0 && (
+        <div className="space-y-4">
+          {homeLayout === 'carrossel' ? (
+            <>
+              {topMetricItems.length > 0 && (
+                <div className="flex flex-col gap-4 w-full max-w-md mx-auto">
+                  {topMetricItems.map(id => renderMetric(id))}
+                </div>
+              )}
+              {carouselItems.length > 0 && (
+                <>
+                  <div
+                    ref={carouselRef}
+                    onScroll={handleMetricCarouselScroll}
+                    className={metricLayoutClass}
+                  >
+                    {[...carouselItems, ...carouselItems, ...carouselItems].map((id, index) => (
+                      <div key={`carousel-metric-${id}-${index}`} className="snap-center shrink-0 w-[85vw] max-w-sm">
+                        {renderMetric(id)}
+                      </div>
+                    ))}
+                  </div>
+                  <div className="flex items-center justify-center gap-2">
+                    {carouselItems.map((id, index) => (
+                      <button
+                        key={`metric-dot-${id}`}
+                        onClick={() => scrollToMetric(index)}
+                        aria-label={`${t('Ir para', 'Go to')} ${id}`}
+                        aria-current={activeMetricIndex === index}
+                        className={`h-1.5 rounded-full transition-all duration-300 ${activeMetricIndex === index ? 'w-6 bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.6)]' : 'w-1.5 bg-green-500/30'}`}
+                      />
+                    ))}
+                  </div>
+                </>
+              )}
+            </>
+          ) : (
+            <div className={metricLayoutClass}>
+              {metricItems.map(id => renderMetric(id))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {remainingDashboardItems.length > 0 && (
+        <div className="space-y-6">
+          {remainingDashboardItems.map((id, index) => (
+            <React.Fragment key={`dash-${id}-${index}`}>
+              {id.startsWith('METRIC_') ? renderMetric(id) : renderChart(id)}
+            </React.Fragment>
+          ))}
+        </div>
+      )}
     </>
   );
 };

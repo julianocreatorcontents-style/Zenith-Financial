@@ -455,8 +455,6 @@ export default function ZenithApp() {
               onClose={() => setIsAddingTransaction(false)}
               language={settings.language}
               onAdd={async (txData) => {
-                console.log('Recebido no App:', txData);
-                console.log('[DEBUG-2] App.tsx recebeu txData:', JSON.stringify(txData, null, 2));
                 await addTransaction(txData);
                 setIsAddingTransaction(false);
               }}

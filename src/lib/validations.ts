@@ -27,13 +27,13 @@ export const TransactionSchema = z.object({
   createdAt: z.any().optional()
 }).refine(
   (data) => {
-    if (data.type === 'out') {
+    if (data.type === 'out' || data.type === 'in') {
       return Boolean(data.assetId && data.assetId.trim().length > 0);
     }
     return true;
   },
   {
-    message: "Conta de origem (assetId) é obrigatória para despesas (saídas)",
+    message: "Selecione a conta de origem/destino (assetId) para entradas e saídas",
     path: ["assetId"],
   }
 );

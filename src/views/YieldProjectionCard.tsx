@@ -227,6 +227,7 @@ export function YieldProjectionCard({ assets, cdiAnnualPercent = 13.65, rateSour
         </div>
 
         {/* HERO CARD (SOMA TOTAL) */}
+        {false && (
         <div style={{ backgroundColor: cardBg }} className={'relative overflow-hidden rounded-[24px] border mb-4 ' + (isCustom ? 'border-[var(--accent)]/30 shadow-[0_10px_40px_-10px_rgba(0,255,163,0.2)]' : 'border-[var(--border-card)] shadow-sm')}>
           {isCustom && <div className="absolute top-0 right-0 w-48 h-48 bg-[var(--accent)] opacity-[0.07] blur-[60px] rounded-full pointer-events-none"></div>}
           
@@ -264,8 +265,9 @@ export function YieldProjectionCard({ assets, cdiAnnualPercent = 13.65, rateSour
             </div>
           </div>
         </div>
+        )}
 
-        {projections.map((p) => {
+        {false && (projections.map((p) => {
           const displayBalance = p.showBoth ? p.pMonthNet : p.pMonthGross;
           const displayDaily = p.showBoth ? p.dailyLiquido : p.dailyBruto;
           const isExpanded = expandedId === p.id;
@@ -378,7 +380,7 @@ export function YieldProjectionCard({ assets, cdiAnnualPercent = 13.65, rateSour
               </div>
             </div>
           );
-        })}
+        }))}
       </div>
 
       <InvestmentPolicyModal isOpen={modalOpen} mode={modalMode} onClose={handleClose} onSave={handleSave} initialData={modalMode === 'edit' && selectedAssetId ? (() => {
