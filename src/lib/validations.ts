@@ -15,6 +15,8 @@ export const TransactionSchema = z.object({
   uid: z.string().min(1, "UID do usuário é obrigatório").optional(),
   assetId: z.string().optional(),
   applied: z.boolean().optional(),
+  isRecurring: z.boolean().optional(),
+  durationMonths: z.number().nullable().optional(),
   partialBalance: z.number().optional(),
   categoria_primaria: z.string().max(50, "Categoria muito longa").optional(),
   etiqueta_personalizada: z.string().max(100, "Etiqueta muito longa").optional(),

@@ -2,7 +2,15 @@
  * Shared application types for Zenith Financial.
  * Single-user model: each document belongs to a single uid.
  */
-
+export interface Transaction {
+  // ... campos anteriores
+  assetId?: string;
+  applied?: boolean;
+  isRecurring?: boolean;
+  durationMonths?: number | null;
+  partialBalance?: number;
+  // ... resto dos campos
+}
 export type AssetType = 'liquidity' | 'investment' | 'physical';
 
 export interface Asset {

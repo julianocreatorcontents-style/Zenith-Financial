@@ -39,7 +39,9 @@ import {
   SummaryCard,
   HomeInvestmentCard
 } from '../components/dashboard/MetricCards';
+import { FutureHeroCard } from '../components/dashboard/FutureHeroCard';
 import { YieldProjectionCard } from './YieldProjectionCard';
+import { GoalsHeroCard } from '../components/dashboard/GoalsHeroCard';
 import type { VisualSettings } from '../components/CardSettingsPanel';
 
 const BRL_FORMATTER = new Intl.NumberFormat('pt-BR', {
@@ -121,6 +123,9 @@ export const HomeView: React.FC<HomeViewProps> = ({
   visualSettings,
 }) => {
   const [activePortfolioIndex, setActivePortfolioIndex] = useState(0);
+  const [activePatrimonioIndex, setActivePatrimonioIndex] = useState(0);
+  const patrimonioCarouselRef = useRef<HTMLDivElement>(null);
+  const isPatrimonioJumping = useRef(false);
   const [activeMetricIndex, setActiveMetricIndex] = useState(0);
   const [homeLayout, setHomeLayout] = useState<'lista' | 'grade' | 'carrossel'>('lista');
   const carouselRef = useRef<HTMLDivElement>(null);
@@ -992,6 +997,35 @@ export const HomeView: React.FC<HomeViewProps> = ({
     }
   };
 
+
+  const handlePatrimonioScroll = () => {
+    if (!patrimonioCarouselRef.current || isPatrimonioJumping.current) return;
+    const el = patrimonioCarouselRef.current;
+    const segment = el.scrollWidth / 3;
+    const cardWidth = el.scrollWidth / 6;
+    const newIdx = Math.round(el.scrollLeft / cardWidth) % 2;
+    if (newIdx !== activePatrimonioIndex) setActivePatrimonioIndex(newIdx);
+    if (el.scrollLeft < segment * 0.5) {
+      isPatrimonioJumping.current = true;
+      el.scrollLeft += segment;
+      setTimeout(() => { isPatrimonioJumping.current = false; }, 100);
+    } else if (el.scrollLeft > segment * 1.5) {
+      isPatrimonioJumping.current = true;
+      el.scrollLeft -= segment;
+      setTimeout(() => { isPatrimonioJumping.current = false; }, 100);
+    }
+  };
+
+  useEffect(() => {
+    if (!patrimonioCarouselRef.current) return;
+    requestAnimationFrame(() => {
+      const el = patrimonioCarouselRef.current;
+      if (!el) return;
+      const firstOfMiddle = el.children[2] as HTMLElement;
+      if (firstOfMiddle) el.scrollLeft = firstOfMiddle.offsetLeft;
+    });
+  }, []);
+
   return (
     <>
       {/* CONTROLE DE LAYOUT */}
@@ -1032,44 +1066,74 @@ export const HomeView: React.FC<HomeViewProps> = ({
         ))}
       </AnimatePresence>
 
-      {/* CARD PATRIMÔNIO TOTAL */}
-      <section className="bg-[var(--bg-card)] border border-[var(--border-card)] rounded-[32px] p-5 sm:p-6 relative overflow-hidden">
-        <div className="flex flex-wrap items-center justify-between gap-2 mb-1">
-          <span className="text-xs font-medium text-[var(--text-secondary)]">
-            {settings?.customTerms?.['Saldo'] || (evolutionView === 'projecao' ? t("Projeção Patrimonial", "Net Worth Forecast") : t("Evolução do Patrimônio", "Net Worth Evolution"))}
-          </span>
-          {evolutionView === 'projecao' && (
-            <span className="text-[9px] font-bold px-2 py-0.5 rounded-lg bg-[var(--accent)]/10 text-[var(--accent)] uppercase tracking-wider">
-              {projectionTaxMode === 'liquido' ? t('Líquido', 'Net') : t('Bruto', 'Gross')}
-              {monthlyContribution > 0 && ` · R$ ${monthlyContribution}/mês`}
-            </span>
-          )}
-        </div>
-        <div className="flex items-center gap-3 mb-2">
-          <h2 className="text-3xl font-mono tracking-tighter font-medium text-[var(--text-primary)]">
-            {privacyMode ? '••••••••' : (
-              evolutionView === 'projecao' && computedProjectionData.length > 1
-                ? (projectionTaxMode === 'liquido'
-                    ? (computedProjectionData[computedProjectionData.length - 1].valueNet ?? 0)
-                    : (computedProjectionData[computedProjectionData.length - 1].value ?? 0)
-                  ).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
-                : (metrics.netWorth ?? 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
-            )}
-          </h2>
-          <button 
-            onClick={onTogglePrivacy} 
-            className="w-7 h-7 bg-[var(--bg-app)] border border-[var(--border-card)] rounded-lg flex items-center justify-center text-[var(--text-muted)] hover:text-[var(--accent)] transition-colors"
-          >
-            {privacyMode ? <EyeOff size={14} /> : <Eye size={14} />}
-          </button>
-          {evolutionView === 'projecao' && computedProjectionData.length > 1 && (
-            <span className="text-[10px] font-mono px-2 py-0.5 rounded-md bg-[var(--accent)]/10 text-[var(--accent)] font-bold">
-              {computedProjectionData[computedProjectionData.length - 1].name}
-            </span>
-          )}
-        </div>
-        {renderChart('CHART_EVOL_PATRIMONIO')}
-      </section>
+      {/* CARROSSEL PATRIMONIO: Evolucao + Futuro */}
+      <div
+        ref={patrimonioCarouselRef}
+        onScroll={handlePatrimonioScroll}
+        className="flex overflow-x-auto snap-x snap-mandatory gap-4 w-full pb-4 pt-2 [&::-webkit-scrollbar]:hidden"
+      >
+        {[0, 1, 2].map((loopIdx) => (
+          <React.Fragment key={'patrimonio-loop-' + loopIdx}>
+            <div className="snap-center shrink-0 w-[88vw] max-w-md">
+              {/* CARD PATRIMÔNIO TOTAL */}
+                    <section className="bg-[var(--bg-card)] border border-[var(--border-card)] rounded-[32px] p-5 sm:p-6 relative overflow-hidden">
+                      <div className="flex flex-wrap items-center justify-between gap-2 mb-1">
+                        <span className="text-xs font-medium text-[var(--text-secondary)]">
+                          {settings?.customTerms?.['Saldo'] || (evolutionView === 'projecao' ? t("Projeção Patrimonial", "Net Worth Forecast") : t("Evolução do Patrimônio", "Net Worth Evolution"))}
+                        </span>
+                        {evolutionView === 'projecao' && (
+                          <span className="text-[9px] font-bold px-2 py-0.5 rounded-lg bg-[var(--accent)]/10 text-[var(--accent)] uppercase tracking-wider">
+                            {projectionTaxMode === 'liquido' ? t('Líquido', 'Net') : t('Bruto', 'Gross')}
+                            {monthlyContribution > 0 && ` · R$ ${monthlyContribution}/mês`}
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-3 mb-2">
+                        <h2 className="text-3xl font-mono tracking-tighter font-medium text-[var(--text-primary)]">
+                          {privacyMode ? '••••••••' : (
+                            evolutionView === 'projecao' && computedProjectionData.length > 1
+                              ? (projectionTaxMode === 'liquido'
+                                  ? (computedProjectionData[computedProjectionData.length - 1].valueNet ?? 0)
+                                  : (computedProjectionData[computedProjectionData.length - 1].value ?? 0)
+                                ).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
+                              : (metrics.netWorth ?? 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
+                          )}
+                        </h2>
+                        <button 
+                          onClick={onTogglePrivacy} 
+                          className="w-7 h-7 bg-[var(--bg-app)] border border-[var(--border-card)] rounded-lg flex items-center justify-center text-[var(--text-muted)] hover:text-[var(--accent)] transition-colors"
+                        >
+                          {privacyMode ? <EyeOff size={14} /> : <Eye size={14} />}
+                        </button>
+                        {evolutionView === 'projecao' && computedProjectionData.length > 1 && (
+                          <span className="text-[10px] font-mono px-2 py-0.5 rounded-md bg-[var(--accent)]/10 text-[var(--accent)] font-bold">
+                            {computedProjectionData[computedProjectionData.length - 1].name}
+                          </span>
+                        )}
+                      </div>
+                      {renderChart('CHART_EVOL_PATRIMONIO')}
+      <GoalsHeroCard currentNetWorth={metrics.netWorth ?? 0} transactions={transactions} monthlyYield={portfolioMetrics.dailyTotal * 30} target={100000} privacy={privacyMode} />
+
+                    </section>
+            </div>
+            <div className="snap-center shrink-0 w-[88vw] max-w-md">
+              <FutureHeroCard
+                currentNetWorth={metrics.netWorth ?? 0}
+                assets={assets}
+                transactions={transactions}
+                cdiAnnualPercent={marketRate.cdiAnnualPercent}
+                privacy={privacyMode}
+                onTogglePrivacy={onTogglePrivacy}
+              />
+            </div>
+          </React.Fragment>
+        ))}
+      </div>
+      <div className="flex justify-center gap-2 mt-2 mb-4">
+        {[0, 1].map((i) => (
+          <div key={'dot-' + i} className={'h-2 rounded-full transition-all duration-300 ' + (activePatrimonioIndex === i ? 'w-6 bg-green-500' : 'w-2 bg-gray-600')} />
+        ))}
+      </div>
 
       {/* DASHBOARD INTEGRADO (DYNAMIC ORDER) */}
       {metricItems.length > 0 && (

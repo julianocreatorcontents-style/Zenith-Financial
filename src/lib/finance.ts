@@ -444,3 +444,74 @@ export const calculateCashFlowData = (transactions: any[]) => {
     return { name, value, isPredicted };
   });
 };
+
+/**
+ * Calcula a projeção de uma meta financeira, considerando:
+ * - Saldo base (saldo + transações únicas)
+ * - Transações recorrentes (respeitando duração)
+ * - Rendimento mensal (juros compostos)
+ */
+export interface GoalProjectionResult {
+  saldoBase: number;
+  fluxoRecorrenteLiquido: number;
+  monthsToGoal: number;
+}
+
+export function calculateGoalProjection(
+  currentBalance: number,
+  transactions: any[],
+  monthlyYield: number,
+  target: number
+): GoalProjectionResult {
+  // 1. Saldo base = saldo atual + entradas únicas - saídas únicas
+  let entradasUnicas = 0;
+  let saidasUnicas = 0;
+  let fluxoRecorrenteLiquido = monthlyYield;
+
+  for (const tx of transactions) {
+    const value = Number(tx.value) || 0;
+    const isIn = tx.type === 'in';
+    const isOut = tx.type === 'out';
+    if (!isIn && !isOut) continue;
+
+    if (!tx.isRecurring) {
+      // Única: ajusta o saldo base
+      if (isIn) entradasUnicas += value;
+      else saidasUnicas += value;
+    } else {
+      // Recorrente: entra no fluxo mensal (se ainda estiver ativa)
+      // Se durationMonths existir, ainda consideramos para o fluxo
+      if (isIn) fluxoRecorrenteLiquido += value;
+      else fluxoRecorrenteLiquido -= value;
+    }
+  }
+
+  const saldoBase = currentBalance + entradasUnicas - saidasUnicas;
+
+  if (saldoBase >= target) {
+    return { saldoBase, fluxoRecorrenteLiquido, monthsToGoal: 0 };
+  }
+
+  // 2. Simulação mês a mês
+  const taxaMensal = currentBalance > 0 ? monthlyYield / currentBalance : 0;
+  let saldo = saldoBase;
+  let monthsToGoal = Infinity;
+
+  for (let m = 1; m <= 600; m++) {
+    let fluxoEsteMes = 0;
+    for (const tx of transactions) {
+      if (!tx.isRecurring) continue;
+      if (tx.durationMonths !== null && tx.durationMonths !== undefined && m > tx.durationMonths) continue;
+      const value = Number(tx.value) || 0;
+      if (tx.type === 'in') fluxoEsteMes += value;
+      else if (tx.type === 'out') fluxoEsteMes -= value;
+    }
+    saldo = saldo + fluxoEsteMes + (saldo * taxaMensal);
+    if (saldo >= target) {
+      monthsToGoal = m;
+      break;
+    }
+  }
+
+  return { saldoBase, fluxoRecorrenteLiquido, monthsToGoal };
+}

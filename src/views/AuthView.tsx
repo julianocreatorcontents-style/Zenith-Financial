@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { motion } from 'motion/react';
 import { TrendingUp, AlertCircle } from 'lucide-react';
+import { Capacitor } from '@capacitor/core';
 
 interface AuthViewProps {
   onGoogleLogin: () => Promise<void>;
@@ -23,6 +24,7 @@ export const AuthView: React.FC<AuthViewProps> = ({
   const [authForm, setAuthForm] = useState({ name: '', email: '', password: '' });
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
+  const isNative = Capacitor.isNativePlatform();
 
   const t = (pt: string, en: string) => (language === 'en-US' ? en : pt);
 
@@ -157,25 +159,38 @@ export const AuthView: React.FC<AuthViewProps> = ({
             </button>
           </form>
 
-          <div className="relative">
-            <div className="absolute inset-0 flex items-center">
-              <div className="w-full border-t border-[var(--border-card)] opacity-50" />
-            </div>
-            <div className="relative flex justify-center text-[10px] uppercase tracking-widest font-bold">
-              <span className="bg-[var(--bg-card)] px-4 text-[var(--text-muted)]">
-                {t("Ou continue com", "Or continue with")}
-              </span>
-            </div>
-          </div>
+          {!isNative && (
+            <>
+              <div className="relative">
+                <div className="absolute inset-0 flex items-center">
+                  <div className="w-full border-t border-[var(--border-card)] opacity-50" />
+                </div>
+                <div className="relative flex justify-center text-[10px] uppercase tracking-widest font-bold">
+                  <span className="bg-[var(--bg-card)] px-4 text-[var(--text-muted)]">
+                    {t("Ou continue com", "Or continue with")}
+                  </span>
+                </div>
+              </div>
 
-          <button 
-            type="button"
-            onClick={onGoogleLogin}
-            className="w-full py-4 bg-white text-black rounded-2xl font-bold text-[10px] uppercase tracking-widest flex items-center justify-center gap-3 border border-[var(--border-card)] hover:bg-gray-50 transition-all active:scale-[0.98]"
-          >
-            <img src="https://www.google.com/favicon.ico" className="w-4 h-4" alt="Google" />
-            Google
-          </button>
+              <button 
+                type="button"
+                onClick={onGoogleLogin}
+                className="w-full py-4 bg-white text-black rounded-2xl font-bold text-[10px] uppercase tracking-widest flex items-center justify-center gap-3 border border-[var(--border-card)] hover:bg-gray-50 transition-all active:scale-[0.98]"
+              >
+                <img src="https://www.google.com/favicon.ico" className="w-4 h-4" alt="Google" />
+                Google
+              </button>
+            </>
+          )}
+
+          {isNative && (
+            <p className="text-[10px] text-center text-[var(--text-muted)] leading-relaxed">
+              {t(
+                "Login com Google indisponível no APK. Use e-mail e senha.",
+                "Google sign-in is unavailable in the APK. Use email and password."
+              )}
+            </p>
+          )}
         </div>
       </motion.div>
     </div>

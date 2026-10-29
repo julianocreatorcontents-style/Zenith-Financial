@@ -47,6 +47,8 @@ export function AddTransactionModal({
     categoria_primaria: initialData?.categoria_primaria || initialData?.category || 'Outros',
     date: formatLocalDate(initialData?.date)
   });
+  const [isRecurring, setIsRecurring] = useState(true);
+  const [durationMonths, setDurationMonths] = useState<number | null>(null);
   const [displayValue, setDisplayValue] = useState(initialData?.value ? (initialData.value ?? 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }) : '');
 
   const handleValueChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -66,7 +68,7 @@ export function AddTransactionModal({
       alert(t('Selecione a conta de origem.', 'Select the source account.'));
       return;
     }
-    onAdd(formData);
+    onAdd({ ...formData, isRecurring, durationMonths: isRecurring ? durationMonths : null });
   };
 
   return (
@@ -151,7 +153,47 @@ export function AddTransactionModal({
               ))}
             </select>
           </div>
+  
         )}
+
+        {/* Frequência e Duração */}
+        <div className="grid grid-cols-2 gap-3 mt-3">
+          <div>
+            <label className="text-[10px] uppercase font-bold text-[var(--text-muted)] tracking-widest block mb-1">Frequência</label>
+            <div className="flex gap-2">
+              <button 
+                type="button" 
+                onClick={() => setIsRecurring(true)} 
+                className={'flex-1 py-2 rounded-xl text-xs font-bold border ' + (isRecurring ? 'bg-[var(--accent)] text-[var(--bg-app)] border-[var(--accent)]' : 'bg-[var(--bg-app)] text-[var(--text-muted)] border-[var(--border-card)]')}
+              >
+                Mensal
+              </button>
+              <button 
+                type="button" 
+                onClick={() => setIsRecurring(false)} 
+                className={'flex-1 py-2 rounded-xl text-xs font-bold border ' + (!isRecurring ? 'bg-amber-500 text-white border-amber-500' : 'bg-[var(--bg-app)] text-[var(--text-muted)] border-[var(--border-card)]')}
+              >
+                Única
+              </button>
+            </div>
+          </div>
+
+          {isRecurring && (
+            <div>
+              <label className="text-[10px] uppercase font-bold text-[var(--text-muted)] tracking-widest block mb-1">Duração</label>
+              <select 
+                value={durationMonths || 'inf'} 
+                onChange={(e) => setDurationMonths(e.target.value === 'inf' ? null : Number(e.target.value))}
+                className="w-full bg-[var(--bg-app)] border border-[var(--border-card)] rounded-xl p-2.5 text-xs outline-none"
+              >
+                <option value="inf">♾️ Indefinido</option>
+                {[2,3,4,5,6,7,8,9,10,11,12,18,24,36,48,60].map(m => (
+                  <option key={m} value={m}>{m} meses</option>
+                ))}
+              </select>
+            </div>
+          )}
+        </div>
 
         <div>
           <label className="text-[10px] uppercase font-bold text-[var(--text-muted)] tracking-widest">{t("Categoria", "Category")}</label>

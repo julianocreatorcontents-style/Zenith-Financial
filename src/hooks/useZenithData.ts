@@ -9,6 +9,7 @@ import {
 import { Timestamp } from 'firebase/firestore';
 import { onAuthStateChanged, User } from 'firebase/auth';
 import { z } from 'zod';
+import { Capacitor } from '@capacitor/core';
 import {
   extractDocument,
   getAiErrorMessage,
@@ -535,6 +536,10 @@ export function useZenithData() {
 
   // Autenticação
   const handleGoogleLogin = useCallback(async () => {
+    if (Capacitor.isNativePlatform()) {
+      setError('Login com Google indisponível no APK. Use e-mail e senha.');
+      return;
+    }
     try {
       await signInWithPopup(auth, googleProvider);
     } catch (e: any) {
