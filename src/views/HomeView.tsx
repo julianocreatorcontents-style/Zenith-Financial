@@ -42,6 +42,7 @@ import {
 import { FutureHeroCard } from '../components/dashboard/FutureHeroCard';
 import { YieldProjectionCard } from './YieldProjectionCard';
 import { GoalsHeroCard } from '../components/dashboard/GoalsHeroCard';
+import { YieldReconciliationModal } from '../components/dashboard/YieldReconciliationModal';
 import type { VisualSettings } from '../components/CardSettingsPanel';
 
 const BRL_FORMATTER = new Intl.NumberFormat('pt-BR', {
@@ -1026,6 +1027,20 @@ export const HomeView: React.FC<HomeViewProps> = ({
     });
   }, []);
 
+  const [showReconciliation, setShowReconciliation] = useState(false);
+  useEffect(() => {
+    const handleOpen = () => setShowReconciliation(true);
+    window.addEventListener('open-reconciliation', handleOpen);
+    return () => window.removeEventListener('open-reconciliation', handleOpen);
+  }, []);
+
+  const handleSaveReconciliation = async (updatedAssets: any[]) => {
+    for (const asset of updatedAssets) {
+      if (asset.manualDailyYield !== undefined && asset.manualDailyYield !== null) {
+        await onUpdateAsset(asset.id, { manualDailyYield: asset.manualDailyYield });
+      }
+    }
+  };
   return (
     <>
       {/* CONTROLE DE LAYOUT */}
@@ -1112,7 +1127,7 @@ export const HomeView: React.FC<HomeViewProps> = ({
                         )}
                       </div>
                       {renderChart('CHART_EVOL_PATRIMONIO')}
-      <GoalsHeroCard currentNetWorth={metrics.netWorth ?? 0} transactions={transactions} monthlyYield={portfolioMetrics.dailyTotal * 30} target={100000} privacy={privacyMode} />
+      <GoalsHeroCard currentNetWorth={metrics.netWorth ?? 0} transactions={transactions} assets={assets} target={100000} privacy={privacyMode} />
 
                     </section>
             </div>

@@ -47,8 +47,8 @@ export function AddTransactionModal({
     categoria_primaria: initialData?.categoria_primaria || initialData?.category || 'Outros',
     date: formatLocalDate(initialData?.date)
   });
-  const [isRecurring, setIsRecurring] = useState(true);
-  const [durationMonths, setDurationMonths] = useState<number | null>(null);
+  const [isRecurring, setIsRecurring] = useState(initialData?.isRecurring ?? true);
+  const [durationMonths, setDurationMonths] = useState<number | null>(initialData?.durationMonths ?? null);
   const [displayValue, setDisplayValue] = useState(initialData?.value ? (initialData.value ?? 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }) : '');
 
   const handleValueChange = (e: React.ChangeEvent<HTMLInputElement>) => {

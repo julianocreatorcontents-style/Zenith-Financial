@@ -455,57 +455,105 @@ export interface GoalProjectionResult {
   saldoBase: number;
   fluxoRecorrenteLiquido: number;
   monthsToGoal: number;
+  debug?: any;
 }
 
 export function calculateGoalProjection(
   currentBalance: number,
   transactions: any[],
-  monthlyYield: number,
+  assets: any[],
   target: number
 ): GoalProjectionResult {
-  // 1. Saldo base = saldo atual + entradas únicas - saídas únicas
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const currentMonth = today.getMonth();
+  const currentYear = today.getFullYear();
+
   let entradasUnicas = 0;
   let saidasUnicas = 0;
-  let fluxoRecorrenteLiquido = monthlyYield;
+  let entradasFixas = 0;
+  let saidasFixas = 0;
+
+  const futureSingles: any[] = [];
 
   for (const tx of transactions) {
+    if (tx.label === 'BPC - O' || tx.label === 'INSS - V' || tx.label === 'Doméstica') {
+      console.log('[DEBUG-RECORRENTE]', tx.label, '| isRecurring:', tx.isRecurring, '| durationMonths:', tx.durationMonths);
+    }
     const value = Number(tx.value) || 0;
     const isIn = tx.type === 'in';
     const isOut = tx.type === 'out';
     if (!isIn && !isOut) continue;
 
-    if (!tx.isRecurring) {
-      // Única: ajusta o saldo base
-      if (isIn) entradasUnicas += value;
-      else saidasUnicas += value;
+    if (tx.isRecurring) {
+      // Recorrentes sempre entram no fluxo mensal
+      if (isIn) entradasFixas += value;
+      else saidasFixas += value;
     } else {
-      // Recorrente: entra no fluxo mensal (se ainda estiver ativa)
-      // Se durationMonths existir, ainda consideramos para o fluxo
-      if (isIn) fluxoRecorrenteLiquido += value;
-      else fluxoRecorrenteLiquido -= value;
+      // Únicas: verifica a data
+      const txDate = parseTransactionDate(tx.date) || today;
+      const monthsFromNow = (txDate.getFullYear() - currentYear) * 12 + (txDate.getMonth() - currentMonth);
+
+      if (monthsFromNow > 0) {
+        futureSingles.push({ ...tx, monthsFromNow });
+      } else {
+        // Passado ou mês atual
+        if (isIn) entradasUnicas += value;
+        else saidasUnicas += value;
+      }
     }
   }
 
-  const saldoBase = currentBalance + entradasUnicas - saidasUnicas;
-
-  if (saldoBase >= target) {
-    return { saldoBase, fluxoRecorrenteLiquido, monthsToGoal: 0 };
+  let yieldMensal = 0;
+  let totalAssetsValue = 0;
+  for (const asset of assets) {
+    const daily = Number(asset.manualDailyYield ?? asset.dailyYield ?? 0);
+    const val = Number(asset.currentValue || asset.value) || 0;
+    const isMP = (asset.name || '').toLowerCase().includes('mercado pago');
+    yieldMensal += daily * (isMP ? 22 : 30);
+    totalAssetsValue += val;
   }
 
-  // 2. Simulação mês a mês
-  const taxaMensal = currentBalance > 0 ? monthlyYield / currentBalance : 0;
+  const saldoBase = currentBalance + entradasUnicas - saidasUnicas;
+  const fluxoRecorrenteLiquido = entradasFixas - saidasFixas + yieldMensal;
+  const taxaMensal = totalAssetsValue > 0 ? (yieldMensal / totalAssetsValue) : 0;
+
+  const debug = { yieldMensal, entradasFixas, saidasFixas, entradasUnicas, saidasUnicas, taxaMensal };
+
+  if (saldoBase >= target) {
+    return { saldoBase, fluxoRecorrenteLiquido, monthsToGoal: 0, debug };
+  }
+
   let saldo = saldoBase;
   let monthsToGoal = Infinity;
 
   for (let m = 1; m <= 600; m++) {
     let fluxoEsteMes = 0;
+    
+    // Recorrentes do mês
     for (const tx of transactions) {
       if (!tx.isRecurring) continue;
-      if (tx.durationMonths !== null && tx.durationMonths !== undefined && m > tx.durationMonths) continue;
+      const txDate = parseTransactionDate(tx.date) || today;
+      const monthsFromNow = (txDate.getFullYear() - currentYear) * 12 + (txDate.getMonth() - currentMonth);
+      
+      // Se a recorrência já começou (ou começa este mês) e não expirou
+      if (monthsFromNow > m) continue; 
+      if (tx.durationMonths !== null && tx.durationMonths !== undefined && m > (monthsFromNow + tx.durationMonths)) continue;
+      
       const value = Number(tx.value) || 0;
       if (tx.type === 'in') fluxoEsteMes += value;
       else if (tx.type === 'out') fluxoEsteMes -= value;
     }
+
+    // Únicas futuras
+    for (const tx of futureSingles) {
+      if (tx.monthsFromNow === m) {
+         const value = Number(tx.value) || 0;
+         if (tx.type === 'in') fluxoEsteMes += value;
+         else if (tx.type === 'out') fluxoEsteMes -= value;
+      }
+    }
+
     saldo = saldo + fluxoEsteMes + (saldo * taxaMensal);
     if (saldo >= target) {
       monthsToGoal = m;
@@ -513,5 +561,5 @@ export function calculateGoalProjection(
     }
   }
 
-  return { saldoBase, fluxoRecorrenteLiquido, monthsToGoal };
+  return { saldoBase, fluxoRecorrenteLiquido, monthsToGoal, debug };
 }

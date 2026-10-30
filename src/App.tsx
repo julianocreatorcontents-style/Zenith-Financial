@@ -7,7 +7,7 @@ import React, { useState, useCallback, lazy, Suspense, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   X, CreditCard, TrendingUp,
-  LayoutGrid, Plus, AlertCircle, Sparkles, ShieldCheck
+  LayoutGrid, Plus, AlertCircle, Sparkles, ShieldCheck, Bell
 } from 'lucide-react';
 import { 
   MissingApiKeyError,
@@ -71,6 +71,34 @@ export default function ZenithApp() {
   const [isEditingTransaction, setIsEditingTransaction] = useState(false);
   const [selectedTransaction, setSelectedTransaction] = useState<any>(null);
   const [isProfileDrawerOpen, setIsProfileDrawerOpen] = useState(false);
+  const [hasUnreadNotification, setHasUnreadNotification] = useState(true);
+  useEffect(() => {
+    if (!hasUnreadNotification) return;
+    const tryPlay = () => {
+      try {
+        const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
+        const p = (f: number, s: number, d: number) => {
+          const o = ctx.createOscillator();
+          const g = ctx.createGain();
+          o.type = "sine";
+          o.frequency.value = f;
+          g.gain.setValueAtTime(0.1, s);
+          g.gain.exponentialRampToValueAtTime(0.001, s + d);
+          o.connect(g);
+          g.connect(ctx.destination);
+          o.start(s);
+          o.stop(s + d);
+        };
+        p(880, ctx.currentTime, 0.1);
+        p(1108, ctx.currentTime + 0.1, 0.2);
+        document.removeEventListener("click", tryPlay);
+        document.removeEventListener("touchstart", tryPlay);
+      } catch (e) {}
+    };
+    tryPlay();
+    document.addEventListener("click", tryPlay, { once: true });
+    document.addEventListener("touchstart", tryPlay, { once: true });
+  }, []);
 
   const [visualSettings, setVisualSettings] = useState<VisualSettings>(() => {
     const saved = localStorage.getItem('zenith_visual_settings');
@@ -235,6 +263,7 @@ export default function ZenithApp() {
               {t("Sua evolução patrimonial começa com a próxima decisão inteligente.", "Your net worth evolution starts with the next smart decision.")}
             </p>
           </div>
+          <button onClick={() => { if (navigator.vibrate) navigator.vibrate([100,50,100]); try { const ctx = new (window.AudioContext || (window as any).webkitAudioContext)(); const p = (f:number,s:number,d:number) => { const o = ctx.createOscillator(); const g = ctx.createGain(); o.type = "sine"; o.frequency.value = f; g.gain.setValueAtTime(0.1, s); g.gain.exponentialRampToValueAtTime(0.001, s+d); o.connect(g); g.connect(ctx.destination); o.start(s); o.stop(s+d); }; p(880, ctx.currentTime, 0.1); p(1108, ctx.currentTime + 0.1, 0.2); } catch(e) {} setHasUnreadNotification(false); setDrawerPageRequest("notifications"); setIsProfileDrawerOpen(true); }} className="relative p-2.5 bg-[var(--bg-card)] border border-[var(--border-card)] rounded-full text-[var(--text-muted)] hover:text-[var(--accent)] transition-colors shrink-0" aria-label="Notificacoes"><Bell size={20} />{hasUnreadNotification && (<span className="absolute top-1 right-1 w-2.5 h-2.5 bg-red-500 border-2 border-[var(--bg-card)] rounded-full animate-pulse" />)}</button>
         </header>
 
         {/* --- CONTEÚDO PRINCIPAL --- */}
@@ -369,6 +398,7 @@ export default function ZenithApp() {
           {/* Profile Drawer */}
           <ProfileDrawer 
             isOpen={isProfileDrawerOpen}
+            hasUnreadNotification={hasUnreadNotification}
             onClose={() => setIsProfileDrawerOpen(false)}
             initialPage={drawerPageRequest}
             profile={profile}

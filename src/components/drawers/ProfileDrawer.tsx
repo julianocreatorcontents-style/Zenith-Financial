@@ -267,6 +267,7 @@ export interface ProfileDrawerProps {
   profile?: any;
   user?: any;
   notifications?: any[];
+  hasUnreadNotification?: boolean;
   language?: string;
   apiKey?: string;
   chartFilter?: any;

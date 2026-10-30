@@ -43,6 +43,8 @@ export interface Asset {
   yieldStartDate?: Date | null;
   monthEndValue?: number;
   monthYieldRemaining?: number;
+  manualDailyYield?: number;
+  lastYieldUpdate?: string;
 }
 
 export interface UserProfile {

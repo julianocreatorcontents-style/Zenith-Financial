@@ -325,6 +325,15 @@ export function enrichAsset<T extends { value?: number; valorInvestido?: number;
     ? `+${formattedYield} (+${info.yieldPercent.toFixed(2)}%)`
     : asset.change;
 
+  const hasManualYield = typeof (asset as any).manualDailyYield === 'number' && (asset as any).manualDailyYield > 0;
+  const finalDailyYield = hasManualYield ? (asset as any).manualDailyYield : info.dailyYield;
+  
+  // Se o rendimento for manual, recalculamos o "monthYieldRemaining" baseado nele
+  // (estimando 30 dias restantes para simplificar, ou mantendo a proporção)
+  const finalMonthYield = hasManualYield 
+    ? finalDailyYield * 30 
+    : info.monthYieldRemaining;
+
   return {
     ...asset,
     value: info.currentValue,
@@ -334,12 +343,12 @@ export function enrichAsset<T extends { value?: number; valorInvestido?: number;
     currentValue: info.currentValue,
     accumulatedYield: info.accumulatedYield,
     yieldSinceAnchor: info.yieldSinceAnchor,
-    dailyYield: info.dailyYield,
+    dailyYield: finalDailyYield,
     daysInvested: info.daysInvested,
     yieldPercent: info.yieldPercent,
     yieldStartDate: info.startDate,
-    monthEndValue: info.monthEndValue,
-    monthYieldRemaining: info.monthYieldRemaining,
+    monthEndValue: info.currentValue + finalMonthYield,
+    monthYieldRemaining: finalMonthYield,
     change,
   };
 }

@@ -284,7 +284,17 @@ export function useZenithData() {
         const tB = b.createdAt?.toMillis ? b.createdAt.toMillis() : (b.createdAt ? new Date(b.createdAt).getTime() : 0);
         return tB - tA;
       });
-      setNotifications(items.slice(0, 10));
+      
+      const realNotifications = items.slice(0, 10);
+      const reconciliationNotification = {
+        id: 'reconciliation-pending',
+        title: 'Rendimentos pendentes',
+        message: 'Confira se os rendimentos de hoje batem com o extrato oficial.',
+        action: 'open-reconciliation',
+        createdAt: new Date().toISOString(),
+        read: false
+      };
+      setNotifications([reconciliationNotification, ...realNotifications]);
     }, (e) => handleFirestoreError(e, OperationType.LIST, 'notifications'));
     return unsub;
   }, [user]);
