@@ -548,7 +548,7 @@ export const HomeView: React.FC<HomeViewProps> = ({
           : null;
 
         return (
-          <div key={id} className="h-48 w-full -mr-5 sm:-mr-6 mt-2 overflow-hidden">
+          <div key={id} className="h-48 w-full mt-2 overflow-hidden relative">
             <ResponsiveContainer width="100%" height="100%">
               {visualType === 'Linha' || visualType === 'Área' ? (
                 <AreaChart 

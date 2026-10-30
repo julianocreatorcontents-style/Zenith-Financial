@@ -514,11 +514,39 @@ export function calculateGoalProjection(
     totalAssetsValue += val;
   }
 
+  // Calcular média de despesas e receitas variáveis (registradas como Únicas)
+  const variableExpenses: Record<string, { total: number; count: number }> = {};
+  const variableIncomes: Record<string, { total: number; count: number }> = {};
+
+  for (const tx of transactions) {
+    if (tx.isRecurring) continue;
+    const value = Number(tx.value) || 0;
+    const label = tx.label?.toLowerCase().trim() || 'desconhecido';
+
+    if (tx.type === 'out') {
+      if (!variableExpenses[label]) variableExpenses[label] = { total: 0, count: 0 };
+      variableExpenses[label].total += value;
+      variableExpenses[label].count += 1;
+    } else if (tx.type === 'in') {
+      if (!variableIncomes[label]) variableIncomes[label] = { total: 0, count: 0 };
+      variableIncomes[label].total += value;
+      variableIncomes[label].count += 1;
+    }
+  }
+
+  let avgVariableOut = 0;
+  Object.values(variableExpenses).forEach(v => { avgVariableOut += v.total / v.count; });
+  
+  let avgVariableIn = 0;
+  Object.values(variableIncomes).forEach(v => { avgVariableIn += v.total / v.count; });
+
+  const fluxoVariavelMedio = avgVariableIn - avgVariableOut;
+
   const saldoBase = currentBalance + entradasUnicas - saidasUnicas;
-  const fluxoRecorrenteLiquido = entradasFixas - saidasFixas + yieldMensal;
+  const fluxoRecorrenteLiquido = entradasFixas - saidasFixas + yieldMensal + fluxoVariavelMedio;
   const taxaMensal = totalAssetsValue > 0 ? (yieldMensal / totalAssetsValue) : 0;
 
-  const debug = { yieldMensal, entradasFixas, saidasFixas, entradasUnicas, saidasUnicas, taxaMensal };
+  const debug = { yieldMensal, entradasFixas, saidasFixas, entradasUnicas, saidasUnicas, taxaMensal, fluxoVariavelMedio };
 
   if (saldoBase >= target) {
     return { saldoBase, fluxoRecorrenteLiquido, monthsToGoal: 0, debug };

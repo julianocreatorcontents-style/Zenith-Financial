@@ -99,6 +99,10 @@ export const GoalsHeroCard: React.FC<GoalsHeroCardProps> = ({
            <div className="flex justify-between text-[var(--text-secondary)]"><span>+ Rendimento Real (22/30d)</span><span className="text-[var(--trend-up)]">{FMT(debug?.yieldMensal || 0)}</span></div>
            <div className="flex justify-between text-[var(--text-secondary)]"><span>+ Entradas Fixas</span><span className="text-[var(--trend-up)]">{FMT(debug?.entradasFixas || 0)}</span></div>
            <div className="flex justify-between text-[var(--text-secondary)]"><span>- Saídas Fixas</span><span className="text-[var(--trend-down)]">-{FMT(debug?.saidasFixas || 0)}</span></div>
+           <div className="flex justify-between text-[var(--text-secondary)] bg-[var(--bg-app)]/50 p-1 rounded my-1">
+             <span className="text-[9px] uppercase tracking-widest text-[var(--text-muted)]">+ Média Variáveis (Luz/Água/Cartão)</span>
+             <span className={debug?.fluxoVariavelMedio >= 0 ? 'text-[var(--trend-up)]' : 'text-[var(--trend-down)]'}>{FMT(debug?.fluxoVariavelMedio || 0)}</span>
+           </div>
            <div className="flex justify-between pt-1 border-t border-[var(--border-card)] font-bold text-[11px] mt-1">
              <span>Fluxo Líquido Mensal</span><span className="text-[var(--accent)]">{FMT(fluxoRecorrenteLiquido)}</span>
            </div>
