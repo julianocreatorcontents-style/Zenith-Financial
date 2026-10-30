@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { X, Check, AlertCircle } from 'lucide-react';
+import { X, Trash2 } from 'lucide-react';
 
 const FMT = (val: number) => new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(val);
 
@@ -10,28 +10,32 @@ interface YieldReconciliationModalProps {
 }
 
 export const YieldReconciliationModal: React.FC<YieldReconciliationModalProps> = ({ assets, onClose, onSave }) => {
-  // Estado local para os inputs (inicializa com o manual se existir, senão com o calculado)
-  const [inputs, setInputs] = useState<Record<string, string>>(() => {
-    const initial: Record<string, string> = {};
+  const [inputs, setInputs] = useState<Record<string, { weekday: string; weekend: string }>>(() => {
+    const initial: Record<string, { weekday: string; weekend: string }> = {};
     assets.forEach(a => {
-      const manual = a.manualDailyYield;
-      const calculated = a.dailyYield || 0;
-      initial[a.id] = (manual !== undefined && manual !== null ? manual : calculated).toString().replace('.', ',');
+      initial[a.id] = {
+        weekday: a.manualDailyYield !== undefined && a.manualDailyYield !== null ? a.manualDailyYield.toString().replace('.', ',') : '',
+        weekend: a.manualWeekendYield !== undefined && a.manualWeekendYield !== null ? a.manualWeekendYield.toString().replace('.', ',') : ''
+      };
     });
     return initial;
   });
 
-  const handleChange = (id: string, value: string) => {
-    setInputs(prev => ({ ...prev, [id]: value }));
+  const handleChange = (id: string, field: 'weekday' | 'weekend', value: string) => {
+    setInputs(prev => ({ ...prev, [id]: { ...prev[id], [field]: value } }));
   };
 
   const handleSave = () => {
     const updated = assets.map(a => {
-      const rawValue = inputs[a.id].replace(',', '.');
-      const parsedValue = parseFloat(rawValue);
+      const rawW = inputs[a.id].weekday.trim().replace(',', '.');
+      const rawE = inputs[a.id].weekend.trim().replace(',', '.');
+      const valW = rawW === '' ? null : parseFloat(rawW);
+      const valE = rawE === '' ? null : parseFloat(rawE);
+
       return {
         ...a,
-        manualDailyYield: isNaN(parsedValue) ? null : parsedValue
+        manualDailyYield: isNaN(valW as number) || valW === null ? null : valW,
+        manualWeekendYield: isNaN(valE as number) || valE === null ? null : valE,
       };
     });
     onSave(updated);
@@ -42,12 +46,11 @@ export const YieldReconciliationModal: React.FC<YieldReconciliationModalProps> =
     <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/70 backdrop-blur-sm p-4 animate-in fade-in">
       <div className="bg-[var(--bg-card)] w-full max-w-2xl rounded-[32px] p-6 shadow-2xl border border-[var(--border-card)] animate-in slide-in-from-bottom-8 max-h-[90vh] flex flex-col">
         
-        {/* Header */}
         <div className="flex justify-between items-start mb-4">
           <div>
-            <h3 className="text-xl font-bold">Conciliação de Rendimentos</h3>
+            <h3 className="text-xl font-bold">Extrato Oficial</h3>
             <p className="text-xs text-[var(--text-muted)] mt-1">
-              Compare o cálculo do app com o seu extrato oficial. Se houver diferença, digite o valor correto ao lado.
+              Digite os rendimentos exatos. O app aplicará a regra do fim de semana automaticamente.
             </p>
           </div>
           <button onClick={onClose} className="p-2 bg-[var(--bg-app)] rounded-full text-[var(--text-muted)] hover:text-white transition-colors">
@@ -55,34 +58,55 @@ export const YieldReconciliationModal: React.FC<YieldReconciliationModalProps> =
           </button>
         </div>
 
-        {/* Lista de Ativos */}
         <div className="overflow-y-auto pr-2 mb-4 space-y-2 flex-1">
           {assets.map(a => {
-            const calculated = a.dailyYield || 0;
-            const manual = a.manualDailyYield;
-            const hasDiff = manual !== undefined && manual !== null && manual !== calculated;
-
+            const isMercadoPago = (a.name || '').toLowerCase().includes('mercado pago');
+            const hasManual = a.manualDailyYield !== undefined && a.manualDailyYield !== null;
+            
             return (
-              <div key={a.id} className="flex flex-col sm:flex-row sm:items-center justify-between p-3 bg-[var(--bg-app)] border border-[var(--border-card)] rounded-xl gap-3">
-                <div className="flex-1">
-                  <p className="text-sm font-medium">{a.name}</p>
-                  <p className="text-[10px] text-[var(--text-muted)]">Calculado pelo App: <span className="text-[var(--text-primary)] font-mono">{FMT(calculated)}</span></p>
+              <div key={a.id} className="flex flex-col p-3 bg-[var(--bg-app)] border border-[var(--border-card)] rounded-xl gap-3">
+                <div className="flex justify-between items-center">
+                  <div>
+                    <p className="text-sm font-medium">{a.name}</p>
+                    <p className="text-[10px] text-[var(--text-muted)]">
+                      Calculado: {FMT(a.dailyYield || 0)}
+                    </p>
+                  </div>
+                  {hasManual && (
+                    <span className="text-[9px] bg-[var(--accent)]/10 text-[var(--accent)] px-2 py-0.5 rounded-full uppercase font-bold">
+                      Manual
+                    </span>
+                  )}
                 </div>
                 
-                <div className="flex items-center gap-2">
-                  <div className="relative">
-                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--text-muted)] text-sm font-mono">R$</span>
-                    <input 
-                      type="text" 
-                      inputMode="decimal"
-                      value={inputs[a.id] || ''}
-                      onChange={(e) => handleChange(a.id, e.target.value)}
-                      className={`w-32 bg-[var(--bg-card)] border rounded-lg py-2 pl-9 pr-2 text-sm font-mono focus:outline-none transition-colors ${hasDiff ? 'border-[var(--accent)] text-[var(--accent)]' : 'border-[var(--border-card)] text-[var(--text-primary)]'}`}
-                    />
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="text-[9px] uppercase text-[var(--text-muted)] mb-1 block">Dia Útil</label>
+                    <div className="relative">
+                      <span className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--text-muted)] text-sm font-mono">R$</span>
+                      <input 
+                        type="text" inputMode="decimal"
+                        placeholder={FMT(a.dailyYield || 0).replace('R$ ', '')}
+                        value={inputs[a.id]?.weekday || ''}
+                        onChange={(e) => handleChange(a.id, 'weekday', e.target.value)}
+                        className="w-full bg-[var(--bg-card)] border border-[var(--border-card)] rounded-lg py-2 pl-9 pr-2 text-sm font-mono focus:border-[var(--accent)] outline-none"
+                      />
+                    </div>
                   </div>
-                  {hasDiff && (
-                    <div title="Valor manual ativo" className="text-[var(--accent)]">
-                      <Check size={16} />
+                  
+                  {!isMercadoPago && (
+                    <div>
+                      <label className="text-[9px] uppercase text-[var(--text-muted)] mb-1 block">Fim de Semana</label>
+                      <div className="relative">
+                        <span className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--text-muted)] text-sm font-mono">R$</span>
+                        <input 
+                          type="text" inputMode="decimal"
+                          placeholder="0,00"
+                          value={inputs[a.id]?.weekend || ''}
+                          onChange={(e) => handleChange(a.id, 'weekend', e.target.value)}
+                          className="w-full bg-[var(--bg-card)] border border-[var(--border-card)] rounded-lg py-2 pl-9 pr-2 text-sm font-mono focus:border-[var(--accent)] outline-none"
+                        />
+                      </div>
                     </div>
                   )}
                 </div>
@@ -91,13 +115,12 @@ export const YieldReconciliationModal: React.FC<YieldReconciliationModalProps> =
           })}
         </div>
 
-        {/* Footer */}
         <div className="flex gap-3 pt-4 border-t border-[var(--border-card)]">
           <button onClick={onClose} className="flex-1 py-3 rounded-xl text-sm font-bold bg-[var(--bg-app)] text-[var(--text-muted)] hover:text-white transition-colors">
             Cancelar
           </button>
           <button onClick={handleSave} className="flex-1 py-3 rounded-xl text-sm font-bold bg-[var(--accent)] text-[var(--bg-app)] hover:bg-[var(--accent)]/80 transition-colors">
-            Salvar Conciliação
+            Salvar Extrato
           </button>
         </div>
 

@@ -13,6 +13,7 @@ import {
   List,
   LayoutGrid,
   GalleryHorizontal,
+  RefreshCw,
 } from 'lucide-react';
 import {
   ResponsiveContainer,
@@ -43,6 +44,7 @@ import { FutureHeroCard } from '../components/dashboard/FutureHeroCard';
 import { YieldProjectionCard } from './YieldProjectionCard';
 import { GoalsHeroCard } from '../components/dashboard/GoalsHeroCard';
 import { YieldReconciliationModal } from '../components/dashboard/YieldReconciliationModal';
+import { AssetDiagnosticPanel } from '../components/dashboard/AssetDiagnosticPanel';
 import type { VisualSettings } from '../components/CardSettingsPanel';
 
 const BRL_FORMATTER = new Intl.NumberFormat('pt-BR', {
@@ -1037,7 +1039,7 @@ export const HomeView: React.FC<HomeViewProps> = ({
   const handleSaveReconciliation = async (updatedAssets: any[]) => {
     for (const asset of updatedAssets) {
       if (asset.manualDailyYield !== undefined && asset.manualDailyYield !== null) {
-        await onUpdateAsset(asset.id, { manualDailyYield: asset.manualDailyYield });
+        await onUpdateAsset(asset.id, { manualDailyYield: asset.manualDailyYield, manualWeekendYield: asset.manualWeekendYield });
       }
     }
   };
@@ -1128,6 +1130,7 @@ export const HomeView: React.FC<HomeViewProps> = ({
                       </div>
                       {renderChart('CHART_EVOL_PATRIMONIO')}
       <GoalsHeroCard currentNetWorth={metrics.netWorth ?? 0} transactions={transactions} assets={assets} target={100000} privacy={privacyMode} />
+      <AssetDiagnosticPanel assets={assets} />
 
                     </section>
             </div>
@@ -1203,6 +1206,24 @@ export const HomeView: React.FC<HomeViewProps> = ({
             </React.Fragment>
           ))}
         </div>
+      )}
+    
+      {/* Botão de Conciliação */}
+      <div className="mt-4 flex justify-center mb-8">
+        <button 
+          onClick={() => setShowReconciliation(true)}
+          className="flex items-center gap-2 px-5 py-3 bg-[var(--bg-card)] border border-[var(--border-card)] rounded-full text-xs font-bold text-[var(--text-muted)] hover:text-[var(--accent)] transition-all shadow-lg"
+        >
+          <RefreshCw size={14} /> Conciliar Rendimentos com Extrato
+        </button>
+      </div>
+
+      {showReconciliation && (
+        <YieldReconciliationModal 
+          assets={assets}
+          onClose={() => setShowReconciliation(false)}
+          onSave={handleSaveReconciliation}
+        />
       )}
     </>
   );

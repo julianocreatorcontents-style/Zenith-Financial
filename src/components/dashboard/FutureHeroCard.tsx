@@ -96,11 +96,25 @@ export const FutureHeroCard: React.FC<FutureHeroCardProps> = ({
 
     const numMonths = tab === 'mensal' ? 12 : 60;
     let saldo = saldoBase;
+    let simulatedAssets = JSON.parse(JSON.stringify(assets));
 
     for (let m = 1; m <= numMonths; m++) {
-      let fluxoEsteMes = yieldMensal + fluxoVariavelMedio;
-      
-      // Recorrentes
+      let rendimentoDoMes = 0;
+      let mpSaldoIndex = -1;
+
+      for (let j = 0; j < simulatedAssets.length; j++) {
+        const asset = simulatedAssets[j];
+        const isMP = (asset.name || '').toLowerCase().includes('mercado pago');
+        if (asset.name === 'Mercado Pago · Saldo') mpSaldoIndex = j;
+
+        const daily = Number(asset.manualDailyYield ?? asset.dailyYield ?? 0);
+        const dias = isMP ? 22 : 30;
+        const rend = daily * dias;
+        rendimentoDoMes += rend;
+        asset.currentValue = (asset.currentValue || asset.value) + rend;
+      }
+
+      let fluxoEsteMes = fluxoVariavelMedio;
       for (const tx of transactions) {
         if (!tx.isRecurring) continue;
         if (tx.durationMonths !== null && tx.durationMonths !== undefined && m > tx.durationMonths) continue;
@@ -109,7 +123,6 @@ export const FutureHeroCard: React.FC<FutureHeroCardProps> = ({
         else if (tx.type === 'out') fluxoEsteMes -= value;
       }
 
-      // Únicas Futuras
       for (const tx of futureSingles) {
         if (tx.monthsFromNow === m) {
           const value = Number(tx.value) || 0;
@@ -118,7 +131,18 @@ export const FutureHeroCard: React.FC<FutureHeroCardProps> = ({
         }
       }
 
-      saldo = saldo + fluxoEsteMes + (saldo * taxaMensal);
+      saldo = saldo + rendimentoDoMes + fluxoEsteMes;
+
+      // Sweep
+      if (mpSaldoIndex !== -1) {
+        simulatedAssets[mpSaldoIndex].currentValue += rendimentoDoMes;
+      }
+      for (let j = 0; j < simulatedAssets.length; j++) {
+        if (j !== mpSaldoIndex) {
+          simulatedAssets[j].currentValue = simulatedAssets[j].baseBalance || simulatedAssets[j].valorInvestido || simulatedAssets[j].value;
+        }
+      }
+
       const targetDate = new Date(today.getFullYear(), today.getMonth() + m, 1);
       points.push({
         name: MONTHS_SHORT[targetDate.getMonth()] + '/' + String(targetDate.getFullYear()).slice(-2),

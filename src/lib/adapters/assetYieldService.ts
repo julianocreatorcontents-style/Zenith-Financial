@@ -235,20 +235,55 @@ export function calculateAssetYieldInfo(
     };
   }
 
-  // Capitalização a partir do saldo base desde a data âncora
-  const projectedMoney = YieldCalculator.projectTiered(
-    baseMoney,
-    cdiAnnualPercent,
-    resolved.policy,
-    daysSinceAnchor
-  );
-  const grossToday = projectedMoney.toBRL();
-  const rawYieldSinceAnchor = Math.max(0, grossToday - baseBalance);
+  // Verifica se há um valor manual do Extrato Oficial
+  const manualYield = Number((doc as any).manualDailyYield);
+  const hasManualYield = !isNaN(manualYield) && manualYield > 0;
+
+  let rawYieldSinceAnchor = 0;
+  const manualWeekendYield = Number((doc as any).manualWeekendYield);
+  
+  if (hasManualYield) {
+    // Loop dia a dia para respeitar o final de semana
+    let cur = new Date(anchorDate);
+    const end = new Date(today);
+    cur.setHours(0, 0, 0, 0);
+    end.setHours(0, 0, 0, 0);
+
+    while (cur < end) {
+      cur.setDate(cur.getDate() + 1);
+      const dayOfWeek = cur.getDay();
+      const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+
+      if (isBusinessDays) {
+        // MP: Só rende em dias úteis (pula sábado e domingo)
+        if (!isWeekend) rawYieldSinceAnchor += manualYield;
+      } else {
+        // 99Pay: Rende todo dia, mas o fds pode ter um valor diferente
+        if (isWeekend && !isNaN(manualWeekendYield) && manualWeekendYield > 0) {
+          rawYieldSinceAnchor += manualWeekendYield;
+        } else {
+          rawYieldSinceAnchor += manualYield;
+        }
+      }
+    }
+  } else {
+    // Capitalização normal pelo CDI
+    const projectedMoney = YieldCalculator.projectTiered(
+      baseMoney,
+      cdiAnnualPercent,
+      resolved.policy,
+      daysSinceAnchor
+    );
+    rawYieldSinceAnchor = Math.max(0, projectedMoney.toBRL() - baseBalance);
+  }
 
   let netYieldSinceAnchor = rawYieldSinceAnchor;
 
   // CORREÇÃO: GROSS mostra bruto (sem impostos). NET desconta impostos.
-  if (resolved.taxDisplayMode === 'NET') {
+  if (hasManualYield) {
+    // O valor manual do extrato JÁ É LÍQUIDO. Mantém o valor.
+    netYieldSinceAnchor = rawYieldSinceAnchor;
+  } else if (resolved.taxDisplayMode === 'NET') {
     const ir = IncomeTaxPolicy.calculate(Money.fromBRL(rawYieldSinceAnchor), daysSinceAnchor).toBRL();
     // IOF só é aplicado nos primeiros 29 dias
     const iof = daysSinceAnchor < 30 
@@ -330,8 +365,10 @@ export function enrichAsset<T extends { value?: number; valorInvestido?: number;
   
   // Se o rendimento for manual, recalculamos o "monthYieldRemaining" baseado nele
   // (estimando 30 dias restantes para simplificar, ou mantendo a proporção)
+  const isMercadoPago = (asset.name || '').toLowerCase().includes('mercado pago');
+  const monthDays = isMercadoPago ? 22 : 30;
   const finalMonthYield = hasManualYield 
-    ? finalDailyYield * 30 
+    ? finalDailyYield * monthDays 
     : info.monthYieldRemaining;
 
   return {

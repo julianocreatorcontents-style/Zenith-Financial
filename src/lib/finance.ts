@@ -469,41 +469,42 @@ export function calculateGoalProjection(
   const currentMonth = today.getMonth();
   const currentYear = today.getFullYear();
 
-  let entradasUnicas = 0;
-  let saidasUnicas = 0;
-  let entradasFixas = 0;
-  let saidasFixas = 0;
-
+  // 1. Separar transações
+  let entradasUnicas = 0, saidasUnicas = 0, entradasFixas = 0, saidasFixas = 0;
   const futureSingles: any[] = [];
+  const varExp: Record<string, { total: number; count: number }> = {};
+  const varInc: Record<string, { total: number; count: number }> = {};
 
   for (const tx of transactions) {
-    if (tx.label === 'BPC - O' || tx.label === 'INSS - V' || tx.label === 'Doméstica') {
-      console.log('[DEBUG-RECORRENTE]', tx.label, '| isRecurring:', tx.isRecurring, '| durationMonths:', tx.durationMonths);
-    }
     const value = Number(tx.value) || 0;
     const isIn = tx.type === 'in';
     const isOut = tx.type === 'out';
     if (!isIn && !isOut) continue;
 
     if (tx.isRecurring) {
-      // Recorrentes sempre entram no fluxo mensal
-      if (isIn) entradasFixas += value;
-      else saidasFixas += value;
+      if (isIn) entradasFixas += value; else saidasFixas += value;
     } else {
-      // Únicas: verifica a data
       const txDate = parseTransactionDate(tx.date) || today;
       const monthsFromNow = (txDate.getFullYear() - currentYear) * 12 + (txDate.getMonth() - currentMonth);
+      
+      // A MÉDIA SEMPRE CONSIDERA TODAS AS ÚNICAS, independente da data
+      const label = tx.label?.toLowerCase().trim() || 'desconhecido';
+      if (isOut) { if (!varExp[label]) varExp[label] = { total: 0, count: 0 }; varExp[label].total += value; varExp[label].count += 1; }
+      else { if (!varInc[label]) varInc[label] = { total: 0, count: 0 }; varInc[label].total += value; varInc[label].count += 1; }
 
       if (monthsFromNow > 0) {
         futureSingles.push({ ...tx, monthsFromNow });
       } else {
-        // Passado ou mês atual
-        if (isIn) entradasUnicas += value;
-        else saidasUnicas += value;
+        if (isIn) entradasUnicas += value; else saidasUnicas += value;
       }
     }
   }
 
+  let avgOut = 0; Object.values(varExp).forEach(v => { avgOut += v.total / v.count; });
+  let avgIn = 0; Object.values(varInc).forEach(v => { avgIn += v.total / v.count; });
+  const fluxoVariavelMedio = avgIn - avgOut;
+
+  // 2. Calcular rendimento mensal
   let yieldMensal = 0;
   let totalAssetsValue = 0;
   for (const asset of assets) {
@@ -513,81 +514,64 @@ export function calculateGoalProjection(
     yieldMensal += daily * (isMP ? 22 : 30);
     totalAssetsValue += val;
   }
-
-  // Calcular média de despesas e receitas variáveis (registradas como Únicas)
-  const variableExpenses: Record<string, { total: number; count: number }> = {};
-  const variableIncomes: Record<string, { total: number; count: number }> = {};
-
-  for (const tx of transactions) {
-    if (tx.isRecurring) continue;
-    const value = Number(tx.value) || 0;
-    const label = tx.label?.toLowerCase().trim() || 'desconhecido';
-
-    if (tx.type === 'out') {
-      if (!variableExpenses[label]) variableExpenses[label] = { total: 0, count: 0 };
-      variableExpenses[label].total += value;
-      variableExpenses[label].count += 1;
-    } else if (tx.type === 'in') {
-      if (!variableIncomes[label]) variableIncomes[label] = { total: 0, count: 0 };
-      variableIncomes[label].total += value;
-      variableIncomes[label].count += 1;
-    }
-  }
-
-  let avgVariableOut = 0;
-  Object.values(variableExpenses).forEach(v => { avgVariableOut += v.total / v.count; });
-  
-  let avgVariableIn = 0;
-  Object.values(variableIncomes).forEach(v => { avgVariableIn += v.total / v.count; });
-
-  const fluxoVariavelMedio = avgVariableIn - avgVariableOut;
+  const taxaMensal = totalAssetsValue > 0 ? (yieldMensal / totalAssetsValue) : 0;
 
   const saldoBase = currentBalance + entradasUnicas - saidasUnicas;
-  const fluxoRecorrenteLiquido = entradasFixas - saidasFixas + yieldMensal + fluxoVariavelMedio;
-  const taxaMensal = totalAssetsValue > 0 ? (yieldMensal / totalAssetsValue) : 0;
+  const fluxoRecorrenteLiquido = entradasFixas - saidasFixas + fluxoVariavelMedio + yieldMensal;
 
   const debug = { yieldMensal, entradasFixas, saidasFixas, entradasUnicas, saidasUnicas, taxaMensal, fluxoVariavelMedio };
 
-  if (saldoBase >= target) {
-    return { saldoBase, fluxoRecorrenteLiquido, monthsToGoal: 0, debug };
-  }
+  if (saldoBase >= target) return { saldoBase, fluxoRecorrenteLiquido, monthsToGoal: 0, debug };
 
-  let saldo = saldoBase;
-  let monthsToGoal = Infinity;
+  // 3. Simulação mês a mês COM SWEEP
+  let meses = 0;
+  let saldoTotal = saldoBase;
+  
+  let simulatedAssets = JSON.parse(JSON.stringify(assets));
 
-  for (let m = 1; m <= 600; m++) {
-    let fluxoEsteMes = 0;
+  while (saldoTotal < target && meses < 600) {
+    meses++;
     
-    // Recorrentes do mês
-    for (const tx of transactions) {
-      if (!tx.isRecurring) continue;
-      const txDate = parseTransactionDate(tx.date) || today;
-      const monthsFromNow = (txDate.getFullYear() - currentYear) * 12 + (txDate.getMonth() - currentMonth);
+    let rendimentoDoMes = 0;
+    let mpSaldoIndex = -1;
+
+    for (let j = 0; j < simulatedAssets.length; j++) {
+      const asset = simulatedAssets[j];
+      const isMP = (asset.name || '').toLowerCase().includes('mercado pago');
+      if (asset.name === 'Mercado Pago · Saldo') mpSaldoIndex = j;
+
+      const daily = Number(asset.manualDailyYield ?? asset.dailyYield ?? 0);
+      const dias = isMP ? 22 : 30;
       
-      // Se a recorrência já começou (ou começa este mês) e não expirou
-      if (monthsFromNow > m) continue; 
-      if (tx.durationMonths !== null && tx.durationMonths !== undefined && m > (monthsFromNow + tx.durationMonths)) continue;
+      const rend = daily * dias;
+      rendimentoDoMes += rend;
       
-      const value = Number(tx.value) || 0;
-      if (tx.type === 'in') fluxoEsteMes += value;
-      else if (tx.type === 'out') fluxoEsteMes -= value;
+      asset.currentValue = (asset.currentValue || asset.value) + rend;
     }
 
-    // Únicas futuras
+    // Fluxo base (sem rendimento, que já está no rendimentoDoMes)
+    let fluxoEsteMes = entradasFixas - saidasFixas + fluxoVariavelMedio;
+    
     for (const tx of futureSingles) {
-      if (tx.monthsFromNow === m) {
+      if (tx.monthsFromNow === meses) {
          const value = Number(tx.value) || 0;
          if (tx.type === 'in') fluxoEsteMes += value;
          else if (tx.type === 'out') fluxoEsteMes -= value;
       }
     }
 
-    saldo = saldo + fluxoEsteMes + (saldo * taxaMensal);
-    if (saldo >= target) {
-      monthsToGoal = m;
-      break;
+    saldoTotal = saldoTotal + rendimentoDoMes + fluxoEsteMes;
+
+    // SWEEP
+    if (mpSaldoIndex !== -1) {
+      simulatedAssets[mpSaldoIndex].currentValue += rendimentoDoMes;
+    }
+    for (let j = 0; j < simulatedAssets.length; j++) {
+      if (j !== mpSaldoIndex) {
+        simulatedAssets[j].currentValue = simulatedAssets[j].baseBalance || simulatedAssets[j].valorInvestido || simulatedAssets[j].value;
+      }
     }
   }
 
-  return { saldoBase, fluxoRecorrenteLiquido, monthsToGoal, debug };
+  return { saldoBase, fluxoRecorrenteLiquido, monthsToGoal: meses, debug };
 }
