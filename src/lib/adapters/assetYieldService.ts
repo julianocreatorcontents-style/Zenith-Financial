@@ -149,9 +149,14 @@ export function calculateAssetYieldInfo(
   cdiAnnualPercent: number = DEFAULT_CDI_ANNUAL_PERCENT,
   today: Date = new Date()
 ): AssetYieldInfo {
-  const baseBalance = Number(doc.value) || 0;
+  const manualBalance = Number((doc as any).manualBalance);
+  const hasManualBalance = !isNaN(manualBalance) && manualBalance >= 0;
+  const baseBalance = hasManualBalance ? manualBalance : (Number(doc.value) || 0);
   const principal = Number(doc.valorInvestido ?? doc.value) || baseBalance;
+  
+  const manualBalanceDate = parseAssetDate((doc as any).manualBalanceDate);
   const anchorDate =
+    manualBalanceDate ??
     parseAssetDate(doc.investmentStartDate) ??
     parseAssetDate((doc as any).updatedAt) ??
     parseAssetDate(doc.createdAt) ??
@@ -296,7 +301,9 @@ export function calculateAssetYieldInfo(
   }
 
   const yieldSinceAnchor = Math.round(netYieldSinceAnchor * 100) / 100;
-  const currentValue = Math.round((baseBalance + yieldSinceAnchor) * 100) / 100;
+  const currentValue = hasManualBalance 
+    ? Math.round(baseBalance * 100) / 100 
+    : Math.round((baseBalance + yieldSinceAnchor) * 100) / 100;
 
   // Atualiza rendimento diário estimado para o novo saldo
   const updatedDailyMoney = YieldCalculator.dailyYieldTiered(

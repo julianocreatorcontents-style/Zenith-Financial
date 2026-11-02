@@ -175,20 +175,35 @@ describe('finance utils', () => {
   });
 
   describe('calculateEvolutionData', () => {
-    it('calcula evolução diária acumulativa do mês sem contaminação de outros meses', () => {
-      const assets = [{ value: 10000 }];
+    const MONTHS_PT = [
+      'Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho',
+      'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'
+    ];
+
+    // Usa o mês anterior ao atual para que as transações dos dias 5/10/15
+    // sejam sempre passadas, independentemente do dia em que o teste rodar.
+    const previousMonthAnchor = () => {
       const now = new Date();
       const currentMonth = now.getMonth();
-      const currentYear = now.getFullYear();
+      const month = (currentMonth + 11) % 12;
+      const year = month > currentMonth ? now.getFullYear() - 1 : now.getFullYear();
+      return { month, year, name: MONTHS_PT[month] };
+    };
+    const lastDayOfMonth = (month: number, year: number) =>
+      new Date(year, month + 1, 0).getDate().toString().padStart(2, '0');
+
+    it('calcula evolução diária acumulativa do mês sem contaminação de outros meses', () => {
+      const assets = [{ value: 10000 }];
+      const { month, year, name } = previousMonthAnchor();
 
       const txs = [
-        { type: 'in', value: 2000, date: new Date(currentYear, currentMonth, 5) },
-        { type: 'yield', value: 100, date: new Date(currentYear, currentMonth, 10) },
-        { type: 'out', value: 500, date: new Date(currentYear, currentMonth, 15) },
-        { type: 'in', value: 50000, date: new Date(currentYear, currentMonth + 1, 1) },
+        { type: 'in', value: 2000, date: new Date(year, month, 5) },
+        { type: 'yield', value: 100, date: new Date(year, month, 10) },
+        { type: 'out', value: 500, date: new Date(year, month, 15) },
+        { type: 'in', value: 50000, date: new Date(year, month + 1, 1) },
       ];
 
-      const points = calculateEvolutionData(assets, txs, { period: 'Meses', month: 'Atual', day: 'Todos' });
+      const points = calculateEvolutionData(assets, txs, { period: 'Meses', month: name, day: 'Todos' });
       expect(points.length).toBeGreaterThan(0);
 
       const p1 = points.find(p => p.name === '01');
@@ -196,28 +211,25 @@ describe('finance utils', () => {
         expect(p1.value).toBe(10000);
       }
 
-      const expectedNetWorth = calculateNetWorth(assets, txs, currentMonth, currentYear);
+      const expectedNetWorth = calculateNetWorth(assets, txs, month, year);
       expect(expectedNetWorth).toBe(11600);
 
-      const todayDay = now.getDate().toString().padStart(2, '0');
-      const todayPoint = points.find(p => p.name === todayDay);
-      if (todayPoint && typeof todayPoint.value === 'number') {
-        expect(todayPoint.value).toBe(expectedNetWorth);
+      const lastPoint = points.find(p => p.name === lastDayOfMonth(month, year));
+      if (lastPoint && typeof lastPoint.value === 'number') {
+        expect(lastPoint.value).toBe(expectedNetWorth);
       }
     });
 
     it('sincroniza curva com saldo descontado para transações aplicadas no mês', () => {
       // Ativo começa com 10.000. Copel (-150) foi paga no dia 15 e descontada do saldo do ativo (hoje tem 9.850).
       const assets = [{ id: 'mp-1', value: 9850 }];
-      const now = new Date();
-      const currentMonth = now.getMonth();
-      const currentYear = now.getFullYear();
+      const { month, year, name } = previousMonthAnchor();
 
       const txs = [
-        { id: 'tx-copel', type: 'out', value: 150, date: new Date(currentYear, currentMonth, 15, 12), applied: true, assetId: 'mp-1' },
+        { id: 'tx-copel', type: 'out', value: 150, date: new Date(year, month, 15, 12), applied: true, assetId: 'mp-1' },
       ];
 
-      const points = calculateEvolutionData(assets, txs, { period: 'Meses', month: 'Atual', day: 'Todos' });
+      const points = calculateEvolutionData(assets, txs, { period: 'Meses', month: name, day: 'Todos' });
 
       // No dia 01 (antes do pagamento da Copel): o saldo era 10.000
       const p1 = points.find(p => p.name === '01');
@@ -225,15 +237,14 @@ describe('finance utils', () => {
         expect(p1.value).toBe(10000);
       }
 
-      // No dia 15 em diante (ou hoje): o saldo é 9.850
-      const todayDay = now.getDate().toString().padStart(2, '0');
-      const todayPoint = points.find(p => p.name === todayDay);
-      if (todayPoint && typeof todayPoint.value === 'number') {
-        expect(todayPoint.value).toBe(9850);
+      // No fim do mês (após o pagamento): o saldo é 9.850
+      const lastPoint = points.find(p => p.name === lastDayOfMonth(month, year));
+      if (lastPoint && typeof lastPoint.value === 'number') {
+        expect(lastPoint.value).toBe(9850);
       }
 
       // Sincronizado perfeitamente com calculateNetWorth
-      expect(calculateNetWorth(assets, txs, currentMonth, currentYear)).toBe(9850);
+      expect(calculateNetWorth(assets, txs, month, year)).toBe(9850);
     });
 
     it('em período Anos retorna pontos com o cálculo exato do patrimônio de cada mês', () => {

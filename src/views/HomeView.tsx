@@ -44,7 +44,8 @@ import { FutureHeroCard } from '../components/dashboard/FutureHeroCard';
 import { YieldProjectionCard } from './YieldProjectionCard';
 import { GoalsHeroCard } from '../components/dashboard/GoalsHeroCard';
 import { YieldReconciliationModal } from '../components/dashboard/YieldReconciliationModal';
-import { AssetDiagnosticPanel } from '../components/dashboard/AssetDiagnosticPanel';
+import { FinancialCalendarModal } from '../components/modals/FinancialCalendarModal';
+import { Calendar } from 'lucide-react';
 import type { VisualSettings } from '../components/CardSettingsPanel';
 
 const BRL_FORMATTER = new Intl.NumberFormat('pt-BR', {
@@ -88,6 +89,7 @@ interface HomeViewProps {
   onAcceptDDA: (dda: DDA) => Promise<void>;
   onRejectDDA: (dda: DDA) => Promise<void>;
   onUpdateAsset: (id: string, data: any) => Promise<void>;
+  onUpdateTransaction: (tx: any, data: any) => Promise<void>;
   onCreateAsset: (data: any) => Promise<void>;
   t: (pt: string, en: string) => string;
 }
@@ -121,6 +123,7 @@ export const HomeView: React.FC<HomeViewProps> = ({
   onAcceptDDA,
   onRejectDDA,
   onUpdateAsset,
+  onUpdateTransaction,
   onCreateAsset,
   t,
   visualSettings,
@@ -367,7 +370,7 @@ export const HomeView: React.FC<HomeViewProps> = ({
     const types: Record<string, number> = { liquidity: 0, investment: 0, physical: 0 };
     assets.forEach(a => { 
       if (a.type && types[a.type] !== undefined) {
-        types[a.type] += a.value || 0; 
+        types[a.type] += Number(a.manualBalance ?? a.value) || 0; 
       }
     });
     return [
@@ -378,8 +381,8 @@ export const HomeView: React.FC<HomeViewProps> = ({
   }, [assets]);
 
   const goals = useMemo(() => {
-    const liquidity = assets.filter(a => a.type === 'liquidity').reduce((acc, a) => acc + a.value, 0);
-    const total = assets.reduce((acc, a) => acc + a.value, 0);
+    const liquidity = assets.filter(a => a.type === 'liquidity').reduce((acc, a) => acc + Number(a.manualBalance ?? a.value), 0);
+    const total = assets.reduce((acc, a) => acc + Number(a.manualBalance ?? a.value), 0);
     
     const emergencyGoal = 30000;
     const freedomGoal = 1000000;
@@ -776,7 +779,7 @@ export const HomeView: React.FC<HomeViewProps> = ({
                   <SummaryCard 
                     key={`${asset.id}-${assetIdx}`}
                     label={asset.name} 
-                    value={(asset.value ?? 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL', minimumFractionDigits: 0 }).replace('R$', 'R$ ')} 
+                    value={(asset.manualBalance ?? asset.value ?? 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL', minimumFractionDigits: 0 }).replace('R$', 'R$ ')} 
                     icon={asset.type === 'liquidity' ? <CreditCard size={14}/> : asset.type === 'investment' ? <Landmark size={14}/> : <Car size={14}/>} 
                     onClick={() => onSelectAsset(asset)} 
                     privacy={privacyMode}
@@ -1030,6 +1033,7 @@ export const HomeView: React.FC<HomeViewProps> = ({
   }, []);
 
   const [showReconciliation, setShowReconciliation] = useState(false);
+  const [showCalendar, setShowCalendar] = useState(false);
   useEffect(() => {
     const handleOpen = () => setShowReconciliation(true);
     window.addEventListener('open-reconciliation', handleOpen);
@@ -1130,8 +1134,7 @@ export const HomeView: React.FC<HomeViewProps> = ({
                       </div>
                       {renderChart('CHART_EVOL_PATRIMONIO')}
       <GoalsHeroCard currentNetWorth={metrics.netWorth ?? 0} transactions={transactions} assets={assets} target={100000} privacy={privacyMode} />
-      <AssetDiagnosticPanel assets={assets} />
-
+      
                     </section>
             </div>
             <div className="snap-center shrink-0 w-[88vw] max-w-md">
@@ -1223,6 +1226,26 @@ export const HomeView: React.FC<HomeViewProps> = ({
           assets={assets}
           onClose={() => setShowReconciliation(false)}
           onSave={handleSaveReconciliation}
+        />
+      )}
+    
+      {/* Botão Calendário */}
+      <div className="mt-2 flex justify-center">
+        <button 
+          onClick={() => setShowCalendar(true)}
+          className="flex items-center gap-2 px-4 py-2 bg-[var(--bg-card)] border border-[var(--border-card)] rounded-full text-xs font-bold text-[var(--text-muted)] hover:text-[var(--accent)] transition-all shadow-sm"
+        >
+          <Calendar size={14} /> Histórico de Extratos
+        </button>
+      </div>
+
+      {showCalendar && (
+        <FinancialCalendarModal 
+          assets={assets}
+          transactions={transactions}
+          onClose={() => setShowCalendar(false)}
+          onUpdateAsset={onUpdateAsset}
+          onUpdateTransaction={onUpdateTransaction}
         />
       )}
     </>

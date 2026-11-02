@@ -29,24 +29,11 @@ export const FutureHeroCard: React.FC<FutureHeroCardProps> = ({
     const currentMonth = today.getMonth();
     const currentYear = today.getFullYear();
 
-    // 1. Rendimento Mensal (22/30 dias)
-    let yieldMensal = 0;
-    let totalAssetsValue = 0;
-    for (const asset of assets) {
-      const daily = Number(asset.manualDailyYield ?? asset.dailyYield ?? 0);
-      const val = Number(asset.currentValue || asset.value) || 0;
-      const isMP = (asset.name || '').toLowerCase().includes('mercado pago');
-      yieldMensal += daily * (isMP ? 22 : 30);
-      totalAssetsValue += val;
-    }
-    const taxaMensal = totalAssetsValue > 0 ? (yieldMensal / totalAssetsValue) : 0;
-
-    // 2. Separar Fixas, Únicas Passadas/Futuras e calcular Média Variável
-    let entradasFixas = 0, saidasFixas = 0;
-    let entradasUnicas = 0, saidasUnicas = 0;
+    // 1. Separar transações
+    let entradasFixas = 0, saidasFixas = 0, entradasUnicas = 0, saidasUnicas = 0;
     const futureSingles: any[] = [];
     const varExp: Record<string, { total: number; count: number }> = {};
-    const varInc: Record<string, { total: number; count: number }> = {};
+    
 
     for (const tx of transactions) {
       const value = Number(tx.value) || 0;
@@ -59,33 +46,40 @@ export const FutureHeroCard: React.FC<FutureHeroCardProps> = ({
       } else {
         const txDate = parseTransactionDate(tx.date) || today;
         const monthsFromNow = (txDate.getFullYear() - currentYear) * 12 + (txDate.getMonth() - currentMonth);
+        
+        const label = tx.label?.toLowerCase().trim() || 'desconhecido';
+        if (isOut) { 
+          if (!varExp[label]) varExp[label] = { total: 0, count: 0 }; 
+          varExp[label].total += value; 
+          varExp[label].count += 1; 
+        }
 
         if (monthsFromNow > 0) {
           futureSingles.push({ ...tx, monthsFromNow });
         } else {
-          // Passado/Atual: ajusta saldo base E entra na média
           if (isIn) entradasUnicas += value; else saidasUnicas += value;
-          const label = tx.label?.toLowerCase().trim() || 'desconhecido';
-          if (isOut) { if (!varExp[label]) varExp[label] = { total: 0, count: 0 }; varExp[label].total += value; varExp[label].count += 1; }
-          else { if (!varInc[label]) varInc[label] = { total: 0, count: 0 }; varInc[label].total += value; varInc[label].count += 1; }
         }
       }
     }
 
     let avgOut = 0; Object.values(varExp).forEach(v => { avgOut += v.total / v.count; });
-    let avgIn = 0; Object.values(varInc).forEach(v => { avgIn += v.total / v.count; });
-    const fluxoVariavelMedio = avgIn - avgOut;
+    const fluxoVariavelMedio = -avgOut; // Apenas saídas entram na média
 
     const saldoBase = currentNetWorth + entradasUnicas - saidasUnicas;
-    const fluxoRecorrenteLiquido = entradasFixas - saidasFixas + yieldMensal + fluxoVariavelMedio;
-
-    // 3. Gerar Gráfico
+    
+    // 2. Gerar Gráfico com Simulação de Sweep
     const points: any[] = [{ name: 'Hoje', value: saldoBase, date: 'Hoje' }];
 
     if (tab === 'diario') {
-      // 30 dias = 1 mês de projeção
-      const fluxoPrimeiroMes = fluxoRecorrenteLiquido + futureSingles.filter(f => f.monthsFromNow === 1).reduce((acc, f) => acc + (f.type === 'in' ? f.value : -f.value), 0);
-      const saldoFimMes = saldoBase * (1 + taxaMensal) + fluxoPrimeiroMes;
+      // Para 30 dias, usamos uma aproximação de 1 mês exato
+      let rendimentoMes1 = 0;
+      for (const asset of assets) {
+        const isMP = (asset.name || '').toLowerCase().includes('mercado pago');
+        const daily = Number(asset.manualDailyYield ?? asset.dailyYield ?? 0);
+        rendimentoMes1 += daily * (isMP ? 22 : 30);
+      }
+      const fluxoPrimeiroMes = entradasFixas - saidasFixas + fluxoVariavelMedio;
+      const saldoFimMes = saldoBase + rendimentoMes1 + fluxoPrimeiroMes;
       
       for (let d = 1; d <= 30; d++) {
         const interpolado = saldoBase + ((saldoFimMes - saldoBase) * d) / 30;
@@ -95,13 +89,16 @@ export const FutureHeroCard: React.FC<FutureHeroCardProps> = ({
     }
 
     const numMonths = tab === 'mensal' ? 12 : 60;
-    let saldo = saldoBase;
+    let saldoTotal = saldoBase;
+    
+    // Clona os ativos para simular o Sweep
     let simulatedAssets = JSON.parse(JSON.stringify(assets));
 
     for (let m = 1; m <= numMonths; m++) {
       let rendimentoDoMes = 0;
       let mpSaldoIndex = -1;
 
+      // Roda o rendimento do mês para cada ativo
       for (let j = 0; j < simulatedAssets.length; j++) {
         const asset = simulatedAssets[j];
         const isMP = (asset.name || '').toLowerCase().includes('mercado pago');
@@ -109,31 +106,21 @@ export const FutureHeroCard: React.FC<FutureHeroCardProps> = ({
 
         const daily = Number(asset.manualDailyYield ?? asset.dailyYield ?? 0);
         const dias = isMP ? 22 : 30;
+        
         const rend = daily * dias;
         rendimentoDoMes += rend;
+        
         asset.currentValue = (asset.currentValue || asset.value) + rend;
       }
 
-      let fluxoEsteMes = fluxoVariavelMedio;
-      for (const tx of transactions) {
-        if (!tx.isRecurring) continue;
-        if (tx.durationMonths !== null && tx.durationMonths !== undefined && m > tx.durationMonths) continue;
-        const value = Number(tx.value) || 0;
-        if (tx.type === 'in') fluxoEsteMes += value;
-        else if (tx.type === 'out') fluxoEsteMes -= value;
-      }
+      // Fluxo de caixa do mês (entradas/saídas fixas + únicas futuras)
+      // O fluxo variável já engloba as transações únicas futuras (média), 
+      // então não somamos futureSingles aqui para não duplicar.
+      let fluxoEsteMes = entradasFixas - saidasFixas + fluxoVariavelMedio;
 
-      for (const tx of futureSingles) {
-        if (tx.monthsFromNow === m) {
-          const value = Number(tx.value) || 0;
-          if (tx.type === 'in') fluxoEsteMes += value;
-          else if (tx.type === 'out') fluxoEsteMes -= value;
-        }
-      }
+      saldoTotal = saldoTotal + rendimentoDoMes + fluxoEsteMes;
 
-      saldo = saldo + rendimentoDoMes + fluxoEsteMes;
-
-      // Sweep
+      // SWEEP: Rendimentos vão para o MP Saldo, outros ativos resetam
       if (mpSaldoIndex !== -1) {
         simulatedAssets[mpSaldoIndex].currentValue += rendimentoDoMes;
       }
@@ -146,12 +133,12 @@ export const FutureHeroCard: React.FC<FutureHeroCardProps> = ({
       const targetDate = new Date(today.getFullYear(), today.getMonth() + m, 1);
       points.push({
         name: MONTHS_SHORT[targetDate.getMonth()] + '/' + String(targetDate.getFullYear()).slice(-2),
-        value: Math.round(saldo * 100) / 100,
+        value: Math.round(saldoTotal * 100) / 100,
         date: MONTHS_SHORT[targetDate.getMonth()] + ' de ' + targetDate.getFullYear(),
       });
     }
 
-    return { chartData: points, projectedTotal: saldo, gain: saldo - currentNetWorth };
+    return { chartData: points, projectedTotal: saldoTotal, gain: saldoTotal - currentNetWorth };
   }, [tab, assets, transactions, currentNetWorth]);
 
   const horizon = tab === 'diario' ? '30 dias' : tab === 'mensal' ? '12 meses' : '5 anos';
@@ -178,7 +165,7 @@ export const FutureHeroCard: React.FC<FutureHeroCardProps> = ({
         </button>
       </div>
 
-      <p className="text-[10px] text-[var(--text-muted)] mb-1 px-1">Saldo + rendimento + fluxo de caixa projetado</p>
+      <p className="text-[10px] text-[var(--text-muted)] mb-1 px-1">Saldo + rendimento + fluxo de caixa projetado (com sweep)</p>
 
       <div className="flex gap-2 mb-2 mt-3">
         {TABS.map((t) => (
@@ -206,7 +193,7 @@ export const FutureHeroCard: React.FC<FutureHeroCardProps> = ({
               </linearGradient>
             </defs>
             <XAxis dataKey="name" hide />
-            <YAxis orientation="right" axisLine={false} tickLine={false} tick={{ fill: 'var(--text-primary)', fontSize: 8, opacity: 0.6 }} tickFormatter={(v) => FMT0(Number(v))} />
+            <YAxis orientation="right" axisLine={false} tickLine={false} tick={{ fill: 'var(--text-primary)', fontSize: 8, opacity: 0.6 }} tickFormatter={(v) => FMT0(Number(v))} domain={['dataMin - 500', 'dataMax + 500']} />
             <Tooltip cursor={{ stroke: 'var(--accent)', strokeWidth: 1, strokeDasharray: '5 5' }}
               content={({ active, payload }) => {
                 if (active && payload && payload.length) {

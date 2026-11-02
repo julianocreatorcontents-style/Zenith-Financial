@@ -159,14 +159,21 @@ export const calculateNetWorth = (
 ) => {
   const totalAssets = calculateTotalAssets(assets);
 
+  const today = new Date();
+  today.setHours(23, 59, 59, 999); // Fim do dia: inclui transações de hoje
+
   let unappliedBalance = 0;
   transactions.forEach((transaction) => {
     const rawDate = transaction?.date || transaction?.createdAt || transaction?.timestamp || transaction?.data;
     const date = parseTransactionDate(rawDate);
     if (!date) return;
+    
+    // Ignora transações de meses diferentes
     if (date.getMonth() !== month || date.getFullYear() !== year) return;
+    
+    // IGNORA transações futuras (data > hoje) para não inflar o patrimônio atual
+    if (date.getTime() > today.getTime()) return;
 
-    // Se a transação já foi aplicada a um ativo específico, o saldo já está em totalAssets
     const isAppliedToAsset = Boolean(transaction?.applied && transaction?.assetId);
     if (!isAppliedToAsset) {
       const value = parseTransactionAmount(transaction?.value);
@@ -179,7 +186,7 @@ export const calculateNetWorth = (
   });
 
   return roundCurrency(totalAssets + unappliedBalance);
-};
+};;
 
 export const calculateTotals = (transactions: any[], month: number, year: number, assets: any[] = []) => {
   const filtered = transactions.filter(t => {
@@ -193,7 +200,7 @@ export const calculateTotals = (transactions: any[], month: number, year: number
 
   const investmentTotal = assets
     .filter(a => a.type === 'investment')
-    .reduce((acc, a) => sum(acc, Number(a.value) || 0), 0);
+    .reduce((acc, a) => sum(acc, Number(a.manualBalance ?? a.value) || 0), 0);
 
   return {
     in: filtered.filter(t => isIncomeTransaction(t)).reduce((acc, t) => sum(acc, parseTransactionAmount(t.value)), 0),
@@ -469,11 +476,10 @@ export function calculateGoalProjection(
   const currentMonth = today.getMonth();
   const currentYear = today.getFullYear();
 
-  // 1. Separar transações
-  let entradasUnicas = 0, saidasUnicas = 0, entradasFixas = 0, saidasFixas = 0;
-  const futureSingles: any[] = [];
+  let entradasFixas = 0, saidasFixas = 0;
+  let entradasUnicasMesAtual = 0, saidasUnicasMesAtual = 0;
+  const singlesByMonth: Record<number, { in: number, out: number }> = {};
   const varExp: Record<string, { total: number; count: number }> = {};
-  const varInc: Record<string, { total: number; count: number }> = {};
 
   for (const tx of transactions) {
     const value = Number(tx.value) || 0;
@@ -486,92 +492,72 @@ export function calculateGoalProjection(
     } else {
       const txDate = parseTransactionDate(tx.date) || today;
       const monthsFromNow = (txDate.getFullYear() - currentYear) * 12 + (txDate.getMonth() - currentMonth);
-      
-      // A MÉDIA SEMPRE CONSIDERA TODAS AS ÚNICAS, independente da data
-      const label = tx.label?.toLowerCase().trim() || 'desconhecido';
-      if (isOut) { if (!varExp[label]) varExp[label] = { total: 0, count: 0 }; varExp[label].total += value; varExp[label].count += 1; }
-      else { if (!varInc[label]) varInc[label] = { total: 0, count: 0 }; varInc[label].total += value; varInc[label].count += 1; }
 
-      if (monthsFromNow > 0) {
-        futureSingles.push({ ...tx, monthsFromNow });
-      } else {
-        if (isIn) entradasUnicas += value; else saidasUnicas += value;
+      if (monthsFromNow === 0) {
+        if (isIn) entradasUnicasMesAtual += value; else saidasUnicasMesAtual += value;
+      } else if (monthsFromNow > 0) {
+        if (!singlesByMonth[monthsFromNow]) singlesByMonth[monthsFromNow] = { in: 0, out: 0 };
+        if (isIn) singlesByMonth[monthsFromNow].in += value;
+        else singlesByMonth[monthsFromNow].out += value;
+      }
+
+      if (isOut) {
+        const label = tx.label?.toLowerCase().trim() || 'desconhecido';
+        if (!varExp[label]) varExp[label] = { total: 0, count: 0 };
+        varExp[label].total += value;
+        varExp[label].count += 1;
       }
     }
   }
 
   let avgOut = 0; Object.values(varExp).forEach(v => { avgOut += v.total / v.count; });
-  let avgIn = 0; Object.values(varInc).forEach(v => { avgIn += v.total / v.count; });
-  const fluxoVariavelMedio = avgIn - avgOut;
+  const fluxoVariavelMedio = -avgOut;
 
-  // 2. Calcular rendimento mensal
   let yieldMensal = 0;
   let totalAssetsValue = 0;
   for (const asset of assets) {
     const daily = Number(asset.manualDailyYield ?? asset.dailyYield ?? 0);
-    const val = Number(asset.currentValue || asset.value) || 0;
+    const val = Number(asset.manualBalance ?? asset.currentValue ?? asset.value) || 0;
     const isMP = (asset.name || '').toLowerCase().includes('mercado pago');
     yieldMensal += daily * (isMP ? 22 : 30);
     totalAssetsValue += val;
   }
   const taxaMensal = totalAssetsValue > 0 ? (yieldMensal / totalAssetsValue) : 0;
 
-  const saldoBase = currentBalance + entradasUnicas - saidasUnicas;
-  const fluxoRecorrenteLiquido = entradasFixas - saidasFixas + fluxoVariavelMedio + yieldMensal;
+  // Saldo Base = patrimônio real + transações únicas do mês atual
+  const saldoBase = currentBalance + entradasUnicasMesAtual - saidasUnicasMesAtual;
+  
+  // Fluxo Líquido para exibição na UI (Mês 1) = o que realmente vai entrar e sair neste mês
+  const fluxoLiquidoMes1 = yieldMensal + entradasFixas - saidasFixas + (entradasUnicasMesAtual - saidasUnicasMesAtual);
 
-  const debug = { yieldMensal, entradasFixas, saidasFixas, entradasUnicas, saidasUnicas, taxaMensal, fluxoVariavelMedio };
+  const debug = { yieldMensal, entradasFixas, saidasFixas, entradasUnicas: entradasUnicasMesAtual, saidasUnicas: saidasUnicasMesAtual, taxaMensal, fluxoVariavelMedio };
 
-  if (saldoBase >= target) return { saldoBase, fluxoRecorrenteLiquido, monthsToGoal: 0, debug };
+  if (saldoBase >= target) return { saldoBase, fluxoRecorrenteLiquido: fluxoLiquidoMes1, monthsToGoal: 0, debug };
 
-  // 3. Simulação mês a mês COM SWEEP
   let meses = 0;
   let saldoTotal = saldoBase;
-  
-  let simulatedAssets = JSON.parse(JSON.stringify(assets));
 
   while (saldoTotal < target && meses < 600) {
     meses++;
     
-    let rendimentoDoMes = 0;
-    let mpSaldoIndex = -1;
+    let fluxoEsteMes = 0;
 
-    for (let j = 0; j < simulatedAssets.length; j++) {
-      const asset = simulatedAssets[j];
-      const isMP = (asset.name || '').toLowerCase().includes('mercado pago');
-      if (asset.name === 'Mercado Pago · Saldo') mpSaldoIndex = j;
-
-      const daily = Number(asset.manualDailyYield ?? asset.dailyYield ?? 0);
-      const dias = isMP ? 22 : 30;
-      
-      const rend = daily * dias;
-      rendimentoDoMes += rend;
-      
-      asset.currentValue = (asset.currentValue || asset.value) + rend;
+    if (meses === 1) {
+      // Mês 1: aplica o fluxo real do mês atual (já inclui as únicas no saldoBase, então não soma de novo)
+      // Na verdade, como saldoTotal já é o saldoBase (que já tem as únicas), no mês 1 só somamos rendimento e fixas.
+      fluxoEsteMes = yieldMensal + entradasFixas - saidasFixas;
+    } else {
+      // Mês 2+: aplica a média variáveis
+      fluxoEsteMes = yieldMensal + entradasFixas - saidasFixas + fluxoVariavelMedio;
     }
 
-    // Fluxo base (sem rendimento, que já está no rendimentoDoMes)
-    let fluxoEsteMes = entradasFixas - saidasFixas + fluxoVariavelMedio;
-    
-    for (const tx of futureSingles) {
-      if (tx.monthsFromNow === meses) {
-         const value = Number(tx.value) || 0;
-         if (tx.type === 'in') fluxoEsteMes += value;
-         else if (tx.type === 'out') fluxoEsteMes -= value;
-      }
+    if (singlesByMonth[meses]) {
+      fluxoEsteMes += singlesByMonth[meses].in - singlesByMonth[meses].out;
     }
 
-    saldoTotal = saldoTotal + rendimentoDoMes + fluxoEsteMes;
-
-    // SWEEP
-    if (mpSaldoIndex !== -1) {
-      simulatedAssets[mpSaldoIndex].currentValue += rendimentoDoMes;
-    }
-    for (let j = 0; j < simulatedAssets.length; j++) {
-      if (j !== mpSaldoIndex) {
-        simulatedAssets[j].currentValue = simulatedAssets[j].baseBalance || simulatedAssets[j].valorInvestido || simulatedAssets[j].value;
-      }
-    }
+    // Juros compostos
+    saldoTotal = saldoTotal + fluxoEsteMes + (saldoTotal * taxaMensal);
   }
 
-  return { saldoBase, fluxoRecorrenteLiquido, monthsToGoal: meses, debug };
+  return { saldoBase, fluxoRecorrenteLiquido: fluxoLiquidoMes1, monthsToGoal: meses, debug };
 }

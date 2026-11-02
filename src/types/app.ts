@@ -45,6 +45,8 @@ export interface Asset {
   monthYieldRemaining?: number;
   manualDailyYield?: number;
   manualWeekendYield?: number;
+  manualBalance?: number;
+  manualBalanceDate?: string;
   lastYieldUpdate?: string;
 }
 

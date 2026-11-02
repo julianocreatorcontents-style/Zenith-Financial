@@ -355,6 +355,7 @@ export default function ZenithApp() {
               onAcceptDDA={handleAcceptDDA}
               onRejectDDA={handleRejectDDA}
               onUpdateAsset={updateAsset}
+              onUpdateTransaction={updateTransaction}
               onCreateAsset={createAsset}
               t={t}
             />
