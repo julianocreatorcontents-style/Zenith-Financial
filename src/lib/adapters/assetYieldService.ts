@@ -149,17 +149,27 @@ export function calculateAssetYieldInfo(
   cdiAnnualPercent: number = DEFAULT_CDI_ANNUAL_PERCENT,
   today: Date = new Date()
 ): AssetYieldInfo {
-  const manualBalance = Number((doc as any).manualBalance);
-  const hasManualBalance = !isNaN(manualBalance) && manualBalance >= 0;
+  const rawManualBalance = (doc as any).manualBalance;
+  const hasManualBalance =
+    rawManualBalance !== undefined &&
+    rawManualBalance !== null &&
+    rawManualBalance !== '' &&
+    Number.isFinite(Number(rawManualBalance)) &&
+    Number(rawManualBalance) >= 0;
+  const manualBalance = hasManualBalance ? Number(rawManualBalance) : 0;
   const baseBalance = hasManualBalance ? manualBalance : (Number(doc.value) || 0);
   const principal = Number(doc.valorInvestido ?? doc.value) || baseBalance;
   
   const manualBalanceDate = parseAssetDate((doc as any).manualBalanceDate);
+  const explicitStartDate = parseAssetDate(doc.investmentStartDate);
+  const investmentStartDate =
+    explicitStartDate ??
+    parseAssetDate((doc as any).createdAt);
   const anchorDate =
     manualBalanceDate ??
-    parseAssetDate(doc.investmentStartDate) ??
+    explicitStartDate ??
     parseAssetDate((doc as any).updatedAt) ??
-    parseAssetDate(doc.createdAt) ??
+    investmentStartDate ??
     null;
 
   const monthEnd = new Date(today.getFullYear(), today.getMonth() + 1, 0);
@@ -193,6 +203,10 @@ export function calculateAssetYieldInfo(
   const daysSinceAnchor = isBusinessDays
     ? countBusinessDays(anchorDate, today)
     : countCalendarDays(anchorDate, today);
+
+  // IR/IOF dependem do tempo total do investimento, não da última reconciliação.
+  const taxStartDate = investmentStartDate ?? anchorDate;
+  const taxDays = Math.max(1, countCalendarDays(taxStartDate, today));
 
   const baseMoney = Money.fromBRL(baseBalance);
 
@@ -289,10 +303,10 @@ export function calculateAssetYieldInfo(
     // O valor manual do extrato JÁ É LÍQUIDO. Mantém o valor.
     netYieldSinceAnchor = rawYieldSinceAnchor;
   } else if (resolved.taxDisplayMode === 'NET') {
-    const ir = IncomeTaxPolicy.calculate(Money.fromBRL(rawYieldSinceAnchor), daysSinceAnchor).toBRL();
-    // IOF só é aplicado nos primeiros 29 dias
-    const iof = daysSinceAnchor < 30 
-      ? IofPolicy.calculate(Money.fromBRL(rawYieldSinceAnchor), daysSinceAnchor).toBRL() 
+    const ir = IncomeTaxPolicy.calculate(Money.fromBRL(rawYieldSinceAnchor), taxDays).toBRL();
+    // IOF só é aplicado nos primeiros 29 dias contados do início do investimento
+    const iof = taxDays < 30
+      ? IofPolicy.calculate(Money.fromBRL(rawYieldSinceAnchor), taxDays).toBRL()
       : 0;
     netYieldSinceAnchor = Math.max(0, rawYieldSinceAnchor - ir - iof);
   } else {
@@ -301,9 +315,7 @@ export function calculateAssetYieldInfo(
   }
 
   const yieldSinceAnchor = Math.round(netYieldSinceAnchor * 100) / 100;
-  const currentValue = hasManualBalance 
-    ? Math.round(baseBalance * 100) / 100 
-    : Math.round((baseBalance + yieldSinceAnchor) * 100) / 100;
+  const currentValue = Math.round((baseBalance + yieldSinceAnchor) * 100) / 100;
 
   // Atualiza rendimento diário estimado para o novo saldo
   const updatedDailyMoney = YieldCalculator.dailyYieldTiered(

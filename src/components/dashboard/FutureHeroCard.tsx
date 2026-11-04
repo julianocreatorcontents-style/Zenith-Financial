@@ -1,7 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import { Eye, EyeOff } from 'lucide-react';
 import { AreaChart, Area, ResponsiveContainer, XAxis, YAxis, CartesianGrid, Tooltip } from 'recharts';
-import { parseTransactionDate } from '../../lib/finance';
+import { isRecurringActiveInMonth, parseTransactionDate } from '../../lib/finance';
 
 interface FutureHeroCardProps {
   currentNetWorth: number;
@@ -26,12 +26,13 @@ export const FutureHeroCard: React.FC<FutureHeroCardProps> = ({
   const { chartData, projectedTotal, gain } = useMemo(() => {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
+    const endOfToday = new Date(today);
+    endOfToday.setHours(23, 59, 59, 999);
     const currentMonth = today.getMonth();
     const currentYear = today.getFullYear();
 
     // 1. Separar transações
     let entradasFixas = 0, saidasFixas = 0, entradasUnicas = 0, saidasUnicas = 0;
-    const futureSingles: any[] = [];
     const varExp: Record<string, { total: number; count: number }> = {};
     
 
@@ -42,9 +43,12 @@ export const FutureHeroCard: React.FC<FutureHeroCardProps> = ({
       if (!isIn && !isOut) continue;
 
       if (tx.isRecurring) {
-        if (isIn) entradasFixas += value; else saidasFixas += value;
+        if (isRecurringActiveInMonth(tx, today)) {
+          if (isIn) entradasFixas += value; else saidasFixas += value;
+        }
       } else {
-        const txDate = parseTransactionDate(tx.date) || today;
+        const parsedTxDate = parseTransactionDate(tx.date);
+        const txDate = parsedTxDate || today;
         const monthsFromNow = (txDate.getFullYear() - currentYear) * 12 + (txDate.getMonth() - currentMonth);
         
         const label = tx.label?.toLowerCase().trim() || 'desconhecido';
@@ -54,10 +58,12 @@ export const FutureHeroCard: React.FC<FutureHeroCardProps> = ({
           varExp[label].count += 1; 
         }
 
-        if (monthsFromNow > 0) {
-          futureSingles.push({ ...tx, monthsFromNow });
-        } else {
-          if (isIn) entradasUnicas += value; else saidasUnicas += value;
+        // currentNetWorth já contém as transações do mês até hoje; somamos apenas as futuras.
+        if (monthsFromNow === 0) {
+          const alreadyInCurrentBalance = parsedTxDate !== null && txDate.getTime() <= endOfToday.getTime();
+          if (!alreadyInCurrentBalance) {
+            if (isIn) entradasUnicas += value; else saidasUnicas += value;
+          }
         }
       }
     }
@@ -113,10 +119,23 @@ export const FutureHeroCard: React.FC<FutureHeroCardProps> = ({
         asset.currentValue = (asset.currentValue || asset.value) + rend;
       }
 
+      const targetDate = new Date(today.getFullYear(), today.getMonth() + m, 1);
+
       // Fluxo de caixa do mês (entradas/saídas fixas + únicas futuras)
-      // O fluxo variável já engloba as transações únicas futuras (média), 
+      // O fluxo variável já engloba as transações únicas futuras (média),
       // então não somamos futureSingles aqui para não duplicar.
-      let fluxoEsteMes = entradasFixas - saidasFixas + fluxoVariavelMedio;
+      let fixasIn = 0, fixasOut = 0;
+      for (const tx of transactions) {
+        if (!tx.isRecurring) continue;
+        const isIn = tx.type === 'in';
+        const isOut = tx.type === 'out';
+        if (!isIn && !isOut) continue;
+        if (!isRecurringActiveInMonth(tx, targetDate)) continue;
+        const value = Number(tx.value) || 0;
+        if (isIn) fixasIn += value; else fixasOut += value;
+      }
+
+      const fluxoEsteMes = fixasIn - fixasOut + fluxoVariavelMedio;
 
       saldoTotal = saldoTotal + rendimentoDoMes + fluxoEsteMes;
 
@@ -130,7 +149,6 @@ export const FutureHeroCard: React.FC<FutureHeroCardProps> = ({
         }
       }
 
-      const targetDate = new Date(today.getFullYear(), today.getMonth() + m, 1);
       points.push({
         name: MONTHS_SHORT[targetDate.getMonth()] + '/' + String(targetDate.getFullYear()).slice(-2),
         value: Math.round(saldoTotal * 100) / 100,

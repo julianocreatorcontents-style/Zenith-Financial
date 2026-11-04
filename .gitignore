@@ -6,6 +6,10 @@ coverage/
 *.log
 .env*
 !.env.example
-package-lock.json
-android/
+bun.lock
+bun.lockb
 serviceAccountKey.json
+android/.gradle
+android/app/build
+android/build
+android/local.properties

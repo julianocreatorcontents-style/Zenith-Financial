@@ -148,12 +148,18 @@ export interface ChartSlot {
   monthlyContribution?: number;
 }
 
+export interface FinancialGoalsConfig {
+  emergencyReserve?: number;
+  financialFreedom?: number;
+}
+
 export interface ZenithConfig {
   master_states: MasterStates;
   categories: Record<string, CategorySlot>;
   charts?: Record<string, ChartSlot>;
   metrics?: Record<string, ChartSlot>;
   dashboard_order?: string[];
+  goals?: FinancialGoalsConfig;
 }
 
 export interface Settings {

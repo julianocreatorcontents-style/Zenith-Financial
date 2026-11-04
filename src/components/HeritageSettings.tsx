@@ -296,16 +296,18 @@ export const HeritageSettings: React.FC<HeritageSettingsProps> = ({
 
     // Ensure hardcoded charts and default categories exist even if config is loaded
     const mergedCharts = { ...HARDCODED_CHARTS };
-    if (base.charts) {
-      Object.keys(base.charts).forEach(id => {
-        mergedCharts[id] = { ...mergedCharts[id], ...base.charts[id] };
+    const baseCharts = base.charts;
+    if (baseCharts) {
+      Object.keys(baseCharts).forEach(id => {
+        mergedCharts[id] = { ...mergedCharts[id], ...baseCharts[id] };
       });
     }
 
     const mergedMetrics = { ...HARDCODED_METRICS };
-    if (base.metrics) {
-      Object.keys(base.metrics).forEach(id => {
-        mergedMetrics[id] = { ...mergedMetrics[id], ...base.metrics[id] };
+    const baseMetrics = base.metrics;
+    if (baseMetrics) {
+      Object.keys(baseMetrics).forEach(id => {
+        mergedMetrics[id] = { ...mergedMetrics[id], ...baseMetrics[id] };
       });
     }
 

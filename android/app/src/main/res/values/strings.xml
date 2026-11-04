@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Zenith Financial</string>
+    <string name="title_activity_main">Zenith Financial</string>
+    <string name="package_name">com.zenith.financial</string>
+    <string name="custom_url_scheme">com.zenith.financial</string>
+</resources>

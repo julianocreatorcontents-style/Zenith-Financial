@@ -18,21 +18,39 @@ import LoadingSpinner from './components/LoadingSpinner';
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { ProfileDrawer } from "./components/drawers/ProfileDrawer";
 import type { VisualSettings } from "./components/CardSettingsPanel";
-import { AddTransactionModal } from "./components/modals/AddTransactionModal";
 import { IngestionHub, ReviewModal } from "./components/modals/IngestionModals";
-import { AssetModal, AddAssetModal, AssetDeepDiveModal } from "./components/modals/AssetModals";
-import { CategoryDetailModal } from "./components/modals/CategoryDetailModal";
 import { NavItem } from "./components/layout/NavItem";
-import { HomeView } from "./views/HomeView";
-import { WalletTransactionsView as DetalhesGastosPage } from "./views/WalletTransactionsView";
-import { InvestmentsView } from "./views/InvestmentsView";
-import { AuthView } from "./views/AuthView";
 import { Asset } from "./types/app";
 import { useZenithData } from "./hooks/useZenithData";
 import { applyTheme } from "./lib/theme";
 
 const StorageTrashView = lazy(() => import('./views/StorageTrashView'));
 const ZenithIAView = lazy(() => import('./views/ZenithIAView'));
+const HomeView = lazy(() => import('./views/HomeView').then(m => ({ default: m.HomeView })));
+const DetalhesGastosPage = lazy(() =>
+  import('./views/WalletTransactionsView').then(m => ({ default: m.WalletTransactionsView }))
+);
+const InvestmentsView = lazy(() =>
+  import('./views/InvestmentsView').then(m => ({ default: m.InvestmentsView }))
+);
+const AuthView = lazy(() =>
+  import('./views/AuthView').then(m => ({ default: m.AuthView }))
+);
+const AddTransactionModal = lazy(() =>
+  import('./components/modals/AddTransactionModal').then(m => ({ default: m.AddTransactionModal }))
+);
+const AssetModal = lazy(() =>
+  import('./components/modals/AssetModals').then(m => ({ default: m.AssetModal }))
+);
+const AssetDeepDiveModal = lazy(() =>
+  import('./components/modals/AssetModals').then(m => ({ default: m.AssetDeepDiveModal }))
+);
+const AddAssetModal = lazy(() =>
+  import('./components/modals/AssetModals').then(m => ({ default: m.AddAssetModal }))
+);
+const CategoryDetailModal = lazy(() =>
+  import('./components/modals/CategoryDetailModal').then(m => ({ default: m.CategoryDetailModal }))
+);
 
 const getGreeting = () => {
   const hour = new Date().getHours();
@@ -51,10 +69,10 @@ export default function ZenithApp() {
     geminiApiKey, apiKeyError, setApiKeyError,
     pendingTransaction, setPendingTransaction, isProcessingIA,
     metrics, chartData, projectionData, cashFlowData,
-    portfolioAllocationPercent, t, getGeminiApiKey,
+    portfolioAllocationPercent, goals, updateGoals, t, getGeminiApiKey,
     togglePrivacyMode, handleSaveProfile, handleSaveApiKey,
     handleGoogleLogin, handleEmailLogin, handleRegister, handleLogout,
-    handleAcceptDDA, handleRejectDDA, moveToTrash,
+    handleAcceptDDA, handleRejectDDA, moveToTrash, restoreFromTrash,
     createAsset, updateAsset, deleteAsset,
     addTransaction, updateTransaction, confirmPendingTransaction,
     handleFileUpload
@@ -213,14 +231,22 @@ export default function ZenithApp() {
 
   if (!user) {
     return (
-      <AuthView
-        onGoogleLogin={handleGoogleLogin}
-        onEmailLogin={handleEmailLogin}
-        onRegister={handleRegister}
-        error={error}
-        onClearError={() => setError(null)}
-        language={settings?.language}
-      />
+      <Suspense
+        fallback={
+          <div className="min-h-screen bg-[var(--bg-app)] flex items-center justify-center">
+            <div className="w-8 h-8 border-2 border-[var(--accent)] border-t-transparent rounded-full animate-spin" />
+          </div>
+        }
+      >
+        <AuthView
+          onGoogleLogin={handleGoogleLogin}
+          onEmailLogin={handleEmailLogin}
+          onRegister={handleRegister}
+          error={error}
+          onClearError={() => setError(null)}
+          language={settings?.language}
+        />
+      </Suspense>
     );
   }
 
@@ -320,11 +346,12 @@ export default function ZenithApp() {
 
           {currentTab === 'Armazenamento' && (
             <Suspense fallback={<LoadingSpinner />}>
-              <StorageTrashView user={user} language={settings?.language} />
+              <StorageTrashView user={user} language={settings?.language} onRestore={restoreFromTrash} />
             </Suspense>
           )}
 
           {currentTab === 'Início' && (
+            <Suspense fallback={<LoadingSpinner />}>
             <HomeView
               visualSettings={visualSettings}
               user={user}
@@ -357,29 +384,36 @@ export default function ZenithApp() {
               onUpdateAsset={updateAsset}
               onUpdateTransaction={updateTransaction}
               onCreateAsset={createAsset}
+              goalTargets={goals}
+              onSaveGoalTargets={updateGoals}
               t={t}
             />
+            </Suspense>
           )}
 
           {currentTab === 'Carteira' && (
-            <DetalhesGastosPage 
-              transactions={transactions}
-              language={settings?.language}
-              onEdit={(tx: any) => {
-                setSelectedTransaction(tx);
-                setIsEditingTransaction(true);
-              }}
-              onDelete={(tx: any) => moveToTrash(tx, 'transactions')}
-            />
+            <Suspense fallback={<LoadingSpinner />}>
+              <DetalhesGastosPage 
+                transactions={transactions}
+                language={settings?.language}
+                onEdit={(tx: any) => {
+                  setSelectedTransaction(tx);
+                  setIsEditingTransaction(true);
+                }}
+                onDelete={(tx: any) => moveToTrash(tx, 'transactions')}
+              />
+            </Suspense>
           )}
 
           {currentTab === 'Investimentos' && (
-            <InvestmentsView 
-              assets={assets}
-              investorProfile={investorProfile} 
-              onAssetClick={(asset) => setSelectedAssetForDeepDive(asset)}
-              language={settings?.language}
-            />
+            <Suspense fallback={<LoadingSpinner />}>
+              <InvestmentsView 
+                assets={assets}
+                investorProfile={investorProfile} 
+                onAssetClick={(asset) => setSelectedAssetForDeepDive(asset)}
+                language={settings?.language}
+              />
+            </Suspense>
           )}
 
           {currentTab === 'IA' && (
@@ -412,6 +446,7 @@ export default function ZenithApp() {
             onSaveApiKey={handleSaveApiKey}
             onSaveProfile={handleSaveProfile}
             userId={user.uid}
+            onRestoreTrash={restoreFromTrash}
             currentConfig={settings?.zenith_config}
             visualSettings={visualSettings}
             onChangeVisualSettings={setVisualSettings}
@@ -421,93 +456,107 @@ export default function ZenithApp() {
 
           {/* Asset Detail / Edit Modal */}
           {selectedAsset && (
-            <AssetModal 
-              asset={selectedAsset} 
-              onClose={() => setSelectedAsset(null)} 
-              privacyMode={privacyMode}
-              language={settings.language}
-              onDelete={async (id) => {
-                await deleteAsset(id);
-                setSelectedAsset(null);
-              }}
-              onSave={async (id, updateData) => {
-                await updateAsset(id, updateData);
-                setSelectedAsset(null);
-              }}
-            />
+            <Suspense fallback={null}>
+              <AssetModal 
+                asset={selectedAsset} 
+                onClose={() => setSelectedAsset(null)} 
+                privacyMode={privacyMode}
+                language={settings.language}
+                onDelete={async (id) => {
+                  await deleteAsset(id);
+                  setSelectedAsset(null);
+                }}
+                onSave={async (id, updateData) => {
+                  await updateAsset(id, updateData);
+                  setSelectedAsset(null);
+                }}
+              />
+            </Suspense>
           )}
 
           {/* Asset Deep Dive Modal */}
           {selectedAssetForDeepDive && (
-            <AssetDeepDiveModal 
-              asset={selectedAssetForDeepDive} 
-              onClose={() => setSelectedAssetForDeepDive(null)} 
-              language={settings?.language} 
-            />
+            <Suspense fallback={null}>
+              <AssetDeepDiveModal 
+                asset={selectedAssetForDeepDive} 
+                onClose={() => setSelectedAssetForDeepDive(null)} 
+                language={settings?.language} 
+              />
+            </Suspense>
           )}
 
           {/* Add Asset Modal */}
           {isAddingAsset && (
-            <AddAssetModal 
-              onClose={() => setIsAddingAsset(false)}
-              language={settings.language}
-              investorProfile={investorProfile}
-              user={user}
-              getApiKey={getGeminiApiKey}
-              onApiKeyError={handleAiError}
-              onAdd={async (assetData) => {
-                await createAsset(assetData);
-                setIsAddingAsset(false);
-              }}
-            />
+            <Suspense fallback={null}>
+              <AddAssetModal 
+                onClose={() => setIsAddingAsset(false)}
+                language={settings.language}
+                investorProfile={investorProfile}
+                user={user}
+                getApiKey={getGeminiApiKey}
+                onApiKeyError={handleAiError}
+                onAdd={async (assetData) => {
+                  await createAsset(assetData);
+                  setIsAddingAsset(false);
+                }}
+              />
+            </Suspense>
           )}
 
           {/* Category Detail Modal */}
-          <CategoryDetailModal 
-            isOpen={isCategoryDetailsOpen}
-            onClose={() => {
-              setIsCategoryDetailsOpen(false);
-              setActiveCategoryDetail(null);
-            }}
-            activeCategoryDetail={activeCategoryDetail}
-            timeFilter={timeFilter}
-            setTimeFilter={setTimeFilter}
-            onOpenAddMenu={() => setIsAddMenuOpen(true)}
-            cashFlowData={cashFlowData}
-            metricsOutTotal={metrics.out.total}
-            privacyMode={privacyMode}
-            transactions={transactions}
-          />
+          {isCategoryDetailsOpen && (
+            <Suspense fallback={null}>
+              <CategoryDetailModal 
+                isOpen={isCategoryDetailsOpen}
+                onClose={() => {
+                  setIsCategoryDetailsOpen(false);
+                  setActiveCategoryDetail(null);
+                }}
+                activeCategoryDetail={activeCategoryDetail}
+                timeFilter={timeFilter}
+                setTimeFilter={setTimeFilter}
+                onOpenAddMenu={() => setIsAddMenuOpen(true)}
+                cashFlowData={cashFlowData}
+                metricsOutTotal={metrics.out.total}
+                privacyMode={privacyMode}
+                transactions={transactions}
+              />
+            </Suspense>
+          )}
 
           {/* Add Transaction Modal */}
           {isAddingTransaction && (
-            <AddTransactionModal 
-              assets={assets}
-              onClose={() => setIsAddingTransaction(false)}
-              language={settings.language}
-              onAdd={async (txData) => {
-                await addTransaction(txData);
-                setIsAddingTransaction(false);
-              }}
-            />
+            <Suspense fallback={null}>
+              <AddTransactionModal 
+                assets={assets}
+                onClose={() => setIsAddingTransaction(false)}
+                language={settings.language}
+                onAdd={async (txData) => {
+                  await addTransaction(txData);
+                  setIsAddingTransaction(false);
+                }}
+              />
+            </Suspense>
           )}
 
           {/* Edit Transaction Modal */}
           {isEditingTransaction && selectedTransaction && (
-            <AddTransactionModal 
-              assets={assets}
-              initialData={selectedTransaction}
-              language={settings.language}
-              onClose={() => {
-                setIsEditingTransaction(false);
-                setSelectedTransaction(null);
-              }}
-              onAdd={async (txData) => {
-                await updateTransaction(selectedTransaction, txData);
-                setIsEditingTransaction(false);
-                setSelectedTransaction(null);
-              }}
-            />
+            <Suspense fallback={null}>
+              <AddTransactionModal 
+                assets={assets}
+                initialData={selectedTransaction}
+                language={settings.language}
+                onClose={() => {
+                  setIsEditingTransaction(false);
+                  setSelectedTransaction(null);
+                }}
+                onAdd={async (txData) => {
+                  await updateTransaction(selectedTransaction, txData);
+                  setIsEditingTransaction(false);
+                  setSelectedTransaction(null);
+                }}
+              />
+            </Suspense>
           )}
 
           {/* Biometry Modal */}
@@ -569,6 +618,7 @@ export default function ZenithApp() {
             <ReviewModal 
               transaction={pendingTransaction}
               isProcessing={isProcessingIA}
+              assets={assets}
               onConfirm={async (updatedTx) => {
                 await confirmPendingTransaction(updatedTx);
                 setIsReviewModalOpen(false);

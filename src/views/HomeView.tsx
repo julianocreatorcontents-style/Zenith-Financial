@@ -31,7 +31,8 @@ import {
 } from 'recharts';
 import type { MarketRateState } from '../lib/adapters/marketRateService';
 import { calculateNetWorthProjection } from '../lib/adapters/netWorthProjection';
-import { parseTransactionDate, isExpenseTransaction } from '../lib/finance';
+import { calculateCategoryExpenses, parseTransactionDate, resolveGoalTargets } from '../lib/finance';
+import type { FinancialGoalTargets } from '../lib/finance';
 import { Asset, Transaction, DDA, Settings, ChartSlot } from '../types/app';
 import {
   DDASuggestion,
@@ -91,6 +92,8 @@ interface HomeViewProps {
   onUpdateAsset: (id: string, data: any) => Promise<void>;
   onUpdateTransaction: (tx: any, data: any) => Promise<void>;
   onCreateAsset: (data: any) => Promise<void>;
+  goalTargets?: FinancialGoalTargets;
+  onSaveGoalTargets?: (goals: FinancialGoalTargets) => Promise<void> | void;
   t: (pt: string, en: string) => string;
 }
 
@@ -125,9 +128,14 @@ export const HomeView: React.FC<HomeViewProps> = ({
   onUpdateAsset,
   onUpdateTransaction,
   onCreateAsset,
+  goalTargets,
+  onSaveGoalTargets,
   t,
   visualSettings,
 }) => {
+  const resolvedGoalTargets = useMemo(() => resolveGoalTargets(goalTargets), [goalTargets]);
+  const [isEditingGoals, setIsEditingGoals] = useState(false);
+  const [goalDraft, setGoalDraft] = useState({ emergencyReserve: '', financialFreedom: '' });
   const [activePortfolioIndex, setActivePortfolioIndex] = useState(0);
   const [activePatrimonioIndex, setActivePatrimonioIndex] = useState(0);
   const patrimonioCarouselRef = useRef<HTMLDivElement>(null);
@@ -363,6 +371,11 @@ export const HomeView: React.FC<HomeViewProps> = ({
     if (chartFilterValue.type === 'category' && chartFilterValue.value) {
       filtered = filtered.filter(t => getTransactionCategory(t) === chartFilterValue.value);
     }
+    filtered.sort((a, b) => {
+      const dateA = parseTransactionDate((a as any)?.date || (a as any)?.createdAt || (a as any)?.timestamp || (a as any)?.data)?.getTime() ?? 0;
+      const dateB = parseTransactionDate((b as any)?.date || (b as any)?.createdAt || (b as any)?.timestamp || (b as any)?.data)?.getTime() ?? 0;
+      return dateB - dateA;
+    });
     return filtered.slice(0, 5);
   }, [transactions, chartFilterValue]);
 
@@ -370,7 +383,7 @@ export const HomeView: React.FC<HomeViewProps> = ({
     const types: Record<string, number> = { liquidity: 0, investment: 0, physical: 0 };
     assets.forEach(a => { 
       if (a.type && types[a.type] !== undefined) {
-        types[a.type] += Number(a.manualBalance ?? a.value) || 0; 
+        types[a.type] += Number(a.currentValue ?? a.manualBalance ?? a.value) || 0; 
       }
     });
     return [
@@ -381,11 +394,11 @@ export const HomeView: React.FC<HomeViewProps> = ({
   }, [assets]);
 
   const goals = useMemo(() => {
-    const liquidity = assets.filter(a => a.type === 'liquidity').reduce((acc, a) => acc + Number(a.manualBalance ?? a.value), 0);
-    const total = assets.reduce((acc, a) => acc + Number(a.manualBalance ?? a.value), 0);
+    const liquidity = assets.filter(a => a.type === 'liquidity').reduce((acc, a) => acc + Number(a.currentValue ?? a.manualBalance ?? a.value), 0);
+    const total = assets.reduce((acc, a) => acc + Number(a.currentValue ?? a.manualBalance ?? a.value), 0);
     
-    const emergencyGoal = 30000;
-    const freedomGoal = 1000000;
+    const emergencyGoal = resolvedGoalTargets.emergencyReserve;
+    const freedomGoal = resolvedGoalTargets.financialFreedom;
     
     return [
       {
@@ -403,7 +416,24 @@ export const HomeView: React.FC<HomeViewProps> = ({
         color: 'var(--accent)'
       }
     ];
-  }, [assets]);
+  }, [assets, resolvedGoalTargets]);
+
+  const startEditingGoals = () => {
+    setGoalDraft({
+      emergencyReserve: String(resolvedGoalTargets.emergencyReserve),
+      financialFreedom: String(resolvedGoalTargets.financialFreedom),
+    });
+    setIsEditingGoals(true);
+  };
+
+  const saveGoals = async () => {
+    const next = resolveGoalTargets({
+      emergencyReserve: Number(goalDraft.emergencyReserve),
+      financialFreedom: Number(goalDraft.financialFreedom),
+    });
+    await onSaveGoalTargets?.(next);
+    setIsEditingGoals(false);
+  };
 
   const renderMetric = (id: string) => {
     const metricConfig = (settings?.zenith_config?.metrics?.[id] || { visible: true, label: id.replace('METRIC_', '') }) as ChartSlot;
@@ -678,14 +708,51 @@ export const HomeView: React.FC<HomeViewProps> = ({
           <section key={id} className="bg-[var(--bg-card)] border border-[var(--border-card)] rounded-[32px] p-6">
             <div className="flex justify-between items-center mb-6">
               <span className="text-xs font-medium text-[var(--text-muted)]">{t("Metas Financeiras", "Financial Goals")}</span>
-              <button className="text-[10px] font-bold text-[var(--accent)] uppercase tracking-widest">{t("Nova Meta", "New Goal")}</button>
+              <button
+                onClick={() => (isEditingGoals ? setIsEditingGoals(false) : startEditingGoals())}
+                className="text-[10px] font-bold text-[var(--accent)] uppercase tracking-widest"
+              >
+                {isEditingGoals ? t("Cancelar", "Cancel") : t("Editar Metas", "Edit Goals")}
+              </button>
             </div>
+            {isEditingGoals && (
+              <div className="space-y-3 mb-6">
+                <label className="block text-[10px] font-bold uppercase tracking-widest text-[var(--text-muted)]">
+                  {t("Reserva de Emergência (R$)", "Emergency Reserve (R$)")}
+                  <input
+                    type="number"
+                    min="1"
+                    step="100"
+                    value={goalDraft.emergencyReserve}
+                    onChange={(e) => setGoalDraft(prev => ({ ...prev, emergencyReserve: e.target.value }))}
+                    className="mt-2 w-full bg-[var(--bg-app)] border border-[var(--border-card)] rounded-2xl px-4 py-3 text-sm text-[var(--text-primary)] outline-none focus:border-[var(--accent)]"
+                  />
+                </label>
+                <label className="block text-[10px] font-bold uppercase tracking-widest text-[var(--text-muted)]">
+                  {t("Liberdade Financeira (R$)", "Financial Freedom (R$)")}
+                  <input
+                    type="number"
+                    min="1"
+                    step="1000"
+                    value={goalDraft.financialFreedom}
+                    onChange={(e) => setGoalDraft(prev => ({ ...prev, financialFreedom: e.target.value }))}
+                    className="mt-2 w-full bg-[var(--bg-app)] border border-[var(--border-card)] rounded-2xl px-4 py-3 text-sm text-[var(--text-primary)] outline-none focus:border-[var(--accent)]"
+                  />
+                </label>
+                <button
+                  onClick={saveGoals}
+                  className="w-full py-3 bg-[var(--accent)] text-[var(--bg-app)] rounded-2xl font-black text-[10px] uppercase tracking-widest hover:bg-[var(--accent)]/80 transition-colors"
+                >
+                  {t("Salvar Metas", "Save Goals")}
+                </button>
+              </div>
+            )}
             <div className="space-y-6">
               {goals.map((goal, idx) => (
                 <div key={`goal-${goal.name}-${idx}`} className="space-y-2">
                   <div className="flex justify-between text-[10px] uppercase font-bold tracking-widest">
                     <span className="text-[var(--text-primary)]">{goal.name}</span>
-                    <span style={{ color: goal.color }}>{goal.percent}%</span>
+                    <span style={{ color: goal.color }}>{goal.percent}% · {formatBRL(goal.target)}</span>
                   </div>
                   <div className="h-1.5 w-full bg-[var(--bg-app)] rounded-full overflow-hidden">
                     <motion.div 
@@ -732,7 +799,7 @@ export const HomeView: React.FC<HomeViewProps> = ({
                       onClick={(data) => {
                         if (data && data.name) {
                           setChartFilterValue(prev => 
-                            prev.value === data.name ? { type: null, value: null } : { type: 'asset', value: data.name }
+                            prev.value === data.name ? { type: null, value: null } : { type: 'asset', value: data.name ?? null }
                           );
                         }
                       }}
@@ -779,7 +846,7 @@ export const HomeView: React.FC<HomeViewProps> = ({
                   <SummaryCard 
                     key={`${asset.id}-${assetIdx}`}
                     label={asset.name} 
-                    value={(asset.manualBalance ?? asset.value ?? 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL', minimumFractionDigits: 0 }).replace('R$', 'R$ ')} 
+                    value={(asset.currentValue ?? asset.manualBalance ?? asset.value ?? 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL', minimumFractionDigits: 0 }).replace('R$', 'R$ ')} 
                     icon={asset.type === 'liquidity' ? <CreditCard size={14}/> : asset.type === 'investment' ? <Landmark size={14}/> : <Car size={14}/>} 
                     onClick={() => onSelectAsset(asset)} 
                     privacy={privacyMode}
@@ -833,26 +900,11 @@ export const HomeView: React.FC<HomeViewProps> = ({
         const now = new Date();
         const currentMonth = now.getMonth();
         const currentYear = now.getFullYear();
-        
-        const monthExpenses = transactions.filter(t => {
-          const d = parseTransactionDate(t.date);
-          return isExpenseTransaction(t) && d && d.getMonth() === currentMonth && d.getFullYear() === currentYear;
-        });
 
-        const categoryData = monthExpenses.reduce((acc: any[], t: any) => {
-          const catName = getTransactionCategory(t);
-          const existing = acc.find((item: any) => item.name === catName);
-          if (existing) {
-            existing.value += t.value;
-          } else {
-            acc.push({ 
-              name: catName, 
-              value: t.value, 
-              color: catName === 'Moradia' ? 'var(--trend-down)' : 'var(--accent)' 
-            });
-          }
-          return acc;
-        }, []);
+        const categoryData = calculateCategoryExpenses(transactions, currentMonth, currentYear).map((item: any) => ({
+          ...item,
+          color: item.name === 'Moradia' ? 'var(--trend-down)' : 'var(--accent)',
+        }));
 
         if (categoryData.length === 0) {
           return (
@@ -910,7 +962,7 @@ export const HomeView: React.FC<HomeViewProps> = ({
                       onClick={(data) => {
                         if (data && data.name) {
                           setChartFilterValue(prev => 
-                            prev.value === data.name ? { type: null, value: null } : { type: 'category', value: data.name }
+                            prev.value === data.name ? { type: null, value: null } : { type: 'category', value: data.name ?? null }
                           );
                         }
                       }}
@@ -1133,7 +1185,7 @@ export const HomeView: React.FC<HomeViewProps> = ({
                         )}
                       </div>
                       {renderChart('CHART_EVOL_PATRIMONIO')}
-      <GoalsHeroCard currentNetWorth={metrics.netWorth ?? 0} transactions={transactions} assets={assets} target={100000} privacy={privacyMode} />
+      <GoalsHeroCard currentNetWorth={metrics.netWorth ?? 0} transactions={transactions} assets={assets} target={resolvedGoalTargets.financialFreedom} privacy={privacyMode} />
       
                     </section>
             </div>

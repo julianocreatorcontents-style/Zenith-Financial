@@ -44,7 +44,6 @@ export default defineConfig({
           }
           if (
             id.includes('/lucide-react/') ||
-            id.includes('/@tabler/') ||
             id.includes('/motion/') ||
             id.includes('/framer-motion/')
           ) {

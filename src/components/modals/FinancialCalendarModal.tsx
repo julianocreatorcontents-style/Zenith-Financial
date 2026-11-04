@@ -18,11 +18,24 @@ export const FinancialCalendarModal: React.FC<FinancialCalendarModalProps> = ({
   const [selectedDay, setSelectedDay] = useState<number | null>(null);
   const [selectedItemId, setSelectedItemId] = useState<string>('');
   const [editingData, setEditingData] = useState<any>(null);
+  const [viewDate, setViewDate] = useState(() => {
+    const now = new Date();
+    return new Date(now.getFullYear(), now.getMonth(), 1);
+  });
 
-  const currentYear = 2026;
-  const currentMonth = 10; // Novembro
-  const daysInMonth = 30;
-  const startDayOfWeek = 0; // 1 de Novembro de 2026 é domingo
+  const currentYear = viewDate.getFullYear();
+  const currentMonth = viewDate.getMonth();
+  const daysInMonth = new Date(currentYear, currentMonth + 1, 0).getDate();
+  const startDayOfWeek = new Date(currentYear, currentMonth, 1).getDay();
+  const monthLabel = viewDate.toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' });
+  const shortMonth = String(currentMonth + 1).padStart(2, '0');
+
+  const changeMonth = (offset: number) => {
+    setViewDate(prev => new Date(prev.getFullYear(), prev.getMonth() + offset, 1));
+    setSelectedDay(null);
+    setSelectedItemId('');
+    setEditingData(null);
+  };
 
   const dayData = useMemo(() => {
     if (selectedDay === null) return null;
@@ -64,7 +77,7 @@ export const FinancialCalendarModal: React.FC<FinancialCalendarModalProps> = ({
 
       const txs = transactions.filter(t => {
         const txDate = t.date?.toDate ? t.date.toDate() : new Date(t.date);
-        return txDate.getDate() === d && txDate.getMonth() === currentMonth;
+        return txDate.getDate() === d && txDate.getMonth() === currentMonth && txDate.getFullYear() === currentYear;
       });
 
       txs.forEach(tx => {
@@ -108,6 +121,9 @@ export const FinancialCalendarModal: React.FC<FinancialCalendarModalProps> = ({
     if (editingData.isAsset) {
       await onUpdateAsset(editingData.id, {
         manualBalance: Number(editingData.manualBalance || editingData.currentValue || editingData.value),
+        manualBalanceDate: selectedDay !== null
+          ? new Date(currentYear, currentMonth, selectedDay, 12, 0, 0)
+          : new Date(),
         manualDailyYield: Number(editingData.manualDailyYield || editingData.dailyYield),
         manualWeekendYield: editingData.manualWeekendYield ? Number(editingData.manualWeekendYield) : null
       });
@@ -133,7 +149,23 @@ export const FinancialCalendarModal: React.FC<FinancialCalendarModalProps> = ({
         <div className="flex justify-between items-center mb-6">
           <div>
             <h3 className="text-xl font-bold">Calendário Financeiro</h3>
-            <p className="text-xs text-[var(--text-muted)]">Novembro de 2026</p>
+            <div className="mt-1 flex items-center gap-2">
+              <button
+                onClick={() => changeMonth(-1)}
+                className="rounded-full bg-[var(--bg-app)] p-1 text-[var(--text-muted)] hover:text-[var(--accent)]"
+                aria-label="Mês anterior"
+              >
+                <ChevronLeft size={14} />
+              </button>
+              <p className="text-xs capitalize text-[var(--text-muted)]">{monthLabel}</p>
+              <button
+                onClick={() => changeMonth(1)}
+                className="rounded-full bg-[var(--bg-app)] p-1 text-[var(--text-muted)] hover:text-[var(--accent)]"
+                aria-label="Próximo mês"
+              >
+                <ChevronRight size={14} />
+              </button>
+            </div>
           </div>
           <button onClick={onClose} className="p-2 bg-[var(--bg-app)] rounded-full text-[var(--text-muted)] hover:text-white">
             <X size={20} />
@@ -151,7 +183,7 @@ export const FinancialCalendarModal: React.FC<FinancialCalendarModalProps> = ({
             const isSelected = selectedDay === day;
             const hasTx = transactions.some(t => {
               const txDate = t.date?.toDate ? t.date.toDate() : new Date(t.date);
-              return txDate.getDate() === day && txDate.getMonth() === currentMonth;
+              return txDate.getDate() === day && txDate.getMonth() === currentMonth && txDate.getFullYear() === currentYear;
             });
 
             return (
@@ -174,7 +206,7 @@ export const FinancialCalendarModal: React.FC<FinancialCalendarModalProps> = ({
           <div className="animate-in fade-in space-y-4">
             
             <div className="bg-gradient-to-br from-[var(--accent)]/20 to-[var(--bg-app)] border-2 border-[var(--accent)]/40 rounded-2xl p-4">
-              <p className="text-[10px] font-bold uppercase tracking-widest text-[var(--accent)] mb-1">Resumo Global até {selectedDay}/11</p>
+              <p className="text-[10px] font-bold uppercase tracking-widest text-[var(--accent)] mb-1">Resumo Global até {selectedDay}/{shortMonth}</p>
               <div className="flex justify-between items-end">
                 <div>
                   <p className="text-xs text-[var(--text-muted)] mb-1">Patrimônio Total</p>
@@ -225,7 +257,7 @@ export const FinancialCalendarModal: React.FC<FinancialCalendarModalProps> = ({
                   <div className="space-y-4">
                     <div className="bg-[var(--bg-app)] p-3 rounded-xl flex justify-between items-center">
                       <div>
-                        <p className="text-[9px] uppercase text-[var(--text-muted)]">Saldo em {selectedDay}/11</p>
+                        <p className="text-[9px] uppercase text-[var(--text-muted)]">Saldo em {selectedDay}/{shortMonth}</p>
                         <p className="text-sm font-mono font-bold">{FMT(dayData.assetSnapshots[editingData.id]?.balance || 0)}</p>
                       </div>
                       <div className="text-right">

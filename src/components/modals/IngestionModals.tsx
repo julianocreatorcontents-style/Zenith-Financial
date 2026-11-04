@@ -8,17 +8,19 @@ export function Shimmer({ className }: { className?: string }) {
   );
 }
 
+export type IngestionOptionId = 'scanner' | 'upload' | 'spreadsheet' | 'manual';
+
 export interface IngestionHubProps {
   isOpen: boolean;
   onClose: () => void;
-  onProcess: (optionId: string) => void;
+  onProcess: (optionId: IngestionOptionId) => void;
   language?: string;
 }
 
 export function IngestionHub({ isOpen, onClose, onProcess, language }: IngestionHubProps) {
   const t = (pt: string, en: string) => (language === 'en-US' ? en : pt);
 
-  const options = [
+  const options: Array<{ id: IngestionOptionId; icon: React.ReactNode; label: string; color: string }> = [
     { id: 'scanner', icon: <QrCode size={20} />, label: t('Scanner QR/Boleto', 'QR/Boleto Scanner'), color: '#00FFA3' },
     { id: 'upload', icon: <FileText size={20} />, label: t('Upload de Documentos', 'Document Upload'), color: '#007AFF' },
     { id: 'spreadsheet', icon: <Table size={20} />, label: t('Importar Planilha', 'Import Spreadsheet'), color: '#FF9500' },
@@ -63,6 +65,7 @@ export interface ReviewModalProps {
   onCancel: () => void;
   language?: string;
   isProcessing?: boolean;
+  assets?: any[];
 }
 
 export function ReviewModal({
@@ -71,17 +74,32 @@ export function ReviewModal({
   onCancel,
   language,
   isProcessing,
+  assets = [],
 }: ReviewModalProps) {
   const t = (pt: string, en: string) => (language === 'en-US' ? en : pt);
+  const selectableAssets = assets.filter(
+    (a: any) => a.type === 'liquidity' || a.type === 'investment'
+  );
   const [formData, setFormData] = useState({ ...transaction });
 
   useEffect(() => {
-    if (transaction) setFormData({ ...transaction });
-  }, [transaction]);
+    if (transaction) {
+      setFormData({
+        ...transaction,
+        assetId:
+          transaction.assetId ||
+          (selectableAssets.length === 1 ? selectableAssets[0].id : ''),
+      });
+    }
+  }, [transaction, assets]);
 
   if (!transaction && !isProcessing) return null;
 
+  const needsAsset = formData.type === 'in' || formData.type === 'out';
+  const canConfirm = !needsAsset || Boolean(formData.assetId);
+
   const handleConfirm = () => {
+    if (!canConfirm) return;
     onConfirm(formData);
   };
 
@@ -150,7 +168,30 @@ export function ReviewModal({
                 <option value="Outros">Outros</option>
               </select>
             </div>
+            {needsAsset && (
+              <div className="flex justify-between items-center gap-3">
+                <span className="text-[10px] font-bold text-[var(--text-muted)] uppercase tracking-widest">
+                  {t('Conta', 'Account')}
+                </span>
+                <select
+                  className="max-w-[60%] bg-transparent text-base font-medium text-[var(--text-primary)] outline-none border-b border-[var(--border-card)] focus:border-[var(--accent)] transition-colors cursor-pointer sm:text-sm"
+                  value={formData.assetId || ''}
+                  onChange={(e) => setFormData({ ...formData, assetId: e.target.value })}
+                >
+                  <option value="">{t('Selecione...', 'Select...')}</option>
+                  {selectableAssets.map((asset: any) => (
+                    <option key={asset.id} value={asset.id}>{asset.name}</option>
+                  ))}
+                </select>
+              </div>
+            )}
           </div>
+
+          {!canConfirm && (
+            <p className="text-[10px] font-medium text-[var(--trend-down)]">
+              {t('Selecione a conta de origem/destino para confirmar.', 'Select the source/destination account to confirm.')}
+            </p>
+          )}
 
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <button
@@ -161,7 +202,8 @@ export function ReviewModal({
             </button>
             <button
               onClick={handleConfirm}
-              className="rounded-2xl bg-[var(--accent)] py-4 text-xs font-black uppercase tracking-widest text-[var(--bg-app)] shadow-[0_0_20px_color-mix(in_srgb,var(--accent)_30%,transparent)] transition-all hover:scale-[1.02]"
+              disabled={!canConfirm}
+              className="rounded-2xl bg-[var(--accent)] py-4 text-xs font-black uppercase tracking-widest text-[var(--bg-app)] shadow-[0_0_20px_color-mix(in_srgb,var(--accent)_30%,transparent)] transition-all hover:scale-[1.02] disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:scale-100"
             >
               {t('Confirmar', 'Confirm')}
             </button>

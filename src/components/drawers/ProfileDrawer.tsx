@@ -276,7 +276,8 @@ export interface ProfileDrawerProps {
   onClearApiKeyError?: () => void;
   onSaveApiKey?: (key: string) => void;
   onSaveProfile?: (profile: any) => Promise<void>;
-  userId?: string;
+  userId: string;
+  onRestoreTrash?: (item: any) => Promise<void>;
   currentConfig?: any;
   settingsLanguage?: string;
   onLogout: () => void;
@@ -298,6 +299,7 @@ export function ProfileDrawer({
   onSaveApiKey,
   onSaveProfile,
   userId,
+  onRestoreTrash,
   currentConfig,
   settingsLanguage,
   onLogout,
@@ -431,7 +433,7 @@ export function ProfileDrawer({
                   onClose={goBack}
                   userId={userId}
                   currentConfig={currentConfig}
-                  language={settingsLanguage}
+                  language={settingsLanguage ?? language ?? 'pt-BR'}
                   chartFilter={chartFilter}
                   onChartFilterChange={onChartFilterChange}
                 />
@@ -451,7 +453,7 @@ export function ProfileDrawer({
 
           {activeDrawerPage === 'trash' && (
             <Suspense fallback={<LoadingSpinner />}>
-              <StorageTrashView user={user} language={language} embedded />
+              <StorageTrashView user={user} language={language} embedded onRestore={onRestoreTrash} />
             </Suspense>
           )}
         </div>

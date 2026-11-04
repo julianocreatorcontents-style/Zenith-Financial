@@ -62,3 +62,17 @@ html.high-contrast {
     transition: background-color 0.3s ease, color 0.3s ease;
   }
 }
+
+/* ===== Capacitor Mobile Safe Areas ===== */
+:root {
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+}
+html, body {
+  overscroll-behavior-y: contain;
+  -webkit-tap-highlight-color: transparent;
+}
+body {
+  padding-top: var(--safe-top);
+  padding-bottom: var(--safe-bottom);
+}

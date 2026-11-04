@@ -142,6 +142,117 @@ describe('assetYieldService — Âncora de Saldo e Rendimentos', () => {
     });
   });
 
+  describe('Saldo manual e impostos', () => {
+    it('soma o rendimento desde a âncora ao saldo manual (não congela o valor)', () => {
+      const today = new Date(2026, 9, 27);
+      const asset: any = {
+        id: 'asset-manual',
+        name: '99Pay',
+        value: 10000,
+        valorInvestido: 5000,
+        manualBalance: 10000,
+        manualBalanceDate: new Date(2026, 9, 25),
+        investmentStartDate: new Date(2026, 9, 25),
+        uid: 'user-1',
+      };
+
+      const info = calculateAssetYieldInfo(asset, 13.65, today);
+
+      expect(info.baseBalance).toBe(10000);
+      expect(info.yieldSinceAnchor).toBeGreaterThan(0);
+      expect(info.currentValue).toBeCloseTo(info.baseBalance + info.yieldSinceAnchor, 2);
+      expect(info.currentValue).toBeGreaterThan(info.baseBalance);
+    });
+
+    it('ignora manualBalance nulo e usa o value do ativo', () => {
+      const today = new Date(2026, 9, 27);
+      const asset: any = {
+        id: 'asset-null-manual',
+        name: '99Pay',
+        value: 5000,
+        valorInvestido: 5000,
+        manualBalance: null,
+        investmentStartDate: new Date(2026, 9, 25),
+        uid: 'user-1',
+      };
+
+      const info = calculateAssetYieldInfo(asset, 13.65, today);
+
+      expect(info.baseBalance).toBe(5000);
+      expect(info.currentValue).toBeGreaterThan(5000);
+    });
+
+    it('usa o tempo total do investimento no IR, não os dias desde a âncora', () => {
+      const today = new Date(2026, 9, 27);
+      const policy = {
+        indexer: 'CDI' as const,
+        rateType: 'PERCENT_INDEXER' as const,
+        dayCountConvention: 'CALENDAR_DAYS_365' as const,
+        rateTiers: [{ upTo: null, baseRateValue: 100, bonusRateValue: 0 }],
+      };
+
+      const asset: any = {
+        id: 'asset-tax',
+        name: 'CDB Teste',
+        value: 10000,
+        valorInvestido: 10000,
+        type: 'investment',
+        uid: 'user-1',
+        strategy: 'FIXED_INCOME_SIMPLE',
+        investmentStartDate: new Date(2024, 9, 25),
+        manualBalance: 10000,
+        manualBalanceDate: new Date(2026, 9, 25),
+        investmentPolicy: { ...policy, taxDisplayMode: 'NET' },
+      };
+
+      const net = calculateAssetYieldInfo(asset, 13.65, today);
+      const gross = calculateAssetYieldInfo(
+        { ...asset, investmentPolicy: { ...policy, taxDisplayMode: 'GROSS' } },
+        13.65,
+        today
+      );
+
+      expect(net.daysInvested).toBe(2);
+      expect(gross.yieldSinceAnchor).toBeGreaterThan(0);
+      // Após 720 dias a alíquota é 15%; a âncora recente não deve rebaixar para 22,5%.
+      expect(net.yieldSinceAnchor).toBeCloseTo(gross.yieldSinceAnchor * 0.85, 1);
+    });
+
+    it('aplica IOF apenas nos primeiros 29 dias contados do início do investimento', () => {
+      const today = new Date(2026, 9, 27);
+      const policy = {
+        indexer: 'CDI' as const,
+        rateType: 'PERCENT_INDEXER' as const,
+        dayCountConvention: 'CALENDAR_DAYS_365' as const,
+        rateTiers: [{ upTo: null, baseRateValue: 100, bonusRateValue: 0 }],
+      };
+
+      const asset: any = {
+        id: 'asset-iof',
+        name: 'CDB Novo',
+        value: 10000,
+        valorInvestido: 10000,
+        type: 'investment',
+        uid: 'user-1',
+        strategy: 'FIXED_INCOME_SIMPLE',
+        investmentStartDate: new Date(2026, 9, 25),
+        manualBalance: 10000,
+        manualBalanceDate: new Date(2026, 9, 25),
+        investmentPolicy: { ...policy, taxDisplayMode: 'NET' },
+      };
+
+      const net = calculateAssetYieldInfo(asset, 13.65, today);
+      const gross = calculateAssetYieldInfo(
+        { ...asset, investmentPolicy: { ...policy, taxDisplayMode: 'GROSS' } },
+        13.65,
+        today
+      );
+
+      expect(gross.yieldSinceAnchor).toBeGreaterThan(0);
+      expect(net.yieldSinceAnchor).toBe(0);
+    });
+  });
+
   describe('enrichAsset', () => {
     it('atualiza value dinamicamente e fornece métricas da âncora e do mês', () => {
       const anchorDate = new Date(2026, 9, 25);
@@ -169,6 +280,26 @@ describe('assetYieldService — Âncora de Saldo e Rendimentos', () => {
       expect(enriched.monthEndValue).toBeCloseTo(5096.34, 1);
       expect(enriched.monthYieldRemaining).toBeCloseTo(9.48, 1);
       expect(enriched.change).toContain('+R$');
+    });
+
+    it('mantém saldo negativo sem gerar rendimento sobre a dívida', () => {
+      const raw = {
+        id: 'asset-mp-saldo',
+        name: 'Mercado Pago · Saldo',
+        value: -50,
+        manualBalance: -50,
+        manualBalanceDate: new Date(2026, 9, 25),
+        investmentStartDate: new Date(2026, 9, 25),
+        valorInvestido: 0,
+        type: 'investment',
+        uid: 'user-1',
+      };
+
+      const enriched = enrichAsset(raw, 13.65, new Date(2026, 9, 27));
+
+      expect(enriched.currentValue).toBe(-50);
+      expect(enriched.yieldSinceAnchor).toBe(0);
+      expect(enriched.dailyYield).toBe(0);
     });
   });
 });

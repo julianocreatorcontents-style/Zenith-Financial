@@ -8,6 +8,7 @@ interface StorageTrashViewProps {
   user: User;
   language?: string;
   embedded?: boolean;
+  onRestore?: (item: any) => Promise<void>;
 }
 
 const COLLECTION_LABELS: Record<string, { pt: string; en: string }> = {
@@ -15,7 +16,7 @@ const COLLECTION_LABELS: Record<string, { pt: string; en: string }> = {
   assets: { pt: 'Ativo', en: 'Asset' }
 };
 
-export default function StorageTrashView({ user, language, embedded = false }: StorageTrashViewProps) {
+export default function StorageTrashView({ user, language, embedded = false, onRestore }: StorageTrashViewProps) {
   const t = (pt: string, en: string) => (language === 'en-US' ? en : pt);
   const [trashItems, setTrashItems] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -39,6 +40,10 @@ export default function StorageTrashView({ user, language, embedded = false }: S
     if (!item.originalCollection || !item.originalId) return;
     setBusyId(item.id);
     try {
+      if (onRestore) {
+        await onRestore(item);
+        return;
+      }
       const { id: _id, ref: _ref, ...data } = item.data || {};
       const batch = writeBatch(db);
       batch.set(doc(db, item.originalCollection, item.originalId), data);

@@ -24,10 +24,11 @@
 
 ## ⚠️ GOTCHAS CRÍTICOS (Termux)
 1. **NUNCA rode `bun install` no Termux.** Use `npm install`.
-2. **Testes:** os scripts `npm run ...` falham com `not found` por causa do shebang `/usr/bin/env`. Rode direto:
+2. **Lockfile oficial:** `package-lock.json` (npm). `bun.lock` e `bunfig.toml` foram removidos e são ignorados pelo Git. Use `bun run <script>` apenas para executar scripts, nunca para instalar dependências.
+3. **Testes:** os scripts `npm run ...` falham com `not found` por causa do shebang `/usr/bin/env`. Rode direto:
    - `node node_modules/vitest/vitest.mjs run`
    - `node node_modules/typescript/bin/tsc --noEmit`
    - `node node_modules/typescript/bin/tsc -p tsconfig.domain.json --noEmit`
-3. **Heredoc:** Divida blocos em partes menores que 60 linhas.
-4. **Antigravity CLI:** Não use para escrever arquivos, o patch está instável.
-5. **Firebase CLI:** Token expira a cada 1 hora. Se o script de leitura falhar, rode `firebase projects:list` para renovar.
+4. **Heredoc:** Divida blocos em partes menores que 60 linhas.
+5. **Antigravity CLI:** Não use para escrever arquivos, o patch está instável.
+6. **Firebase CLI:** Token expira a cada 1 hora. Se o script de leitura falhar, rode `firebase projects:list` para renovar.

@@ -4,13 +4,9 @@ const config: CapacitorConfig = {
   appId: 'com.zenith.financial',
   appName: 'Zenith Financial',
   webDir: 'dist',
-  server: {
-    androidScheme: 'https',
-  },
+  bundledWebRuntime: false,
   android: {
-    allowMixedContent: false,
-    captureInput: true,
-    webContentsDebuggingEnabled: false,
+    allowMixedContent: true,
   },
 };
 

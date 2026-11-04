@@ -2,11 +2,12 @@ import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { 
   auth, db, googleProvider, signInWithPopup, signOut, 
   signInWithEmailAndPassword, createUserWithEmailAndPassword, updateProfile,
-  collection, addDoc, doc, getDoc, setDoc, updateDoc, deleteDoc, onSnapshot, query, where, orderBy, serverTimestamp,
+  collection, addDoc, doc, setDoc, updateDoc, deleteDoc, onSnapshot, query, where, orderBy, serverTimestamp,
   handleFirestoreError, OperationType, getDocs, writeBatch, limit,
   FIRESTORE_ERROR_EVENT
 } from '../firebase';
 import { Timestamp } from 'firebase/firestore';
+import type { WriteBatch } from 'firebase/firestore';
 import { onAuthStateChanged, User } from 'firebase/auth';
 import { z } from 'zod';
 import { Capacitor } from '@capacitor/core';
@@ -30,14 +31,46 @@ import {
   parseTransactionAmount,
   isExpenseTransaction,
   isIncomeTransaction,
-  isYieldTransaction
+  isYieldTransaction,
+  resolveGoalTargets,
 } from '../lib/finance';
+import type { FinancialGoalTargets } from '../lib/finance';
 import { calculateNetWorthProjection } from '../lib/adapters/netWorthProjection';
 import { enrichAsset } from '../lib/adapters/assetYieldService';
+import { calculateAssetBalanceUpdate } from '../lib/adapters/assetBalance';
 import { getCachedCdiRate, fetchLiveCdiRate } from '../lib/adapters/marketRateService';
 import type { MarketRateState } from '../lib/adapters/marketRateService';
 import { mapSpreadsheetRow } from '../lib/spreadsheetParser';
 import type { Asset, UserProfile, Transaction, DDA, Settings } from '../types/app';
+
+type AssetDeltaMap = Map<string, number>;
+
+function addAssetDelta(deltas: AssetDeltaMap, assetId: string | undefined, delta: number) {
+  if (!assetId || !Number.isFinite(delta) || delta === 0) return;
+  deltas.set(assetId, (deltas.get(assetId) ?? 0) + delta);
+}
+
+/**
+ * Agenda as atualizações de saldo no mesmo writeBatch da transação.
+ * Usa o snapshot local (`rawAssets`) para não exigir leituras extras e
+ * preservar o funcionamento offline do Firestore.
+ */
+function applyAssetDeltas(
+  batch: WriteBatch,
+  deltas: AssetDeltaMap,
+  assets: Asset[],
+) {
+  for (const [assetId, delta] of deltas) {
+    if (delta === 0) continue;
+    const asset = assets.find(a => a.id === assetId);
+    if (!asset) continue;
+    const update = calculateAssetBalanceUpdate(asset, Math.abs(delta), delta > 0);
+    batch.update(doc(db, 'assets', assetId), {
+      ...update,
+      updatedAt: serverTimestamp(),
+    });
+  }
+}
 
 export interface FirestoreIssue {
   id: string;
@@ -120,7 +153,7 @@ export function useZenithData() {
       try {
         if (snap.exists()) {
           const data = snap.data() as UserProfile;
-          setProfile({ uid: snap.id, ...data });
+          setProfile({ ...data, uid: snap.id });
           if (data.investor_profile) setInvestorProfile(data.investor_profile);
         } else {
           const initialProfile: any = {
@@ -368,30 +401,6 @@ export function useZenithData() {
     }
   }, []);
 
-  // Ajuste atômico no saldo e valor investido da conta de origem/destino
-  const adjustAssetBalance = useCallback(async (assetId: string, amount: number, isAddition: boolean) => {
-    if (!assetId || amount <= 0) return;
-    try {
-      const assetRef = doc(db, 'assets', assetId);
-      const snap = await getDoc(assetRef);
-      if (!snap.exists()) return;
-      const currentVal = Number(snap.data().value) || 0;
-      const currentInvested = Number(snap.data().valorInvestido ?? snap.data().value) || currentVal;
-      const delta = isAddition ? amount : -amount;
-      const newVal = Math.max(0, Math.round((currentVal + delta) * 100) / 100);
-      const newInvested = Math.max(0, Math.round((currentInvested + delta) * 100) / 100);
-
-      await updateDoc(assetRef, {
-        value: newVal,
-        valorInvestido: newInvested,
-        investmentStartDate: new Date(),
-        updatedAt: serverTimestamp()
-      });
-    } catch (err) {
-      console.error(`[ASSET_SYNC] Erro ao sincronizar ativo ${assetId}:`, err);
-    }
-  }, []);
-
   // 11. CRON: Aplicação de Transações Agendadas / Pendentes (Contas a Pagar)
   useEffect(() => {
     if (!user) return;
@@ -417,15 +426,22 @@ export function useZenithData() {
 
           const txDate = parseTransactionDate(tx.date);
           if (txDate && txDate.getTime() <= endOfToday.getTime()) {
-            if (tx.assetId) {
-              const isOut = isExpenseTransaction(tx);
-              await adjustAssetBalance(tx.assetId, Number(tx.value) || 0, !isOut);
+            if (tx.assetId && !rawAssets.some(a => a.id === tx.assetId)) {
+              continue;
             }
 
-            await updateDoc(doc(db, 'transactions', tx.id), { 
+            const amount = Number(tx.value) || 0;
+            const isOut = isExpenseTransaction(tx);
+            const deltas: AssetDeltaMap = new Map();
+            addAssetDelta(deltas, tx.assetId, isOut ? -amount : amount);
+
+            const batch = writeBatch(db);
+            applyAssetDeltas(batch, deltas, rawAssets);
+            batch.update(doc(db, 'transactions', tx.id), {
               applied: true,
               status: 'Confirmado'
             });
+            await batch.commit();
             hasChanges = true;
           }
         }
@@ -443,7 +459,7 @@ export function useZenithData() {
     return () => {
       isMounted = false;
     };
-  }, [user, adjustAssetBalance, recalculateBalances]);
+  }, [user, rawAssets, recalculateBalances]);
 
   // Limpeza de lançamentos antigos pagos solicitada pelo usuário (manter apenas o lançamento Copel)
 
@@ -451,8 +467,19 @@ export function useZenithData() {
   const moveToTrash = useCallback(async (item: any, collectionName: string) => {
     try {
       if (!user) return;
-      const batch = writeBatch(db);
+
+      const deltas: AssetDeltaMap = new Map();
+      if (collectionName === 'transactions' && item.applied && item.assetId) {
+        const amount = Number(item.value) || 0;
+        const isOut = isExpenseTransaction(item);
+        addAssetDelta(deltas, item.assetId, isOut ? amount : -amount);
+      }
+
       const trashRef = doc(collection(db, 'trash'));
+      const itemRef = doc(db, collectionName, item.id);
+
+      const batch = writeBatch(db);
+      applyAssetDeltas(batch, deltas, rawAssets);
       batch.set(trashRef, {
         originalId: item.id,
         originalCollection: collectionName,
@@ -460,15 +487,8 @@ export function useZenithData() {
         deletedAt: serverTimestamp(),
         uid: user.uid
       });
-      batch.delete(doc(db, collectionName, item.id));
-
+      batch.delete(itemRef);
       await batch.commit();
-
-      // Se for transação aplicada a um ativo, reverte o impacto financeiro no ativo
-      if (collectionName === 'transactions' && item.applied && item.assetId) {
-        const isOut = isExpenseTransaction(item);
-        await adjustAssetBalance(item.assetId, Number(item.value) || 0, isOut);
-      }
 
       if (collectionName === 'transactions') {
         await recalculateBalances(user.uid);
@@ -476,7 +496,34 @@ export function useZenithData() {
     } catch (e) {
       handleFirestoreError(e, OperationType.DELETE, `${collectionName}/${item.id}`);
     }
-  }, [user, adjustAssetBalance, recalculateBalances]);
+  }, [user, rawAssets, recalculateBalances]);
+
+  const restoreFromTrash = useCallback(async (item: any) => {
+    if (!user || !item?.originalCollection || !item?.originalId) return;
+    try {
+      const data = item.data || {};
+      const { id: _id, ref: _ref, ...restoredData } = data;
+
+      const deltas: AssetDeltaMap = new Map();
+      if (item.originalCollection === 'transactions' && data.applied && data.assetId) {
+        const amount = Number(data.value) || 0;
+        const isOut = isExpenseTransaction(data);
+        addAssetDelta(deltas, data.assetId, isOut ? -amount : amount);
+      }
+
+      const batch = writeBatch(db);
+      applyAssetDeltas(batch, deltas, rawAssets);
+      batch.set(doc(db, item.originalCollection, item.originalId), restoredData);
+      batch.delete(doc(db, 'trash', item.id));
+      await batch.commit();
+
+      if (item.originalCollection === 'transactions') {
+        await recalculateBalances(user.uid);
+      }
+    } catch (e) {
+      handleFirestoreError(e, OperationType.WRITE, `trash/${item.id}`);
+    }
+  }, [user, rawAssets, recalculateBalances]);
 
   // Alternar modo de privacidade
   const togglePrivacyMode = useCallback(() => {
@@ -626,15 +673,25 @@ export function useZenithData() {
       date: data.date ? Timestamp.fromDate(txDate) : serverTimestamp() 
     };
 
-    await setDoc(newTxRef, txData).catch(e => handleFirestoreError(e, OperationType.CREATE, 'transactions'));
-
+    const deltas: AssetDeltaMap = new Map();
     if (applied && data.assetId) {
+      const amount = Number(data.value) || 0;
       const isOut = isExpenseTransaction(data);
-      await adjustAssetBalance(data.assetId, Number(data.value) || 0, !isOut);
+      addAssetDelta(deltas, data.assetId, isOut ? -amount : amount);
+    }
+
+    try {
+      const batch = writeBatch(db);
+      applyAssetDeltas(batch, deltas, rawAssets);
+      batch.set(newTxRef, txData);
+      await batch.commit();
+    } catch (e) {
+      handleFirestoreError(e, OperationType.CREATE, 'transactions');
+      return;
     }
 
     await recalculateBalances(user.uid);
-  }, [user, adjustAssetBalance, recalculateBalances]);
+  }, [user, rawAssets, recalculateBalances]);
 
   const updateTransaction = useCallback(async (selectedTx: any, data: any) => {
     if (!user) return;
@@ -653,52 +710,83 @@ export function useZenithData() {
       date: data.date ? Timestamp.fromDate(txDate) : serverTimestamp() 
     };
     
-    if (selectedTx.categoria_primaria !== data.categoria_primaria) {
-      const ruleRef = doc(collection(db, 'user_rules'));
-      await setDoc(ruleRef, {
-        uid: user.uid,
-        pattern: selectedTx.label,
-        category: data.categoria_primaria,
-        createdAt: serverTimestamp()
-      }).catch(e => console.error("Error saving rule:", e));
-    }
-
-    // Reverte impacto antigo se estava aplicado a uma conta
+    const deltas: AssetDeltaMap = new Map();
     if (selectedTx.applied && selectedTx.assetId) {
+      const oldAmount = Number(selectedTx.value) || 0;
       const wasOut = isExpenseTransaction(selectedTx);
-      await adjustAssetBalance(selectedTx.assetId, Number(selectedTx.value) || 0, wasOut);
+      addAssetDelta(deltas, selectedTx.assetId, wasOut ? oldAmount : -oldAmount);
     }
-
-    // Aplica novo impacto na nova ou mesma conta
     if (applied && data.assetId) {
+      const newAmount = Number(data.value) || 0;
       const isOut = isExpenseTransaction(data);
-      await adjustAssetBalance(data.assetId, Number(data.value) || 0, !isOut);
+      addAssetDelta(deltas, data.assetId, isOut ? -newAmount : newAmount);
     }
 
-    await updateDoc(txRef, txData).catch(e => handleFirestoreError(e, OperationType.UPDATE, `transactions/${selectedTx.id}`));
+    const shouldSaveRule = selectedTx.categoria_primaria !== data.categoria_primaria;
+    const ruleRef = shouldSaveRule ? doc(collection(db, 'user_rules')) : null;
+
+    try {
+      const batch = writeBatch(db);
+      applyAssetDeltas(batch, deltas, rawAssets);
+      batch.update(txRef, txData);
+      if (ruleRef) {
+        batch.set(ruleRef, {
+          uid: user.uid,
+          pattern: selectedTx.label,
+          category: data.categoria_primaria,
+          createdAt: serverTimestamp()
+        });
+      }
+      await batch.commit();
+    } catch (e) {
+      handleFirestoreError(e, OperationType.UPDATE, `transactions/${selectedTx.id}`);
+      return;
+    }
+
     await recalculateBalances(user.uid);
-  }, [user, adjustAssetBalance, recalculateBalances]);
+  }, [user, rawAssets, recalculateBalances]);
 
   const confirmPendingTransaction = useCallback(async (updatedTx?: any) => {
     const dataToSave = updatedTx || pendingTransaction;
     if (!dataToSave || !user) return;
     try {
+      const now = new Date();
+      const parsedDate = parseTransactionDate(dataToSave.date) || now;
+      const endOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
+      const isFuture = parsedDate.getTime() > endOfToday.getTime();
+
       const validated = TransactionSchema.parse({
         label: dataToSave.label,
         value: Number(dataToSave.value),
         type: dataToSave.type,
-        categoria_primaria: dataToSave.categoria_primaria,
+        assetId: dataToSave.assetId,
+        categoria_primaria: dataToSave.categoria_primaria ?? dataToSave.category,
         etiqueta_personalizada: dataToSave.etiqueta_personalizada,
         metodo_origem: dataToSave.metodo_origem,
-        date: new Date()
+        isRecurring: Boolean(dataToSave.isRecurring),
+        durationMonths: dataToSave.durationMonths ?? null,
+        applied: !isFuture,
+        status: isFuture ? 'Futuro' : 'Confirmado',
+        date: parsedDate
       });
 
+      const deltas: AssetDeltaMap = new Map();
+      if (!isFuture && validated.assetId) {
+        const amount = Number(validated.value) || 0;
+        const isOut = isExpenseTransaction(validated);
+        addAssetDelta(deltas, validated.assetId, isOut ? -amount : amount);
+      }
+
       const newTxRef = doc(collection(db, 'transactions'));
-      await setDoc(newTxRef, {
+      const batch = writeBatch(db);
+      applyAssetDeltas(batch, deltas, rawAssets);
+      batch.set(newTxRef, {
         ...validated,
         uid: user.uid,
-        date: serverTimestamp()
+        date: Timestamp.fromDate(parsedDate)
       });
+      await batch.commit();
+
       await recalculateBalances(user.uid);
       setPendingTransaction(null);
     } catch (e) {
@@ -708,7 +796,7 @@ export function useZenithData() {
         handleFirestoreError(e, OperationType.WRITE, 'transactions');
       }
     }
-  }, [pendingTransaction, user, recalculateBalances]);
+  }, [pendingTransaction, user, rawAssets, recalculateBalances]);
 
   // Importação de Planilhas
   const handleFileUpload = useCallback(async (file: File) => {
@@ -717,35 +805,52 @@ export function useZenithData() {
       const reader = new FileReader();
       reader.onload = async (evt) => {
         try {
-          const buffer = evt.target?.result;
+          const buffer = evt.target?.result as ArrayBuffer | null;
           if (!buffer) return;
 
+          const userId = user?.uid;
+          if (!userId) return;
+
           const XLSX = await import('xlsx');
-          const wb = XLSX.read(buffer, { type: 'binary' });
+          const wb = XLSX.read(new Uint8Array(buffer), { type: 'array' });
           const firstSheet = wb.SheetNames[0];
           const rawRows = XLSX.utils.sheet_to_json(wb.Sheets[firstSheet]) as any[];
 
           const parsedList = rawRows
             .map(row => mapSpreadsheetRow(row))
-            .filter((t): t is NonNullable<typeof t> => t !== null);
+            .filter((t): t is NonNullable<typeof t> => t !== null)
+            .filter(t => t.label.trim().length > 0 && Number.isFinite(t.value) && t.value > 0);
 
           if (parsedList.length === 0) {
             setError('Nenhuma transação válida encontrada na planilha.');
             return;
           }
 
+          const now = new Date();
+          const endOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
           const batch = writeBatch(db);
+
           parsedList.forEach(t => {
+            const txDate = t.date instanceof Date && !Number.isNaN(t.date.getTime()) ? t.date : now;
+            const isFuture = txDate.getTime() > endOfToday.getTime();
+            const type = t.type === 'in' || t.type === 'out' || t.type === 'yield' ? t.type : 'out';
             const docRef = doc(collection(db, 'transactions'));
-            batch.set(docRef, { ...t, uid: user!.uid, date: serverTimestamp() });
+            batch.set(docRef, {
+              ...t,
+              type,
+              uid: userId,
+              date: Timestamp.fromDate(txDate),
+              applied: !isFuture,
+              status: isFuture ? 'Futuro' : 'Confirmado',
+            });
           });
           await batch.commit();
-          await recalculateBalances(user!.uid);
+          await recalculateBalances(userId);
         } catch (e: any) {
           setError(`Erro ao processar planilha: ${e.message}`);
         }
       };
-      reader.readAsBinaryString(file);
+      reader.readAsArrayBuffer(file);
       return;
     }
 
@@ -763,7 +868,8 @@ export function useZenithData() {
             label: result.label || 'Transação Importada',
             value: result.value || 0,
             type: result.type || 'out',
-            categoria_primaria: result.category || 'Geral'
+            categoria_primaria: result.category || 'Geral',
+            date: new Date()
           });
         } catch (err) {
           if (err instanceof MissingApiKeyError || err instanceof InvalidApiKeyError) {
@@ -786,6 +892,13 @@ export function useZenithData() {
     }
   }, [user, getGeminiApiKey, recalculateBalances, settings?.language]);
 
+  const assetsValueAt = useCallback((date: Date) => {
+    return rawAssets.reduce(
+      (sum, asset) => sum + enrichAsset(asset, marketRate.cdiAnnualPercent, date).currentValue,
+      0
+    );
+  }, [rawAssets, marketRate.cdiAnnualPercent]);
+
   // Cálculos de Métricas
   const metrics = useMemo(() => {
     const now = new Date();
@@ -798,8 +911,8 @@ export function useZenithData() {
     const prevTotals = calculateTotals(transactions, prevMonth, prevYear, assets);
 
     const monthBalance = calculateMonthBalance(transactions, currentMonth, currentYear);
-    const netWorth = calculateNetWorth(assets, transactions, currentMonth, currentYear);
-    const previousNetWorth = calculateNetWorth(assets, transactions, prevMonth, prevYear);
+    const netWorth = calculateNetWorth(assets, transactions, currentMonth, currentYear, assetsValueAt);
+    const previousNetWorth = calculateNetWorth(assets, transactions, prevMonth, prevYear, assetsValueAt);
 
     const investmentAssets = assets.filter(a => a.type === 'investment');
     const investedCost = investmentAssets.reduce((acc, a) => acc + (a.valorInvestido ?? a.value ?? 0), 0);
@@ -832,11 +945,16 @@ export function useZenithData() {
       investmentsTrend: currentTotals.investments >= investedCost ? ('up' as const) : ('down' as const),
       investmentsData: investmentAssets.map(a => ({ v: a.value ?? 0 }))
     };
-  }, [transactions, assets]);
+  }, [transactions, assets, assetsValueAt]);
 
   const chartData = useMemo(() => {
-    return calculateEvolutionData(assets, transactions, { period: 'Meses', month: 'Atual', day: 'Todos' });
-  }, [assets, transactions]);
+    return calculateEvolutionData(
+      rawAssets,
+      transactions,
+      { period: 'Meses', month: 'Atual', day: 'Todos' },
+      { assetsValueAt }
+    );
+  }, [rawAssets, transactions, assetsValueAt]);
 
   const projectionData = useMemo(() => {
     return calculateNetWorthProjection({
@@ -859,6 +977,34 @@ export function useZenithData() {
   const t = useCallback((pt: string, en: string) => {
     return settings?.language === 'en-US' ? en : pt;
   }, [settings?.language]);
+
+  const goals = useMemo(
+    () => resolveGoalTargets(settings?.zenith_config?.goals),
+    [settings?.zenith_config?.goals]
+  );
+
+  const updateGoals = useCallback(async (next: Partial<FinancialGoalTargets>) => {
+    if (!user) return;
+    const resolved = resolveGoalTargets(next);
+
+    await updateDoc(doc(db, 'settings', user.uid), {
+      'zenith_config.goals': resolved,
+    }).catch(e => handleFirestoreError(e, OperationType.UPDATE, `settings/${user.uid}`));
+
+    setSettings(prev => {
+      if (!prev) return prev;
+      const nextConfig: NonNullable<Settings['zenith_config']> = {
+        ...(prev.zenith_config as NonNullable<Settings['zenith_config']>),
+        goals: resolved,
+      };
+      try {
+        localStorage.setItem(`zenith_config_${user.uid}`, JSON.stringify(nextConfig));
+      } catch (e) {
+        console.warn('Storage failed:', e);
+      }
+      return { ...prev, zenith_config: nextConfig };
+    });
+  }, [user]);
 
   return {
     user,
@@ -892,6 +1038,8 @@ export function useZenithData() {
     projectionData,
     cashFlowData,
     portfolioAllocationPercent,
+    goals,
+    updateGoals,
     t,
     getGeminiApiKey,
     togglePrivacyMode,
@@ -905,6 +1053,7 @@ export function useZenithData() {
     handleRejectDDA,
     recalculateBalances,
     moveToTrash,
+    restoreFromTrash,
     createAsset,
     updateAsset,
     deleteAsset,
