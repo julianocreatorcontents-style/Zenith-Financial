@@ -265,3 +265,40 @@ export function getAiErrorMessage(error: unknown, language = 'pt-BR'): string {
     ? 'Could not complete the AI request. Please try again.'
     : 'Não foi possível concluir a solicitação de IA. Tente novamente.';
 }
+
+// ==========================================
+// Função de Chat do Agente Financeiro (Zenith IA)
+// ==========================================
+export async function chatWithZenithAI(
+  apiKey: string,
+  chatHistory: { role: 'user' | 'model'; text: string }[],
+  userContext: string
+): Promise<string> {
+  const { GoogleGenAI } = await getGenAI();
+  const ai = new GoogleGenAI({ apiKey });
+
+  const systemPrompt = `Você é o Zenith IA, um consultor financeiro pessoal inteligente, amigável e direto.
+Sempre responda em português do Brasil.
+Use os dados reais do usuário abaixo para responder. Não invente dados.
+Se o usuário perguntar algo fora do escopo financeiro, responda gentilmente que seu foco é ajudá-lo com as finanças dele.
+
+--- CONTEXTO FINANCEIRO ATUAL DO USUÁRIO ---
+${userContext}
+-------------------------------------------
+
+Histórico da conversa até agora:
+${chatHistory.map(msg => `${msg.role === 'user' ? 'Usuário' : 'Zenith IA'}: ${msg.text}`).join('\n')}
+`;
+
+  try {
+    const response = await ai.models.generateContent({
+      model: MODEL,
+      contents: systemPrompt,
+    });
+
+    return response.text || 'Não consegui gerar uma resposta no momento.';
+  } catch (error: any) {
+    console.error('[Zenith IA] Erro na chamada:', error);
+    throw new Error('Falha ao consultar a IA. Verifique sua chave e conexão.');
+  }
+}

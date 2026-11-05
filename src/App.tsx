@@ -444,7 +444,7 @@ export default function ZenithApp() {
                 language={settings?.language}
                 transactions={transactions}
                 assets={assets}
-                getApiKey={getGeminiApiKey}
+                getGeminiApiKey={getGeminiApiKey}
                 onApiKeyError={handleAiError}
                 userRules={userRules}
               />
