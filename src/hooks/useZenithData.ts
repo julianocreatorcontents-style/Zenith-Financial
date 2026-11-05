@@ -11,6 +11,7 @@ import type { WriteBatch } from 'firebase/firestore';
 import { onAuthStateChanged, User } from 'firebase/auth';
 import { z } from 'zod';
 import { Capacitor } from '@capacitor/core';
+import { FirebaseAuthentication } from '@capacitor-firebase/authentication';
 import {
   extractDocument,
   getAiErrorMessage,
