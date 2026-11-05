@@ -1,5 +1,16 @@
 import { initializeApp } from 'firebase/app';
-import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, signInWithEmailAndPassword, createUserWithEmailAndPassword, updateProfile } from 'firebase/auth';
+import { 
+  getAuth, 
+  initializeAuth,
+  indexedDBLocalPersistence,
+  browserLocalPersistence, 
+  GoogleAuthProvider, 
+  signInWithPopup, 
+  signOut, 
+  signInWithEmailAndPassword, 
+  createUserWithEmailAndPassword, 
+  updateProfile 
+} from 'firebase/auth';
 import { 
   getFirestore, 
   initializeFirestore, 
@@ -48,7 +59,20 @@ function createFirestoreInstance() {
 }
 
 export const db = createFirestoreInstance();
-export const auth = getAuth(app);
+
+// Inicializa Auth com indexedDB como primário e localStorage como fallback
+function createAuthInstance() {
+  try {
+    return initializeAuth(app, {
+      persistence: [indexedDBLocalPersistence, browserLocalPersistence],
+    });
+  } catch (err) {
+    console.warn('[Auth] Falling back to standard getAuth:', err);
+    return getAuth(app);
+  }
+}
+
+export const auth = createAuthInstance();
 export const googleProvider = new GoogleAuthProvider();
 
 // Error handling for Firestore

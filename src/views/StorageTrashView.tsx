@@ -5,7 +5,7 @@ import { db, handleFirestoreError, OperationType } from '../firebase';
 import type { User } from 'firebase/auth';
 
 interface StorageTrashViewProps {
-  user: User;
+  user: { uid: string; displayName?: string | null; email?: string | null };
   language?: string;
   embedded?: boolean;
   onRestore?: (item: any) => Promise<void>;

@@ -1,12 +1,15 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import { friendlyFirebaseError } from '../lib/errorUtils';
 import { motion } from 'motion/react';
-import { TrendingUp, AlertCircle } from 'lucide-react';
+import { TrendingUp, AlertCircle, WifiOff } from 'lucide-react';
 import { Capacitor } from '@capacitor/core';
 
 interface AuthViewProps {
   onGoogleLogin: () => Promise<void>;
   onEmailLogin: (email: string, password: string) => Promise<void>;
   onRegister: (name: string, email: string, password: string) => Promise<void>;
+  onOfflineLogin?: () => void;
+  cachedUser?: { displayName?: string | null; email?: string | null } | null;
   error?: string | null;
   onClearError?: () => void;
   language?: string;
@@ -16,6 +19,8 @@ export const AuthView: React.FC<AuthViewProps> = ({
   onGoogleLogin,
   onEmailLogin,
   onRegister,
+  onOfflineLogin,
+  cachedUser,
   error,
   onClearError,
   language = 'pt-BR'
@@ -24,7 +29,19 @@ export const AuthView: React.FC<AuthViewProps> = ({
   const [authForm, setAuthForm] = useState({ name: '', email: '', password: '' });
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
+  const [isOffline, setIsOffline] = useState(() => typeof navigator !== 'undefined' && !navigator.onLine);
   const isNative = Capacitor.isNativePlatform();
+
+  useEffect(() => {
+    const handleOffline = () => setIsOffline(true);
+    const handleOnline = () => setIsOffline(false);
+    window.addEventListener('offline', handleOffline);
+    window.addEventListener('online', handleOnline);
+    return () => {
+      window.removeEventListener('offline', handleOffline);
+      window.removeEventListener('online', handleOnline);
+    };
+  }, []);
 
   const t = (pt: string, en: string) => (language === 'en-US' ? en : pt);
 
@@ -50,7 +67,7 @@ export const AuthView: React.FC<AuthViewProps> = ({
         await onRegister(authForm.name.trim(), authForm.email, authForm.password);
       }
     } catch (err: any) {
-      setLocalError(err.message || 'Erro de autenticação');
+      setLocalError(friendlyFirebaseError(err));
     } finally {
       setIsSubmitting(false);
     }
@@ -102,6 +119,20 @@ export const AuthView: React.FC<AuthViewProps> = ({
             <div className="p-3 bg-[var(--trend-down)]/10 border border-[var(--trend-down)]/20 rounded-xl flex items-center gap-2 text-[var(--trend-down)] text-xs">
               <AlertCircle size={16} className="shrink-0" />
               <span className="truncate">{displayError}</span>
+            </div>
+          )}
+
+          {isOffline && (
+            <div className="p-3.5 bg-amber-500/10 border border-amber-500/30 rounded-2xl flex flex-col gap-1.5 text-xs text-amber-300">
+              <div className="flex items-center gap-2 font-bold">
+                <WifiOff size={16} className="text-amber-400 shrink-0" />
+                <span>{t("Dispositivo em modo offline", "Device is offline")}</span>
+              </div>
+              <p className="text-[11px] text-amber-200/80 leading-relaxed">
+                {cachedUser
+                  ? t("Você pode continuar diretamente com a sua sessão salva no dispositivo.", "You can continue directly with your session saved on the device.")
+                  : t("Para criar ou acessar uma conta pela primeira vez, conecte-se à internet.", "To sign in or register for the first time, please connect to the internet.")}
+              </p>
             </div>
           )}
 
@@ -181,6 +212,21 @@ export const AuthView: React.FC<AuthViewProps> = ({
                 Google
               </button>
             </>
+          )}
+
+          {onOfflineLogin && (
+            <div className="pt-2">
+              <button 
+                type="button"
+                onClick={onOfflineLogin}
+                className="w-full py-3.5 bg-[var(--accent)]/10 text-[var(--accent)] border border-[var(--accent)]/30 rounded-2xl font-bold text-[10px] uppercase tracking-widest flex items-center justify-center gap-2 hover:bg-[var(--accent)]/20 transition-all active:scale-[0.98]"
+              >
+                <WifiOff size={14} />
+                {cachedUser?.displayName || cachedUser?.email
+                  ? t(`Entrar no Modo Offline (${(cachedUser.displayName || cachedUser.email || '').split(' ')[0]})`, `Access Offline Mode (${(cachedUser.displayName || cachedUser.email || '').split(' ')[0]})`)
+                  : t("Acessar no Modo Offline", "Access in Offline Mode")}
+              </button>
+            </div>
           )}
 
           

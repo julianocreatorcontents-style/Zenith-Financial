@@ -9,6 +9,13 @@ import {
 import { Timestamp } from 'firebase/firestore';
 import type { WriteBatch } from 'firebase/firestore';
 import { GoogleAuthProvider, onAuthStateChanged, signInWithCredential, User } from 'firebase/auth';
+import { 
+  CachedAuthUser, 
+  getSyncCachedUser, 
+  getCachedUser, 
+  saveCachedUser, 
+  clearCachedUser 
+} from '../lib/authSession';
 import { z } from 'zod';
 import { Capacitor } from '@capacitor/core';
 import { FirebaseAuthentication } from '@capacitor-firebase/authentication';
@@ -20,6 +27,7 @@ import {
   InvalidApiKeyError,
 } from '../lib/ai';
 import { TransactionSchema } from '../lib/validations';
+import { friendlyFirebaseError } from '../lib/errorUtils';
 import { 
   calculateTotals, 
   calculateVariation, 
@@ -81,15 +89,81 @@ export interface FirestoreIssue {
   timestamp: string;
 }
 
+export type ZenithUser = User | CachedAuthUser;
+
+export const DEFAULT_SETTINGS: Settings = {
+  theme: 'dark',
+  language: 'pt-BR',
+  privacyMode: false,
+  activeWidgets: ['all'],
+  yieldColor: '#00FFA3',
+  granularity: 'month',
+  customTerms: {},
+  zenith_config: {
+    master_states: {
+      modo_privacidade: false,
+      insights_ia_ativo: true,
+      idioma: 'pt-BR',
+      tema_global: 'Escuro',
+      dashboard_management_expanded: false
+    },
+    categories: {
+      'Alimentação': { id: 'Alimentação', nome: 'Alimentação', cor_destaque: { hex: '#FF5722' }, visivel_no_dash: true, config_avancada: {}, ia_insights_buffer: {} },
+      'Moradia': { id: 'Moradia', nome: 'Moradia', cor_destaque: { hex: '#2196F3' }, visivel_no_dash: true, config_avancada: {}, ia_insights_buffer: {} },
+      'Transporte': { id: 'Transporte', nome: 'Transporte', cor_destaque: { hex: '#4CAF50' }, visivel_no_dash: true, config_avancada: {}, ia_insights_buffer: {} },
+      'Lazer': { id: 'Lazer', nome: 'Lazer', cor_destaque: { hex: '#9C27B0' }, visivel_no_dash: true, config_avancada: {}, ia_insights_buffer: {} },
+      'Saúde': { id: 'Saúde', nome: 'Saúde', cor_destaque: { hex: '#E91E63' }, visivel_no_dash: true, config_avancada: {}, ia_insights_buffer: {} }
+    },
+    dashboard_order: [
+      'CHART_EVOL_PATRIMONIO',
+      'METRIC_ENTRADAS',
+      'METRIC_SAIDAS',
+      'METRIC_RENDIMENTOS',
+      'CHART_ALOC_ATIV',
+      'CHART_FLUXO_CAIXA',
+      'CHART_DIST_CATEG',
+      'CHART_SAZON_MENS',
+      'CHART_PREV_CONTAS',
+      'CHART_METAS_PROG'
+    ]
+  }
+};
+
 export function useZenithData() {
-  const [user, setUser] = useState<User | null>(null);
-  const [profile, setProfile] = useState<UserProfile | null>(null);
+  const [user, setUser] = useState<ZenithUser | null>(() => auth.currentUser || getSyncCachedUser());
+  const [cachedOfflineUser, setCachedOfflineUser] = useState<CachedAuthUser | null>(() => getSyncCachedUser());
+  const [profile, setProfile] = useState<UserProfile | null>(() => {
+    const u = auth.currentUser || getSyncCachedUser();
+    if (!u) return null;
+    return {
+      uid: u.uid,
+      displayName: u.displayName || 'Usuário',
+      photoURL: u.photoURL || `https://picsum.photos/seed/${u.uid}/100/100`,
+      email: u.email || '',
+      investor_profile: 'Conservador'
+    };
+  });
   const [rawAssets, setRawAssets] = useState<Asset[]>([]);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [ddas, setDdas] = useState<DDA[]>([]);
-  const [settings, setSettings] = useState<Settings | null>(null);
+  const [settings, setSettings] = useState<Settings | null>(() => {
+    const u = auth.currentUser || getSyncCachedUser();
+    if (!u) return null;
+    try {
+      const cached = typeof window !== 'undefined' ? localStorage.getItem(`zenith_config_${u.uid}`) : null;
+      if (cached) {
+        const data = JSON.parse(cached);
+        return {
+          ...DEFAULT_SETTINGS,
+          zenith_config: data,
+          privacyMode: data.master_states?.modo_privacidade ?? false
+        };
+      }
+    } catch {}
+    return DEFAULT_SETTINGS;
+  });
   const [privacyMode, setPrivacyMode] = useState(false);
-  const [isAuthReady, setIsAuthReady] = useState(false);
+  const [isAuthReady, setIsAuthReady] = useState(() => Boolean(auth.currentUser || getSyncCachedUser()));
   const [userRules, setUserRules] = useState<any[]>([]);
   const [notifications, setNotifications] = useState<any[]>([]);
   const [investorProfile, setInvestorProfile] = useState<'Conservador' | 'Sofisticado' | 'Arrojado'>('Conservador');
@@ -121,22 +195,70 @@ export function useZenithData() {
     };
   }, []);
 
-  // 2. Auth Listener
+  // 2. Auth Listener com suporte a Offline Mode no APK
   useEffect(() => {
+    // Busca do storage assíncrono nativo (Preferences) no startup
+    getCachedUser().then((cached) => {
+      if (cached) {
+        setCachedOfflineUser(cached);
+        // Se ainda não temos usuário ativo e estamos sem rede, entra com a sessão em cache
+        if (!auth.currentUser && typeof navigator !== 'undefined' && !navigator.onLine) {
+          setUser((curr) => curr || cached);
+          setIsAuthReady(true);
+        }
+      }
+    });
+
     const unsub = onAuthStateChanged(auth, (u) => {
-      setUser(u);
-      setIsAuthReady(true);
+      if (u) {
+        setUser(u);
+        setIsAuthReady(true);
+        const toCache: CachedAuthUser = {
+          uid: u.uid,
+          email: u.email,
+          displayName: u.displayName,
+          photoURL: u.photoURL,
+          providerData: u.providerData?.map(p => ({ providerId: p.providerId })) || []
+        };
+        saveCachedUser(toCache);
+        setCachedOfflineUser(toCache);
+      } else {
+        // Se Firebase Auth não tem usuário no momento
+        if (typeof navigator !== 'undefined' && !navigator.onLine) {
+          // Em modo offline, preserva a última sessão em cache para não deslogar
+          getCachedUser().then((cached) => {
+            if (cached) {
+              setUser(cached);
+            } else {
+              setUser(null);
+            }
+            setIsAuthReady(true);
+          });
+        } else {
+          setUser(null);
+          setIsAuthReady(true);
+        }
+      }
     }, (authError) => {
       console.error("Auth Listener Error:", authError);
-      setIsAuthReady(true);
+      getCachedUser().then((cached) => {
+        if (cached) setUser(cached);
+        setIsAuthReady(true);
+      });
     });
     
     const timer = setTimeout(() => {
-      if (!isAuthReady) {
-        console.warn("Auth Listener timeout - proceeding as guest");
-        setIsAuthReady(true);
-      }
-    }, 8000);
+      setIsAuthReady((ready) => {
+        if (!ready) {
+          console.warn("Auth Listener timeout - checking offline user cache");
+          getCachedUser().then((cached) => {
+            if (cached) setUser(cached);
+          });
+          return true;
+        }
+        return ready;
+      });
+    }, 2000);
 
     return () => {
       unsub();
@@ -156,7 +278,7 @@ export function useZenithData() {
           const data = snap.data() as UserProfile;
           setProfile({ ...data, uid: snap.id });
           if (data.investor_profile) setInvestorProfile(data.investor_profile);
-        } else {
+        } else if (typeof navigator === 'undefined' || navigator.onLine) {
           const initialProfile: any = {
             uid: user.uid,
             displayName: user.displayName || 'Usuário',
@@ -164,7 +286,7 @@ export function useZenithData() {
             email: user.email || '',
             investor_profile: 'Conservador',
             createdAt: serverTimestamp(),
-            authProvider: user.providerData[0]?.providerId === 'google.com' ? 'google' : 'email'
+            authProvider: user.providerData?.[0]?.providerId === 'google.com' ? 'google' : 'email'
           };
           setDoc(doc(db, 'users', user.uid), initialProfile).then(() => {
             try {
@@ -234,20 +356,18 @@ export function useZenithData() {
       const cached = localStorage.getItem(`zenith_config_${user.uid}`);
       if (cached) {
         const data = JSON.parse(cached);
-        setSettings(prev => prev ? { ...prev, zenith_config: data } : { 
-          theme: 'dark', 
-          language: 'pt-BR', 
-          privacyMode: data.master_states?.modo_privacidade || false,
-          activeWidgets: [],
-          yieldColor: '#00FF00',
-          granularity: 'month',
-          customTerms: {},
-          zenith_config: data 
-        } as Settings);
-        setPrivacyMode(data.master_states?.modo_privacidade || false);
+        setSettings({ 
+          ...DEFAULT_SETTINGS,
+          zenith_config: data,
+          privacyMode: data.master_states?.modo_privacidade ?? false
+        });
+        setPrivacyMode(data.master_states?.modo_privacidade ?? false);
+      } else {
+        setSettings((curr) => curr || DEFAULT_SETTINGS);
       }
     } catch (e) {
       console.warn("Failed to load cached settings:", e);
+      setSettings((curr) => curr || DEFAULT_SETTINGS);
     }
 
     const unsub = onSnapshot(doc(db, 'settings', user.uid), (snap) => {
@@ -263,45 +383,8 @@ export function useZenithData() {
             console.warn("Storage failed:", e);
           }
         }
-      } else {
-        const initialSettings: Settings = {
-          theme: 'dark',
-          language: 'pt-BR',
-          privacyMode: false,
-          activeWidgets: ['all'],
-          yieldColor: '#00FFA3',
-          granularity: 'month',
-          customTerms: {},
-          zenith_config: {
-            master_states: {
-              modo_privacidade: false,
-              insights_ia_ativo: true,
-              idioma: 'pt-BR',
-              tema_global: 'Escuro',
-              dashboard_management_expanded: false
-            },
-            categories: {
-              'Alimentação': { id: 'Alimentação', nome: 'Alimentação', cor_destaque: { hex: '#FF5722' }, visivel_no_dash: true, config_avancada: {}, ia_insights_buffer: {} },
-              'Moradia': { id: 'Moradia', nome: 'Moradia', cor_destaque: { hex: '#2196F3' }, visivel_no_dash: true, config_avancada: {}, ia_insights_buffer: {} },
-              'Transporte': { id: 'Transporte', nome: 'Transporte', cor_destaque: { hex: '#4CAF50' }, visivel_no_dash: true, config_avancada: {}, ia_insights_buffer: {} },
-              'Lazer': { id: 'Lazer', nome: 'Lazer', cor_destaque: { hex: '#9C27B0' }, visivel_no_dash: true, config_avancada: {}, ia_insights_buffer: {} },
-              'Saúde': { id: 'Saúde', nome: 'Saúde', cor_destaque: { hex: '#E91E63' }, visivel_no_dash: true, config_avancada: {}, ia_insights_buffer: {} }
-            },
-            dashboard_order: [
-              'CHART_EVOL_PATRIMONIO',
-              'METRIC_ENTRADAS',
-              'METRIC_SAIDAS',
-              'METRIC_RENDIMENTOS',
-              'CHART_ALOC_ATIV',
-              'CHART_FLUXO_CAIXA',
-              'CHART_DIST_CATEG',
-              'CHART_SAZON_MENS',
-              'CHART_PREV_CONTAS',
-              'CHART_METAS_PROG'
-            ]
-          }
-        };
-        setDoc(doc(db, 'settings', user.uid), initialSettings).catch(e => handleFirestoreError(e, OperationType.WRITE, `settings/${user.uid}`));
+      } else if (typeof navigator === 'undefined' || navigator.onLine) {
+        setDoc(doc(db, 'settings', user.uid), DEFAULT_SETTINGS).catch(e => handleFirestoreError(e, OperationType.WRITE, `settings/${user.uid}`));
       }
     }, (e) => handleFirestoreError(e, OperationType.GET, `settings/${user.uid}`));
     return unsub;
@@ -624,7 +707,7 @@ export function useZenithData() {
       if (message.includes('[16]') || /account reauth/i.test(message)) {
         setError('Falha de autenticação com o Google (erro 16). Instale o APK mais recente, confirme a conta Google no dispositivo e tente novamente.');
       } else {
-        setError(message);
+        setError(friendlyFirebaseError(e));
       }
     }
   }, []);
@@ -633,7 +716,7 @@ export function useZenithData() {
     try {
       await signInWithEmailAndPassword(auth, email, pass);
     } catch (e: any) {
-      setError(e.message);
+      setError(friendlyFirebaseError(e));
     }
   }, []);
 
@@ -642,15 +725,39 @@ export function useZenithData() {
       const res = await createUserWithEmailAndPassword(auth, email, pass);
       await updateProfile(res.user, { displayName: name });
     } catch (e: any) {
-      setError(e.message);
+      setError(friendlyFirebaseError(e));
     }
   }, []);
 
   const handleLogout = useCallback(async () => {
     try {
+      await clearCachedUser();
+      setCachedOfflineUser(null);
+      setUser(null);
+      setProfile(null);
       await signOut(auth);
     } catch (e) {
       console.error('Logout error:', e);
+    }
+  }, []);
+
+  const handleOfflineLogin = useCallback(async () => {
+    const cached = await getCachedUser();
+    if (cached) {
+      setUser(cached);
+      setIsAuthReady(true);
+    } else {
+      const guestUser: CachedAuthUser = {
+        uid: 'offline_user',
+        email: 'offline@zenith.local',
+        displayName: 'Usuário Offline',
+        photoURL: null,
+        isOffline: true
+      };
+      await saveCachedUser(guestUser);
+      setCachedOfflineUser(guestUser);
+      setUser(guestUser);
+      setIsAuthReady(true);
     }
   }, []);
 
@@ -1074,6 +1181,8 @@ export function useZenithData() {
     handleEmailLogin,
     handleRegister,
     handleLogout,
+    handleOfflineLogin,
+    cachedOfflineUser,
     handleAcceptDDA,
     handleRejectDDA,
     recalculateBalances,

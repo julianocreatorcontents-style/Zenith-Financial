@@ -21,7 +21,7 @@ import type { VisualSettings } from "./components/CardSettingsPanel";
 import { IngestionHub, ReviewModal } from "./components/modals/IngestionModals";
 import { NavItem } from "./components/layout/NavItem";
 import { Asset } from "./types/app";
-import { useZenithData } from "./hooks/useZenithData";
+import { useZenithData, DEFAULT_SETTINGS } from "./hooks/useZenithData";
 import { usePersistentState } from "./hooks/usePersistentState";
 import { applyTheme } from "./lib/theme";
 
@@ -73,6 +73,7 @@ export default function ZenithApp() {
     portfolioAllocationPercent, goals, updateGoals, t, getGeminiApiKey,
     togglePrivacyMode, handleSaveProfile, handleSaveApiKey,
     handleGoogleLogin, handleEmailLogin, handleRegister, handleLogout,
+    handleOfflineLogin, cachedOfflineUser,
     handleAcceptDDA, handleRejectDDA, moveToTrash, restoreFromTrash,
     createAsset, updateAsset, deleteAsset,
     addTransaction, updateTransaction, confirmPendingTransaction,
@@ -90,6 +91,7 @@ export default function ZenithApp() {
   const [isEditingTransaction, setIsEditingTransaction] = useState(false);
   const [selectedTransaction, setSelectedTransaction] = useState<any>(null);
   const [isProfileDrawerOpen, setIsProfileDrawerOpen] = useState(false);
+  const [isOnline, setIsOnline] = useState(navigator.onLine);
   const [hasUnreadNotification, setHasUnreadNotification] = useState(true);
   useEffect(() => {
     if (!hasUnreadNotification) return;
@@ -176,6 +178,18 @@ export default function ZenithApp() {
     applyTheme(tema);
   }, [settings?.zenith_config?.master_states?.tema_global, settings?.theme, visualSettings.isCustomEnabled]);
 
+  
+  useEffect(() => {
+    const handleOnline = () => setIsOnline(true);
+    const handleOffline = () => setIsOnline(false);
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, []);
+
   const openDrawer = useCallback((page: 'menu' | 'profile' | 'notifications' | 'settings' | 'ai_key' | 'trash' = 'menu') => {
     setDrawerPageRequest(page);
     setIsProfileDrawerOpen(true);
@@ -241,6 +255,8 @@ export default function ZenithApp() {
           onGoogleLogin={handleGoogleLogin}
           onEmailLogin={handleEmailLogin}
           onRegister={handleRegister}
+          onOfflineLogin={handleOfflineLogin}
+          cachedUser={cachedOfflineUser}
           error={error}
           onClearError={() => setError(null)}
           language={settings?.language}
@@ -249,7 +265,7 @@ export default function ZenithApp() {
     );
   }
 
-  if (!settings) {
+  if (!settings && isOnline) {
     return (
       <div className="min-h-screen bg-[var(--bg-app)] flex items-center justify-center">
         <div className="flex flex-col items-center gap-4">
@@ -262,10 +278,19 @@ export default function ZenithApp() {
     );
   }
 
+  const activeSettings = settings || DEFAULT_SETTINGS;
+
   return (
     <ErrorBoundary>
       <div className="min-h-screen bg-[var(--bg-app)] text-[var(--text-primary)] font-sans selection:bg-[var(--accent)]/30 pb-32 overflow-x-hidden">
         
+        
+      {!isOnline && (
+        <div className="fixed top-0 left-0 right-0 z-[100] bg-amber-500/95 text-black text-center text-xs font-bold py-2 px-4 shadow-lg backdrop-blur-md">
+          📡 Modo Offline — Verifique sua conexão
+        </div>
+      )}
+
         {/* --- HEADER --- */}
         <header className="px-6 py-6 sm:py-8 flex items-center gap-4 max-w-7xl mx-auto">
           <button
@@ -354,7 +379,7 @@ export default function ZenithApp() {
             <HomeView
               visualSettings={visualSettings}
               user={user}
-              settings={settings}
+              settings={activeSettings}
               assets={assets}
               transactions={transactions}
               ddas={ddas}
@@ -460,7 +485,7 @@ export default function ZenithApp() {
                 asset={selectedAsset} 
                 onClose={() => setSelectedAsset(null)} 
                 privacyMode={privacyMode}
-                language={settings.language}
+                language={activeSettings.language}
                 onDelete={async (id) => {
                   await deleteAsset(id);
                   setSelectedAsset(null);
@@ -489,7 +514,7 @@ export default function ZenithApp() {
             <Suspense fallback={null}>
               <AddAssetModal 
                 onClose={() => setIsAddingAsset(false)}
-                language={settings.language}
+                language={activeSettings.language}
                 investorProfile={investorProfile}
                 user={user}
                 getApiKey={getGeminiApiKey}
@@ -529,7 +554,7 @@ export default function ZenithApp() {
               <AddTransactionModal 
                 assets={assets}
                 onClose={() => setIsAddingTransaction(false)}
-                language={settings.language}
+                language={activeSettings.language}
                 onAdd={async (txData) => {
                   await addTransaction(txData);
                   setIsAddingTransaction(false);
@@ -544,7 +569,7 @@ export default function ZenithApp() {
               <AddTransactionModal 
                 assets={assets}
                 initialData={selectedTransaction}
-                language={settings.language}
+                language={activeSettings.language}
                 onClose={() => {
                   setIsEditingTransaction(false);
                   setSelectedTransaction(null);
@@ -609,7 +634,7 @@ export default function ZenithApp() {
             isOpen={isIngestionHubOpen} 
             onClose={() => setIsIngestionHubOpen(false)} 
             onProcess={handleUniversalIngestion}
-            language={settings.language}
+            language={activeSettings.language}
           />
 
           {/* Review Modal */}
