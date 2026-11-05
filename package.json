@@ -16,6 +16,7 @@
     "apk:open": "cap open android"
   },
   "dependencies": {
+    "@capacitor-firebase/authentication": "^8.6.0",
     "@capacitor/android": "^8.6.0",
     "@capacitor/core": "^8.6.0",
     "@google/genai": "^1.29.0",

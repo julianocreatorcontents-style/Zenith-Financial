@@ -593,12 +593,14 @@ export function useZenithData() {
 
   // Autenticação
   const handleGoogleLogin = useCallback(async () => {
-    if (Capacitor.isNativePlatform()) {
-      setError('Login com Google indisponível no APK. Use e-mail e senha.');
-      return;
-    }
     try {
-      await signInWithPopup(auth, googleProvider);
+      if (Capacitor.isNativePlatform()) {
+        // Se for APK Android, usa o seletor de contas nativo
+        await FirebaseAuthentication.signInWithGoogle();
+      } else {
+        // Se for Web (navegador), usa o popup padrão
+        await signInWithPopup(auth, googleProvider);
+      }
     } catch (e: any) {
       setError(e.message);
     }

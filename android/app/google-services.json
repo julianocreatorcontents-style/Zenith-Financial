@@ -1,0 +1,40 @@
+{
+  "project_info": {
+    "project_number": "856813811351",
+    "firebase_url": "https://gen-lang-client-0213613781-default-rtdb.firebaseio.com",
+    "project_id": "gen-lang-client-0213613781",
+    "storage_bucket": "gen-lang-client-0213613781.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:856813811351:android:8b9c2dcab943d091c09bd2",
+        "android_client_info": {
+          "package_name": "com.zenith.financial"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "856813811351-v2p4g59diffg9p82llkb8nrj05ptftvl.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAP836DgmMakDH8CtzYB3KlC3x6xru33os"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "856813811351-v2p4g59diffg9p82llkb8nrj05ptftvl.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

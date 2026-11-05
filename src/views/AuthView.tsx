@@ -159,7 +159,7 @@ export const AuthView: React.FC<AuthViewProps> = ({
             </button>
           </form>
 
-          {!isNative && (
+          {(true) && (
             <>
               <div className="relative">
                 <div className="absolute inset-0 flex items-center">
@@ -183,14 +183,7 @@ export const AuthView: React.FC<AuthViewProps> = ({
             </>
           )}
 
-          {isNative && (
-            <p className="text-[10px] text-center text-[var(--text-muted)] leading-relaxed">
-              {t(
-                "Login com Google indisponível no APK. Use e-mail e senha.",
-                "Google sign-in is unavailable in the APK. Use email and password."
-              )}
-            </p>
-          )}
+          
         </div>
       </motion.div>
     </div>
