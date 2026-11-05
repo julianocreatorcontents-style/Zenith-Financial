@@ -22,6 +22,7 @@ import { IngestionHub, ReviewModal } from "./components/modals/IngestionModals";
 import { NavItem } from "./components/layout/NavItem";
 import { Asset } from "./types/app";
 import { useZenithData } from "./hooks/useZenithData";
+import { usePersistentState } from "./hooks/usePersistentState";
 import { applyTheme } from "./lib/theme";
 
 const StorageTrashView = lazy(() => import('./views/StorageTrashView'));
@@ -118,26 +119,21 @@ export default function ZenithApp() {
     document.addEventListener("touchstart", tryPlay, { once: true });
   }, []);
 
-  const [visualSettings, setVisualSettings] = useState<VisualSettings>(() => {
-    const saved = localStorage.getItem('zenith_visual_settings');
-    return saved ? JSON.parse(saved) : {
-      isCustomEnabled: true,
-      chartHeight: 'h-64',
-      lineThickness: 0.5,
-      showAxes: true,
-      showProjections: true,
-      accentColor: '#00FFA3',
-      fontFamily: 'monospace',
-      cardBgOpacity: 0.8,
-      textColor: '#FFFFFF',
-      textSizeScale: 1.0,
-      textOpacity: 1.0,
-    };
+  const [visualSettings, setVisualSettings] = usePersistentState<VisualSettings>('zenith_visual_settings', {
+    isCustomEnabled: true,
+    chartHeight: 'h-64',
+    lineThickness: 0.5,
+    showAxes: true,
+    showProjections: true,
+    accentColor: '#00FFA3',
+    fontFamily: 'monospace',
+    cardBgOpacity: 0.8,
+    textColor: '#FFFFFF',
+    textSizeScale: 1,
+    textOpacity: 1
   });
 
-  useEffect(() => {
-    localStorage.setItem('zenith_visual_settings', JSON.stringify(visualSettings));
-  }, [visualSettings]);
+  
 
   // Aplica o tema Customizado Global (Verde Glass) em todo o app
   useEffect(() => {
@@ -173,9 +169,12 @@ export default function ZenithApp() {
 
   // Sincronização global do tema (Escuro, Claro, Contraste)
   useEffect(() => {
+    // Se o tema customizado estiver ativo, o tema global é ignorado
+    // para não sobrescrever as variáveis CSS do custom.
+    if (visualSettings.isCustomEnabled) return;
     const tema = settings?.zenith_config?.master_states?.tema_global || settings?.theme || 'Escuro';
     applyTheme(tema);
-  }, [settings?.zenith_config?.master_states?.tema_global, settings?.theme]);
+  }, [settings?.zenith_config?.master_states?.tema_global, settings?.theme, visualSettings.isCustomEnabled]);
 
   const openDrawer = useCallback((page: 'menu' | 'profile' | 'notifications' | 'settings' | 'ai_key' | 'trash' = 'menu') => {
     setDrawerPageRequest(page);

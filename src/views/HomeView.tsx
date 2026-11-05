@@ -42,6 +42,7 @@ import {
   HomeInvestmentCard
 } from '../components/dashboard/MetricCards';
 import { FutureHeroCard } from '../components/dashboard/FutureHeroCard';
+import { usePersistentState } from '../hooks/usePersistentState';
 import { YieldProjectionCard } from './YieldProjectionCard';
 import { GoalsHeroCard } from '../components/dashboard/GoalsHeroCard';
 import { YieldReconciliationModal } from '../components/dashboard/YieldReconciliationModal';
@@ -141,7 +142,7 @@ export const HomeView: React.FC<HomeViewProps> = ({
   const patrimonioCarouselRef = useRef<HTMLDivElement>(null);
   const isPatrimonioJumping = useRef(false);
   const [activeMetricIndex, setActiveMetricIndex] = useState(0);
-  const [homeLayout, setHomeLayout] = useState<'lista' | 'grade' | 'carrossel'>('lista');
+  const [homeLayout, setHomeLayout, layoutLoaded] = usePersistentState<'lista' | 'grade' | 'carrossel'>('zenith_home_layout', 'carrossel');
   const carouselRef = useRef<HTMLDivElement>(null);
   const carouselScrollFrame = useRef<number | null>(null);
 
@@ -1099,6 +1100,8 @@ export const HomeView: React.FC<HomeViewProps> = ({
       }
     }
   };
+  
+
   return (
     <>
       {/* CONTROLE DE LAYOUT */}
