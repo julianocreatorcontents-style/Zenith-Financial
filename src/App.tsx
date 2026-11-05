@@ -73,7 +73,6 @@ export default function ZenithApp() {
     portfolioAllocationPercent, goals, updateGoals, t, getGeminiApiKey,
     togglePrivacyMode, handleSaveProfile, handleSaveApiKey,
     handleGoogleLogin, handleEmailLogin, handleRegister, handleLogout,
-    handleOfflineLogin, cachedOfflineUser,
     handleAcceptDDA, handleRejectDDA, moveToTrash, restoreFromTrash,
     createAsset, updateAsset, deleteAsset,
     addTransaction, updateTransaction, confirmPendingTransaction,
@@ -255,8 +254,6 @@ export default function ZenithApp() {
           onGoogleLogin={handleGoogleLogin}
           onEmailLogin={handleEmailLogin}
           onRegister={handleRegister}
-          onOfflineLogin={handleOfflineLogin}
-          cachedUser={cachedOfflineUser}
           error={error}
           onClearError={() => setError(null)}
           language={settings?.language}

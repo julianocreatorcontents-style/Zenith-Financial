@@ -131,7 +131,6 @@ export const DEFAULT_SETTINGS: Settings = {
 
 export function useZenithData() {
   const [user, setUser] = useState<ZenithUser | null>(() => auth.currentUser || getSyncCachedUser());
-  const [cachedOfflineUser, setCachedOfflineUser] = useState<CachedAuthUser | null>(() => getSyncCachedUser());
   const [profile, setProfile] = useState<UserProfile | null>(() => {
     const u = auth.currentUser || getSyncCachedUser();
     if (!u) return null;
@@ -200,7 +199,6 @@ export function useZenithData() {
     // Busca do storage assíncrono nativo (Preferences) no startup
     getCachedUser().then((cached) => {
       if (cached) {
-        setCachedOfflineUser(cached);
         // Se ainda não temos usuário ativo e estamos sem rede, entra com a sessão em cache
         if (!auth.currentUser && typeof navigator !== 'undefined' && !navigator.onLine) {
           setUser((curr) => curr || cached);
@@ -221,7 +219,6 @@ export function useZenithData() {
           providerData: u.providerData?.map(p => ({ providerId: p.providerId })) || []
         };
         saveCachedUser(toCache);
-        setCachedOfflineUser(toCache);
       } else {
         // Se Firebase Auth não tem usuário no momento
         if (typeof navigator !== 'undefined' && !navigator.onLine) {
@@ -732,32 +729,11 @@ export function useZenithData() {
   const handleLogout = useCallback(async () => {
     try {
       await clearCachedUser();
-      setCachedOfflineUser(null);
       setUser(null);
       setProfile(null);
       await signOut(auth);
     } catch (e) {
       console.error('Logout error:', e);
-    }
-  }, []);
-
-  const handleOfflineLogin = useCallback(async () => {
-    const cached = await getCachedUser();
-    if (cached) {
-      setUser(cached);
-      setIsAuthReady(true);
-    } else {
-      const guestUser: CachedAuthUser = {
-        uid: 'offline_user',
-        email: 'offline@zenith.local',
-        displayName: 'Usuário Offline',
-        photoURL: null,
-        isOffline: true
-      };
-      await saveCachedUser(guestUser);
-      setCachedOfflineUser(guestUser);
-      setUser(guestUser);
-      setIsAuthReady(true);
     }
   }, []);
 
@@ -1181,8 +1157,6 @@ export function useZenithData() {
     handleEmailLogin,
     handleRegister,
     handleLogout,
-    handleOfflineLogin,
-    cachedOfflineUser,
     handleAcceptDDA,
     handleRejectDDA,
     recalculateBalances,
