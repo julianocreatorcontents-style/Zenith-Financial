@@ -15,11 +15,11 @@
       },
       "oauth_client": [
         {
-          "client_id": "856813811351-0jq8kc7gpqat0hlmr9pbr0afnmpbqqcu.apps.googleusercontent.com",
+          "client_id": "856813811351-bvvi43dcue7gg387g8nhu7shrfogk529.apps.googleusercontent.com",
           "client_type": 1,
           "android_info": {
             "package_name": "com.zenith.financial",
-            "certificate_hash": "3fe5ea2f49b7576a74a892b4b84d06df3e5ccf47"
+            "certificate_hash": "ecdd785450e19fde95ae998cee2194e4771cbf8a"
           }
         },
         {
