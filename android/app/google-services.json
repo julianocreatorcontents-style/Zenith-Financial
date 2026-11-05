@@ -19,7 +19,10 @@
           "client_type": 1,
           "android_info": {
             "package_name": "com.zenith.financial",
-            "certificate_hash": "ecdd785450e19fde95ae998cee2194e4771cbf8a"
+            "certificate_hash": [
+            "ecdd785450e19fde95ae998cee2194e4771cbf8a",
+            "2c15efb63cd2a11759c69cf7bb7d93f074e0cd9c5ab126ede5bc105948fc15d2"
+          ]
           }
         },
         {

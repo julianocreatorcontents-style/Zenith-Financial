@@ -8,7 +8,7 @@ import {
 } from '../firebase';
 import { Timestamp } from 'firebase/firestore';
 import type { WriteBatch } from 'firebase/firestore';
-import { onAuthStateChanged, User } from 'firebase/auth';
+import { GoogleAuthProvider, onAuthStateChanged, signInWithCredential, User } from 'firebase/auth';
 import { z } from 'zod';
 import { Capacitor } from '@capacitor/core';
 import { FirebaseAuthentication } from '@capacitor-firebase/authentication';
@@ -596,14 +596,36 @@ export function useZenithData() {
   const handleGoogleLogin = useCallback(async () => {
     try {
       if (Capacitor.isNativePlatform()) {
-        // Se for APK Android, usa o seletor de contas nativo
-        await FirebaseAuthentication.signInWithGoogle();
+        // O plugin apenas obtém a credencial nativa. O login no SDK JS é feito
+        // via signInWithCredential para que o Firestore enxergue a sessão.
+        const result = await FirebaseAuthentication.signInWithGoogle({ skipNativeAuth: true })
+          .catch(async (error) => {
+            const message = String(error?.message ?? error);
+            const isReauthError = message.includes('[16]') || /account reauth/i.test(message);
+            if (!isReauthError) throw error;
+            // Fallback para o fluxo legado do Google Sign-In no Android.
+            return FirebaseAuthentication.signInWithGoogle({
+              skipNativeAuth: true,
+              useCredentialManager: false,
+            });
+          });
+
+        const idToken = result.credential?.idToken;
+        if (!idToken) {
+          throw new Error('O Google não retornou um token de identidade.');
+        }
+        await signInWithCredential(auth, GoogleAuthProvider.credential(idToken));
       } else {
         // Se for Web (navegador), usa o popup padrão
         await signInWithPopup(auth, googleProvider);
       }
     } catch (e: any) {
-      setError(e.message);
+      const message = String(e?.message ?? e);
+      if (message.includes('[16]') || /account reauth/i.test(message)) {
+        setError('Falha de autenticação com o Google (erro 16). Instale o APK mais recente, confirme a conta Google no dispositivo e tente novamente.');
+      } else {
+        setError(message);
+      }
     }
   }, []);
 
