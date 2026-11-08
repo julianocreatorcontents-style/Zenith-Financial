@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import { MoreVertical, Settings as SettingsIcon, ShieldCheck, X, TrendingUp, Briefcase } from 'lucide-react';
 import { ResponsiveContainer, AreaChart, Area, CartesianGrid } from 'recharts';
 import { DDA } from '../../types/app';
-import { resolveAssetPolicy } from '../../lib/adapters/assetYieldService';
+import { projectYieldBetween, resolveAssetPolicy } from '../../lib/adapters/assetYieldService';
 import { useInView } from '../../hooks/useInView';
 
 const BRL_FORMATTER = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' });
@@ -71,12 +71,7 @@ const MiniMetricCardBase: React.FC<MiniMetricCardProps> = ({
   children
 }) => {
   const [isRevealed, setIsRevealed] = useState(false);
-  const [timeShift, setTimeShift] = useState(0);
   const { ref: cardRef, isInView } = useInView<HTMLDivElement>();
-
-  const multipliers = [1, 1.05, 1.3, 1.6];
-  const currentMultiplier = multipliers[timeShift];
-  const TIME_LABELS = ['Hoje', '1 Mês', '6 Meses', '1 Ano'];
 
   const mainColor = color || (resolveStyle ? resolveStyle(id, 'main_color', color) : color);
   const showValues = resolveStyle ? resolveStyle(id, 'show_values', true) : true;
@@ -86,16 +81,11 @@ const MiniMetricCardBase: React.FC<MiniMetricCardProps> = ({
   const isBadTrend = isExpense ? trend === 'up' : trend === 'down';
   const hasChartData = Array.isArray(data) && data.length > 0;
 
-  const numericValue = Number(String(value).replace(/[^0-9,-]/g, '').replace(',', '.')) || 0;
-
-  const projectedData = hasChartData ? data.map((d: any) => ({ ...d, v: d.v * currentMultiplier })) : [];
-
   const haptic = () => { if (navigator.vibrate) navigator.vibrate(15); };
 
   const handleToggle = () => {
     haptic();
     setIsRevealed(!isRevealed);
-    if (!isRevealed) setTimeShift(0);
   };
 
   return (
@@ -173,7 +163,7 @@ const MiniMetricCardBase: React.FC<MiniMetricCardProps> = ({
         <div className="absolute inset-0 z-0 overflow-hidden pointer-events-none">
           {isRevealed && (
             <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={projectedData} margin={{ top: 80, right: 0, left: 0, bottom: 0 }}>
+              <AreaChart data={hasChartData ? data : []} margin={{ top: 80, right: 0, left: 0, bottom: 0 }}>
                 <defs>
                   <linearGradient id={`grad-mountain-${label}`} x1="0" y1="0" x2="0" y2="1">
                     <stop offset="0%" stopColor={mainColor} stopOpacity={0.8} />
@@ -193,15 +183,15 @@ const MiniMetricCardBase: React.FC<MiniMetricCardProps> = ({
             <div>
               <p className="text-[10px] sm:text-sm text-white/70 uppercase tracking-wider mb-1">{label}</p>
               <AnimatePresence mode="popLayout">
-                <motion.p key={numericValue * currentMultiplier} initial={{ y: -10, opacity: 0 }} animate={{ y: 0, opacity: 1 }} exit={{ y: 10, opacity: 0 }} className="text-2xl sm:text-4xl font-bold text-white drop-shadow-lg">
-                  {privacy ? '••••••' : fmtBRL(numericValue * currentMultiplier)}
+                <motion.p key={String(value)} initial={{ y: -10, opacity: 0 }} animate={{ y: 0, opacity: 1 }} exit={{ y: 10, opacity: 0 }} className="text-2xl sm:text-4xl font-bold text-white drop-shadow-lg">
+                  {privacy ? '••••••' : value}
                 </motion.p>
               </AnimatePresence>
             </div>
           </div>
 
           {overlayDetails && overlayDetails.length > 0 && (
-            <div className="mt-4">
+            <div className="mt-auto">
               {overlayDetails.map((item, index) => (
                 <div key={`${item.label}-${index}`} className="flex justify-between items-center border-b border-white/10 pb-1.5 mb-1.5">
                   <span className="text-xs text-white/70">{item.label}</span>
@@ -210,22 +200,6 @@ const MiniMetricCardBase: React.FC<MiniMetricCardProps> = ({
               ))}
             </div>
           )}
-
-          <div className="mt-auto space-y-4 pointer-events-auto">
-            <div className="pt-2">
-              <div className="flex justify-between text-[8px] sm:text-[10px] text-white/60 mb-2 uppercase font-bold tracking-widest">
-                {TIME_LABELS.map((lbl, i) => (
-                  <span key={lbl} className={timeShift === i ? 'text-green-400 font-black scale-110 transition-transform' : ''}>{lbl}</span>
-                ))}
-              </div>
-              <input 
-                type="range" min="0" max="3" step="1" value={timeShift} 
-                onChange={(e) => { setTimeShift(Number(e.target.value)); haptic(); }}
-                onClick={(e) => e.stopPropagation()}
-                className="w-full accent-green-500 cursor-pointer"
-              />
-            </div>
-          </div>
         </div>
       </motion.div>
     </motion.div>
@@ -251,16 +225,28 @@ export const AssetMiniCardBase: React.FC<AssetMiniCardProps> = ({
   const [timeShift, setTimeShift] = useState(0);
   const { ref: cardRef, isInView } = useInView<HTMLDivElement>();
 
-  const multipliers = [1, 1.05, 1.3, 1.6];
-  const currentMultiplier = multipliers[timeShift];
   const TIME_LABELS = ['Hoje', '1 Mês', '6 Meses', '1 Ano'];
 
-  const currentValue = Number(asset?.currentValue ?? asset?.value ?? 0) || 0;
+  const currentValue = Number(asset?.currentValue ?? asset?.manualBalance ?? asset?.value ?? 0) || 0;
   const dailyYield = Number(asset?.dailyYield ?? 0) || 0;
+  const weekendYield = Number(asset?.manualWeekendYield ?? 0) || 0;
   const accumulatedYield = Number(asset?.accumulatedYield ?? asset?.yieldSinceAnchor ?? 0) || 0;
   const monthYieldRemaining = Number(asset?.monthYieldRemaining ?? 0) || 0;
+  const baseBalance = Number(asset?.baseBalance ?? asset?.valorInvestido ?? currentValue) || currentValue;
 
   const resolved = resolveAssetPolicy(asset);
+  const businessDays = resolved?.policy.dayCountConvention === 'BUSINESS_DAYS_252';
+  const today = new Date();
+  const horizons = [
+    today,
+    new Date(today.getFullYear(), today.getMonth() + 1, today.getDate()),
+    new Date(today.getFullYear(), today.getMonth() + 6, today.getDate()),
+    new Date(today.getFullYear() + 1, today.getMonth(), today.getDate()),
+  ];
+  const projectedValues = horizons.map((horizon) =>
+    currentValue + projectYieldBetween(dailyYield, weekendYield, businessDays, today, horizon)
+  );
+  const projectedValue = projectedValues[timeShift] ?? currentValue;
   const tier = resolved?.policy.rateTiers[0];
   const effectiveRate = (tier?.baseRateValue || 0) + (tier?.bonusRateValue || 0);
   const rateStr = resolved
@@ -283,10 +269,13 @@ export const AssetMiniCardBase: React.FC<AssetMiniCardProps> = ({
   const lineGradientId = 'asset-line-' + safeId;
   const overlayGradientId = 'asset-overlay-' + safeId;
 
+  // Sem histórico diário do ativo: usa a evolução real do saldo âncora até hoje.
   const chartData = Array.from({ length: 8 }, (_, index) => ({
-    v: currentValue * (0.98 + (0.02 * index) / 7),
+    v: baseBalance + (currentValue - baseBalance) * (index / 7),
   }));
-  const projectedData = chartData.map((point) => ({ v: point.v * currentMultiplier }));
+  const projectedData = Array.from({ length: 8 }, (_, index) => ({
+    v: currentValue + (projectedValue - currentValue) * (index / 7),
+  }));
 
   const haptic = () => { if (navigator.vibrate) navigator.vibrate(15); };
 
@@ -362,8 +351,8 @@ export const AssetMiniCardBase: React.FC<AssetMiniCardProps> = ({
           <div className="pointer-events-none">
             <p className="text-sm text-white/70 uppercase tracking-wider mb-1">{asset?.name}</p>
             <AnimatePresence mode="popLayout">
-              <motion.p key={currentValue * currentMultiplier} initial={{ y: -10, opacity: 0 }} animate={{ y: 0, opacity: 1 }} exit={{ y: 10, opacity: 0 }} className="text-4xl font-bold text-white drop-shadow-lg">
-                {privacy ? '••••••' : fmtBRL(currentValue * currentMultiplier)}
+              <motion.p key={projectedValue} initial={{ y: -10, opacity: 0 }} animate={{ y: 0, opacity: 1 }} exit={{ y: 10, opacity: 0 }} className="text-4xl font-bold text-white drop-shadow-lg">
+                {privacy ? '••••••' : fmtBRL(projectedValue)}
               </motion.p>
             </AnimatePresence>
           </div>
@@ -372,7 +361,7 @@ export const AssetMiniCardBase: React.FC<AssetMiniCardProps> = ({
             <div className="space-y-1.5 text-[10px] sm:text-xs font-mono">
               <div className="flex justify-between gap-2 text-white/80">
                 <span>Rende/dia</span>
-                <span className="text-green-400 font-bold">{privacy ? '•••' : '+' + fmtBRL(dailyYield * currentMultiplier)}</span>
+                <span className="text-green-400 font-bold">{privacy ? '•••' : '+' + fmtBRL(dailyYield)}</span>
               </div>
               <div className="flex justify-between gap-2 text-white/80">
                 <span>Acumulado</span>
@@ -414,6 +403,8 @@ interface PortfolioHeroCardProps {
   assetCount: number;
   avgPercent: number;
   chartData?: { v: number }[];
+  /** Valores reais projetados para Hoje, 1 mês, 6 meses e 1 ano. */
+  projectionValues?: number[];
   privacy?: boolean;
   onSettings?: () => void;
 }
@@ -426,22 +417,22 @@ export const PortfolioHeroCard: React.FC<PortfolioHeroCardProps> = ({
   assetCount,
   avgPercent,
   chartData = [],
+  projectionValues,
   privacy,
   onSettings,
 }) => {
   const [isRevealed, setIsRevealed] = useState(false);
   const [timeShift, setTimeShift] = useState(0);
 
-  const multipliers = [1, 1.05, 1.3, 1.6];
-  const currentMultiplier = multipliers[timeShift];
   const TIME_LABELS = ['Hoje', '1 Mês', '6 Meses', '1 Ano'];
 
   const haptic = () => { if (navigator.vibrate) navigator.vibrate(15); };
 
-  const safeChart = chartData.length > 0 ? chartData : Array.from({ length: 8 }, (_, i) => ({
-    v: totalBalance * (0.98 + (0.02 * i) / 7),
+  const safeChart = chartData.length > 0 ? chartData : Array.from({ length: 8 }, () => ({ v: totalBalance }));
+  const projectedTotal = projectionValues?.[timeShift] ?? totalBalance;
+  const projectedData = Array.from({ length: 8 }, (_, i) => ({
+    v: totalBalance + (projectedTotal - totalBalance) * (i / 7),
   }));
-  const projectedData = safeChart.map((p) => ({ v: p.v * currentMultiplier }));
 
   const toggle = () => {
     haptic();
@@ -515,8 +506,8 @@ export const PortfolioHeroCard: React.FC<PortfolioHeroCardProps> = ({
               <p className="text-[10px] text-white/70 uppercase tracking-widest font-black">Portfólio</p>
             </div>
             <AnimatePresence mode="popLayout">
-              <motion.p key={totalBalance * currentMultiplier} initial={{ y: -10, opacity: 0 }} animate={{ y: 0, opacity: 1 }} exit={{ y: 10, opacity: 0 }} className="text-4xl font-bold text-white drop-shadow-lg">
-                {privacy ? '••••••' : fmtBRL(totalBalance * currentMultiplier)}
+              <motion.p key={projectedTotal} initial={{ y: -10, opacity: 0 }} animate={{ y: 0, opacity: 1 }} exit={{ y: 10, opacity: 0 }} className="text-4xl font-bold text-white drop-shadow-lg">
+                {privacy ? '••••••' : fmtBRL(projectedTotal)}
               </motion.p>
             </AnimatePresence>
           </div>
@@ -525,15 +516,15 @@ export const PortfolioHeroCard: React.FC<PortfolioHeroCardProps> = ({
             <div className="space-y-1.5 text-[10px] sm:text-xs font-mono">
               <div className="flex justify-between gap-2 text-white/80">
                 <span>Rende/dia</span>
-                <span className="text-green-400 font-bold">{privacy ? '•••' : '+' + fmtBRL(dailyTotal * currentMultiplier)}</span>
+                <span className="text-green-400 font-bold">{privacy ? '•••' : '+' + fmtBRL(dailyTotal)}</span>
               </div>
               <div className="flex justify-between gap-2 text-white/80">
                 <span>Até fim do mês</span>
-                <span className="text-green-400 font-bold">{privacy ? '•••' : '+' + fmtBRL(monthTotal * currentMultiplier)}</span>
+                <span className="text-green-400 font-bold">{privacy ? '•••' : '+' + fmtBRL(monthTotal)}</span>
               </div>
               <div className="flex justify-between gap-2 text-white/80">
                 <span>Projeção anual</span>
-                <span className="text-green-400 font-bold">{privacy ? '•••' : '+' + fmtBRL(yearTotal * currentMultiplier)}</span>
+                <span className="text-green-400 font-bold">{privacy ? '•••' : '+' + fmtBRL(yearTotal)}</span>
               </div>
               <div className="flex justify-between gap-2 text-white/80">
                 <span>Ativos</span>

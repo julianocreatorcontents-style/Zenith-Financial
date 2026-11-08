@@ -1,7 +1,15 @@
 import React, { useState, useMemo } from 'react';
 import { Eye, EyeOff } from 'lucide-react';
 import { AreaChart, Area, ResponsiveContainer, XAxis, YAxis, CartesianGrid, Tooltip } from 'recharts';
-import { isRecurringActiveInMonth, parseTransactionDate } from '../../lib/finance';
+import {
+  isExpenseTransaction,
+  isIncomeTransaction,
+  isRecurringActiveInMonth,
+  isTransferTransaction,
+  isYieldTransaction,
+  parseTransactionAmount,
+  parseTransactionDate,
+} from '../../lib/finance';
 
 interface FutureHeroCardProps {
   currentNetWorth: number;
@@ -37,9 +45,10 @@ export const FutureHeroCard: React.FC<FutureHeroCardProps> = ({
     
 
     for (const tx of transactions) {
-      const value = Number(tx.value) || 0;
-      const isIn = tx.type === 'in';
-      const isOut = tx.type === 'out';
+      if (isTransferTransaction(tx) || isYieldTransaction(tx)) continue;
+      const value = parseTransactionAmount(tx.value);
+      const isIn = isIncomeTransaction(tx);
+      const isOut = isExpenseTransaction(tx);
       if (!isIn && !isOut) continue;
 
       if (tx.isRecurring) {
@@ -127,11 +136,12 @@ export const FutureHeroCard: React.FC<FutureHeroCardProps> = ({
       let fixasIn = 0, fixasOut = 0;
       for (const tx of transactions) {
         if (!tx.isRecurring) continue;
-        const isIn = tx.type === 'in';
-        const isOut = tx.type === 'out';
+        if (isTransferTransaction(tx) || isYieldTransaction(tx)) continue;
+        const isIn = isIncomeTransaction(tx);
+        const isOut = isExpenseTransaction(tx);
         if (!isIn && !isOut) continue;
         if (!isRecurringActiveInMonth(tx, targetDate)) continue;
-        const value = Number(tx.value) || 0;
+        const value = parseTransactionAmount(tx.value);
         if (isIn) fixasIn += value; else fixasOut += value;
       }
 
@@ -196,7 +206,9 @@ export const FutureHeroCard: React.FC<FutureHeroCardProps> = ({
       </div>
 
       <div className="flex items-baseline gap-1 mb-1 px-1">
-        <p className="text-base font-bold text-[var(--trend-up)]">{privacy ? '••••' : '+' + FMT(gain)}</p>
+        <p className={`text-base font-bold ${gain >= 0 ? 'text-[var(--trend-up)]' : 'text-[var(--trend-down)]'}`}>
+          {privacy ? '••••' : `${gain >= 0 ? '+' : ''}${FMT(gain)}`}
+        </p>
         <span className="text-[10px] text-[var(--text-muted)] uppercase tracking-wider">no período</span>
       </div>
 

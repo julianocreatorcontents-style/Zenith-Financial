@@ -2,9 +2,8 @@ import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { 
   auth, db, googleProvider, signInWithPopup, signOut, 
   signInWithEmailAndPassword, createUserWithEmailAndPassword, updateProfile,
-  collection, addDoc, doc, setDoc, updateDoc, deleteDoc, onSnapshot, query, where, orderBy, serverTimestamp,
-  handleFirestoreError, OperationType, getDocs, writeBatch, limit,
-  FIRESTORE_ERROR_EVENT
+  collection, addDoc, doc, setDoc, updateDoc, deleteDoc, query, where, orderBy, serverTimestamp,
+  handleFirestoreError, OperationType, getDocs, writeBatch
 } from '../firebase';
 import { Timestamp } from 'firebase/firestore';
 import type { WriteBatch } from 'firebase/firestore';
@@ -48,6 +47,8 @@ import { calculateNetWorthProjection } from '../lib/adapters/netWorthProjection'
 import { enrichAsset } from '../lib/adapters/assetYieldService';
 import { calculateAssetBalanceUpdate } from '../lib/adapters/assetBalance';
 import { getCachedCdiRate, fetchLiveCdiRate } from '../lib/adapters/marketRateService';
+import { hasAssetMovementSince } from '../lib/finance';
+import { parseAssetDate } from '../lib/adapters/assetYieldService';
 import type { MarketRateState } from '../lib/adapters/marketRateService';
 import { mapSpreadsheetRow } from '../lib/spreadsheetParser';
 import type { Asset, UserProfile, Transaction, DDA, Settings } from '../types/app';
@@ -91,85 +92,18 @@ export interface FirestoreIssue {
 
 export type ZenithUser = User | CachedAuthUser;
 
-export const DEFAULT_SETTINGS: Settings = {
-  theme: 'dark',
-  language: 'pt-BR',
-  privacyMode: false,
-  activeWidgets: ['all'],
-  yieldColor: '#00FFA3',
-  granularity: 'month',
-  customTerms: {},
-  zenith_config: {
-    master_states: {
-      modo_privacidade: false,
-      insights_ia_ativo: true,
-      idioma: 'pt-BR',
-      tema_global: 'Escuro',
-      dashboard_management_expanded: false
-    },
-    categories: {
-      'Alimentação': { id: 'Alimentação', nome: 'Alimentação', cor_destaque: { hex: '#FF5722' }, visivel_no_dash: true, config_avancada: {}, ia_insights_buffer: {} },
-      'Moradia': { id: 'Moradia', nome: 'Moradia', cor_destaque: { hex: '#2196F3' }, visivel_no_dash: true, config_avancada: {}, ia_insights_buffer: {} },
-      'Transporte': { id: 'Transporte', nome: 'Transporte', cor_destaque: { hex: '#4CAF50' }, visivel_no_dash: true, config_avancada: {}, ia_insights_buffer: {} },
-      'Lazer': { id: 'Lazer', nome: 'Lazer', cor_destaque: { hex: '#9C27B0' }, visivel_no_dash: true, config_avancada: {}, ia_insights_buffer: {} },
-      'Saúde': { id: 'Saúde', nome: 'Saúde', cor_destaque: { hex: '#E91E63' }, visivel_no_dash: true, config_avancada: {}, ia_insights_buffer: {} }
-    },
-    dashboard_order: [
-      'CHART_EVOL_PATRIMONIO',
-      'METRIC_ENTRADAS',
-      'METRIC_SAIDAS',
-      'METRIC_RENDIMENTOS',
-      'CHART_ALOC_ATIV',
-      'CHART_FLUXO_CAIXA',
-      'CHART_DIST_CATEG',
-      'CHART_SAZON_MENS',
-      'CHART_PREV_CONTAS',
-      'CHART_METAS_PROG'
-    ]
-  }
-};
+import { useUserSettings, DEFAULT_SETTINGS } from './useUserSettings';
+import { useTransactionsData } from './useTransactionsData';
+import { useAssetsData } from './useAssetsData';
+import { useAuxiliaryData } from './useAuxiliaryData';
+
+export { DEFAULT_SETTINGS };
 
 export function useZenithData() {
   const [user, setUser] = useState<ZenithUser | null>(() => auth.currentUser || getSyncCachedUser());
-  const [profile, setProfile] = useState<UserProfile | null>(() => {
-    const u = auth.currentUser || getSyncCachedUser();
-    if (!u) return null;
-    return {
-      uid: u.uid,
-      displayName: u.displayName || 'Usuário',
-      photoURL: u.photoURL || `https://picsum.photos/seed/${u.uid}/100/100`,
-      email: u.email || '',
-      investor_profile: 'Conservador'
-    };
-  });
-  const [rawAssets, setRawAssets] = useState<Asset[]>([]);
-  const [transactions, setTransactions] = useState<Transaction[]>([]);
-  const [ddas, setDdas] = useState<DDA[]>([]);
-  const [settings, setSettings] = useState<Settings | null>(() => {
-    const u = auth.currentUser || getSyncCachedUser();
-    if (!u) return null;
-    try {
-      const cached = typeof window !== 'undefined' ? localStorage.getItem(`zenith_config_${u.uid}`) : null;
-      if (cached) {
-        const data = JSON.parse(cached);
-        return {
-          ...DEFAULT_SETTINGS,
-          zenith_config: data,
-          privacyMode: data.master_states?.modo_privacidade ?? false
-        };
-      }
-    } catch {}
-    return DEFAULT_SETTINGS;
-  });
-  const [privacyMode, setPrivacyMode] = useState(false);
   const [isAuthReady, setIsAuthReady] = useState(() => Boolean(auth.currentUser || getSyncCachedUser()));
-  const [userRules, setUserRules] = useState<any[]>([]);
-  const [notifications, setNotifications] = useState<any[]>([]);
-  const [investorProfile, setInvestorProfile] = useState<'Conservador' | 'Sofisticado' | 'Arrojado'>('Conservador');
-  const [isBiometryModalOpen, setIsBiometryModalOpen] = useState(false);
   const [marketRate, setMarketRate] = useState<MarketRateState>(getCachedCdiRate);
   const [error, setError] = useState<string | null>(null);
-  const [firestoreIssues, setFirestoreIssues] = useState<FirestoreIssue[]>([]);
   
   const [pendingTransaction, setPendingTransaction] = useState<any>(null);
   const [isProcessingIA, setIsProcessingIA] = useState(false);
@@ -182,6 +116,39 @@ export function useZenithData() {
     }
   });
   const [apiKeyError, setApiKeyError] = useState<string | null>(null);
+
+  // Sub-hooks com listeners do Firestore desacoplados
+  const {
+    profile,
+    setProfile,
+    investorProfile,
+    setInvestorProfile,
+    isBiometryModalOpen,
+    setIsBiometryModalOpen,
+    settings,
+    setSettings,
+    privacyMode,
+    setPrivacyMode,
+  } = useUserSettings(user);
+
+  const { transactions, setTransactions } = useTransactionsData(user);
+
+  const { rawAssets, assets, setRawAssets } = useAssetsData(
+    user,
+    transactions,
+    marketRate.cdiAnnualPercent
+  );
+
+  const {
+    notifications,
+    setNotifications,
+    ddas,
+    setDdas,
+    userRules,
+    setUserRules,
+    firestoreIssues,
+    setFirestoreIssues,
+  } = useAuxiliaryData(user);
 
   // 1. CDI Rate dinâmico via BCB
   useEffect(() => {
@@ -261,201 +228,6 @@ export function useZenithData() {
       unsub();
       clearTimeout(timer);
     };
-  }, []);
-
-  // 3. Profile Listener
-  useEffect(() => {
-    if (!user) {
-      setProfile(null);
-      return;
-    }
-    const unsub = onSnapshot(doc(db, 'users', user.uid), (snap) => {
-      try {
-        if (snap.exists()) {
-          const data = snap.data() as UserProfile;
-          setProfile({ ...data, uid: snap.id });
-          if (data.investor_profile) setInvestorProfile(data.investor_profile);
-        } else if (typeof navigator === 'undefined' || navigator.onLine) {
-          const initialProfile: any = {
-            uid: user.uid,
-            displayName: user.displayName || 'Usuário',
-            photoURL: user.photoURL || `https://picsum.photos/seed/${user.uid}/100/100`,
-            email: user.email || '',
-            investor_profile: 'Conservador',
-            createdAt: serverTimestamp(),
-            authProvider: user.providerData?.[0]?.providerId === 'google.com' ? 'google' : 'email'
-          };
-          setDoc(doc(db, 'users', user.uid), initialProfile).then(() => {
-            try {
-              const biometryDecision = localStorage.getItem(`biometry_${user.uid}`);
-              if (!biometryDecision && typeof window !== 'undefined' && window.PublicKeyCredential) {
-                setIsBiometryModalOpen(true);
-              }
-            } catch (e) {
-              console.warn("localStorage blocked:", e);
-            }
-          }).catch(e => handleFirestoreError(e, OperationType.WRITE, `users/${user.uid}`));
-        }
-      } catch (e) {
-        console.error("Error in profile listener:", e);
-      }
-    }, (e) => handleFirestoreError(e, OperationType.GET, `users/${user.uid}`));
-    return unsub;
-  }, [user]);
-
-  // 4. Assets Listener
-  useEffect(() => {
-    if (!user) {
-      setRawAssets([]);
-      return;
-    }
-    const q = query(collection(db, 'assets'), where('uid', '==', user.uid), orderBy('createdAt', 'desc'));
-    const unsub = onSnapshot(q, (snap) => {
-      const docs = snap.docs.map(d => ({ id: d.id, ...d.data() } as Asset));
-      setRawAssets(docs);
-    }, (e) => handleFirestoreError(e, OperationType.LIST, 'assets'));
-    return unsub;
-  }, [user]);
-
-  // Dynamic enrichment: compounds daily yield from deposit date to today
-  const assets = useMemo(() => {
-    return rawAssets.map(asset => enrichAsset(asset, marketRate.cdiAnnualPercent));
-  }, [rawAssets, marketRate.cdiAnnualPercent]);
-
-  // 5. Transactions Listener
-  useEffect(() => {
-    if (!user) {
-      setTransactions([]);
-      return;
-    }
-    // Query sem orderBy composto para garantir funcionamento no Spark Plan sem exigir índice manual
-    const q = query(collection(db, 'transactions'), where('uid', '==', user.uid));
-    const unsub = onSnapshot(q, (snap) => {
-      const docs = snap.docs.map(d => ({ id: d.id, ...d.data() } as Transaction));
-      docs.sort((a, b) => {
-        const da = parseTransactionDate(a.date || a.createdAt)?.getTime() || 0;
-        const db = parseTransactionDate(b.date || b.createdAt)?.getTime() || 0;
-        return db - da;
-      });
-      setTransactions(docs);
-    }, (e) => handleFirestoreError(e, OperationType.LIST, 'transactions'));
-    return unsub;
-  }, [user]);
-
-  // 6. Settings Listener
-  useEffect(() => {
-    if (!user) {
-      setSettings(null);
-      return;
-    }
-
-    try {
-      const cached = localStorage.getItem(`zenith_config_${user.uid}`);
-      if (cached) {
-        const data = JSON.parse(cached);
-        setSettings({ 
-          ...DEFAULT_SETTINGS,
-          zenith_config: data,
-          privacyMode: data.master_states?.modo_privacidade ?? false
-        });
-        setPrivacyMode(data.master_states?.modo_privacidade ?? false);
-      } else {
-        setSettings((curr) => curr || DEFAULT_SETTINGS);
-      }
-    } catch (e) {
-      console.warn("Failed to load cached settings:", e);
-      setSettings((curr) => curr || DEFAULT_SETTINGS);
-    }
-
-    const unsub = onSnapshot(doc(db, 'settings', user.uid), (snap) => {
-      if (snap.exists()) {
-        const data = snap.data() as Settings;
-        setSettings(data);
-        setPrivacyMode(data.privacyMode);
-        
-        if (data.zenith_config) {
-          try {
-            localStorage.setItem(`zenith_config_${user.uid}`, JSON.stringify(data.zenith_config));
-          } catch (e) {
-            console.warn("Storage failed:", e);
-          }
-        }
-      } else if (typeof navigator === 'undefined' || navigator.onLine) {
-        setDoc(doc(db, 'settings', user.uid), DEFAULT_SETTINGS).catch(e => handleFirestoreError(e, OperationType.WRITE, `settings/${user.uid}`));
-      }
-    }, (e) => handleFirestoreError(e, OperationType.GET, `settings/${user.uid}`));
-    return unsub;
-  }, [user]);
-
-  // 7. Notifications Listener
-  useEffect(() => {
-    if (!user) return;
-    const q = query(collection(db, 'notifications'), where('uid', '==', user.uid));
-    const unsub = onSnapshot(q, (snap) => {
-      const items = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-      items.sort((a: any, b: any) => {
-        const tA = a.createdAt?.toMillis ? a.createdAt.toMillis() : (a.createdAt ? new Date(a.createdAt).getTime() : 0);
-        const tB = b.createdAt?.toMillis ? b.createdAt.toMillis() : (b.createdAt ? new Date(b.createdAt).getTime() : 0);
-        return tB - tA;
-      });
-      
-      const realNotifications = items.slice(0, 10);
-      const reconciliationNotification = {
-        id: 'reconciliation-pending',
-        title: 'Rendimentos pendentes',
-        message: 'Confira se os rendimentos de hoje batem com o extrato oficial.',
-        action: 'open-reconciliation',
-        createdAt: new Date().toISOString(),
-        read: false
-      };
-      setNotifications([reconciliationNotification, ...realNotifications]);
-    }, (e) => handleFirestoreError(e, OperationType.LIST, 'notifications'));
-    return unsub;
-  }, [user]);
-
-  // 8. DDA Listener
-  useEffect(() => {
-    if (!user) {
-      setDdas([]);
-      return;
-    }
-    const q = query(collection(db, 'ddas'), where('uid', '==', user.uid));
-    const unsub = onSnapshot(q, (snap) => {
-      setDdas(snap.docs.map(d => ({ id: d.id, ...d.data() } as DDA)));
-    }, (e) => handleFirestoreError(e, OperationType.LIST, 'ddas'));
-    return unsub;
-  }, [user]);
-
-  // 9. User Rules Listener
-  useEffect(() => {
-    if (!user) {
-      setUserRules([]);
-      return;
-    }
-    const q = query(collection(db, 'user_rules'), where('uid', '==', user.uid));
-    const unsub = onSnapshot(q, (snap) => {
-      setUserRules(snap.docs.map(d => ({ id: d.id, ...d.data() })));
-    });
-    return unsub;
-  }, [user]);
-
-  // 10. Firestore Diagnostics Listener
-  useEffect(() => {
-    const handleDiagnostic = (event: Event) => {
-      const customEvent = event as CustomEvent<{ code: string; operationType: string; path: string | null }>;
-      if (!customEvent.detail) return;
-      const issue: FirestoreIssue = {
-        id: `${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
-        code: customEvent.detail.code,
-        operationType: customEvent.detail.operationType,
-        path: customEvent.detail.path,
-        timestamp: new Date().toLocaleTimeString('pt-BR')
-      };
-      setFirestoreIssues(prev => [issue, ...prev].slice(0, 5));
-    };
-
-    window.addEventListener(FIRESTORE_ERROR_EVENT, handleDiagnostic);
-    return () => window.removeEventListener(FIRESTORE_ERROR_EVENT, handleDiagnostic);
   }, []);
 
   // Recálculo atômico de saldos parciais
@@ -751,9 +523,14 @@ export function useZenithData() {
   }, [user]);
 
   const updateAsset = useCallback(async (id: string, data: any) => {
+    const cleanData: any = {};
+    for (const [key, val] of Object.entries(data)) {
+      if (val !== undefined && !(typeof val === 'number' && Number.isNaN(val))) {
+        cleanData[key] = val;
+      }
+    }
     const updatePayload = {
-      ...data,
-      investmentStartDate: data.investmentStartDate ?? new Date(),
+      ...cleanData,
       updatedAt: serverTimestamp(),
     };
     await updateDoc(doc(db, 'assets', id), updatePayload).catch((e: any) => handleFirestoreError(e, OperationType.UPDATE, `assets/${id}`));
@@ -922,7 +699,7 @@ export function useZenithData() {
           const XLSX = await import('xlsx');
           const wb = XLSX.read(new Uint8Array(buffer), { type: 'array' });
           const firstSheet = wb.SheetNames[0];
-          const rawRows = XLSX.utils.sheet_to_json(wb.Sheets[firstSheet]) as any[];
+          const rawRows = XLSX.utils.sheet_to_json(wb.Sheets[firstSheet]) as Array<Record<string, unknown>>;
 
           const parsedList = rawRows
             .map(row => mapSpreadsheetRow(row))
@@ -1001,11 +778,14 @@ export function useZenithData() {
   }, [user, getGeminiApiKey, recalculateBalances, settings?.language]);
 
   const assetsValueAt = useCallback((date: Date) => {
-    return rawAssets.reduce(
-      (sum, asset) => sum + enrichAsset(asset, marketRate.cdiAnnualPercent, date).currentValue,
-      0
-    );
-  }, [rawAssets, marketRate.cdiAnnualPercent]);
+    return rawAssets.reduce((sum, asset) => {
+      const anchor = parseAssetDate(asset.manualBalanceDate);
+      const hasMovement = anchor && transactions
+        ? hasAssetMovementSince(asset, transactions, anchor)
+        : false;
+      return sum + enrichAsset(asset, marketRate.cdiAnnualPercent, date, hasMovement, transactions).currentValue;
+    }, 0);
+  }, [rawAssets, transactions, marketRate.cdiAnnualPercent]);
 
   // Cálculos de Métricas
   const metrics = useMemo(() => {
@@ -1030,19 +810,19 @@ export function useZenithData() {
         total: currentTotals.in,
         var: calculateVariation(currentTotals.in, prevTotals.in),
         trend: currentTotals.in >= prevTotals.in ? ('up' as const) : ('down' as const),
-        data: getMiniChartData(transactions, 'in')
+        data: getMiniChartData(transactions, 'in', now)
       },
       out: {
         total: currentTotals.out,
         var: calculateVariation(currentTotals.out, prevTotals.out),
         trend: currentTotals.out >= prevTotals.out ? ('up' as const) : ('down' as const),
-        data: getMiniChartData(transactions, 'out')
+        data: getMiniChartData(transactions, 'out', now)
       },
       yield: {
         total: currentTotals.yield,
         var: calculateVariation(currentTotals.yield, prevTotals.yield),
         trend: currentTotals.yield >= prevTotals.yield ? ('up' as const) : ('down' as const),
-        data: getMiniChartData(transactions, 'yield')
+        data: getMiniChartData(transactions, 'yield', now)
       },
       monthBalance,
       netWorth,

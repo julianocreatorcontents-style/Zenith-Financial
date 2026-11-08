@@ -10,9 +10,7 @@ import {
   FileUp,
   X,
   ShieldCheck,
-  BarChart as BarChartIcon,
 } from 'lucide-react';
-import { AreaChart, Area, ResponsiveContainer } from 'recharts';
 import Modal from '../ui/Modal';
 import {
   db,
@@ -25,6 +23,7 @@ import {
 } from '../../firebase';
 import { extractAssets, getAiErrorMessage } from '../../lib/ai';
 import { calculateRealProfitability } from '../../lib/finance';
+import { resolveAssetPolicy } from '../../lib/adapters/assetYieldService';
 
 export interface AssetModalProps {
   asset: any;
@@ -71,21 +70,24 @@ export function AssetModal({
       id,
       change,
       currentValue,
+      baseBalance,
       accumulatedYield,
+      yieldSinceAnchor,
       dailyYield,
+      calculatedDailyYield,
       daysInvested,
       yieldPercent,
       yieldStartDate,
       originalValue,
+      monthEndValue,
+      monthYieldRemaining,
       ...updateData
     } = formData;
 
     if (startDateStr) {
       updateData.investmentStartDate = new Date(startDateStr + 'T12:00:00');
     }
-    if (updateData.valorInvestido === undefined && updateData.value !== undefined) {
-      updateData.valorInvestido = updateData.value;
-    }
+    // valorInvestido NÃO deve ser derivado de value (aporte base separado)
 
     onSave(asset.id, updateData);
   };
@@ -169,7 +171,7 @@ export function AssetModal({
           <>
             <div className="space-y-1">
               <p className="text-3xl font-mono tracking-tighter text-[var(--text-primary)] sm:text-4xl">
-                {privacyMode ? '••••••' : (asset.value ?? 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                {privacyMode ? '••••••' : (asset.currentValue ?? asset.value ?? 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
               </p>
               {asset.change && <p className="text-xs font-bold text-[var(--accent)]">{asset.change} {t("no período", "in period")}</p>}
             </div>
@@ -581,7 +583,13 @@ export interface AssetDeepDiveModalProps {
 
 export function AssetDeepDiveModal({ asset, onClose, language }: AssetDeepDiveModalProps) {
   const t = (pt: string, en: string) => (language === 'en-US' ? en : pt);
-  const realProfitability = calculateRealProfitability(12.5, asset.taxaInflacao || 4.5);
+  const currentValue = Number(asset.currentValue ?? asset.value ?? 0) || 0;
+  const dailyYield = Number(asset.dailyYield ?? 0) || 0;
+  const businessDays = resolveAssetPolicy(asset)?.policy.dayCountConvention === 'BUSINESS_DAYS_252';
+  const annualDays = businessDays ? 252 : 365;
+  const nominalRate = currentValue > 0 ? (dailyYield * annualDays * 100) / currentValue : 0;
+  const inflationRate = Number(asset.taxaInflacao ?? 4.5) || 4.5;
+  const realProfitability = calculateRealProfitability(nominalRate, inflationRate);
 
   return (
     <div className="fixed inset-0 z-[100] flex items-end justify-center">
@@ -648,20 +656,6 @@ export function AssetDeepDiveModal({ asset, onClose, language }: AssetDeepDiveMo
             </div>
             <div className="w-12 h-12 rounded-2xl bg-[var(--accent)]/20 flex items-center justify-center text-[var(--accent)]">
               <ShieldCheck size={24} />
-            </div>
-          </div>
-
-          <div className="h-48 w-full bg-white/5 rounded-[32px] border border-white/10 flex items-center justify-center relative overflow-hidden">
-            <div className="absolute inset-0 opacity-20">
-              <ResponsiveContainer width="100%" height="100%">
-                <AreaChart data={[{v:10}, {v:15}, {v:12}, {v:20}, {v:18}, {v:25}]}>
-                  <Area type="monotone" dataKey="v" stroke="var(--accent)" fill="var(--accent)" />
-                </AreaChart>
-              </ResponsiveContainer>
-            </div>
-            <div className="flex flex-col items-center gap-2 z-10">
-              <BarChartIcon size={32} className="text-[var(--accent)]" />
-              <p className="text-[10px] text-white/40 uppercase font-bold tracking-widest">{t("Gráfico de Evolução", "Evolution Chart")}</p>
             </div>
           </div>
 

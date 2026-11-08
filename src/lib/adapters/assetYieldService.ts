@@ -24,6 +24,18 @@ export interface AssetYieldInfo {
 
 export function parseAssetDate(value: RawTimestamp | any): Date | null {
   if (!value) return null;
+  // String "YYYY-MM-DD": parsear em horário LOCAL, não UTC.
+  // new Date("2026-11-06") retorna 06/11 00:00 UTC = 05/11 21:00 BRT,
+  // o que faz countCalendarDays contar 2 dias em sábado 07/11 (deveria ser 1).
+  if (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    const parts = value.split('-').map(Number);
+    const y = parts[0];
+    const m = parts[1];
+    const d = parts[2];
+    if (y !== undefined && m !== undefined && d !== undefined) {
+      return new Date(y, m - 1, d);
+    }
+  }
   const d = value?.toDate ? value.toDate() : value instanceof Date ? value : new Date(value);
   return d instanceof Date && !Number.isNaN(d.getTime()) ? d : null;
 }
@@ -48,6 +60,40 @@ export function countBusinessDays(startDate: Date, endDate: Date): number {
     }
   }
   return count;
+}
+
+/**
+ * Soma o rendimento diário entre duas datas respeitando a convenção do ativo:
+ * - dias úteis (BUSINESS_DAYS_252) ignoram sábados e domingos;
+ * - dias corridos usam o rendimento de fim de semana quando informado.
+ */
+export function projectYieldBetween(
+  dailyYield: number,
+  weekendYield: number,
+  businessDays: boolean,
+  startDate: Date,
+  endDate: Date
+): number {
+  const daily = Number.isFinite(dailyYield) ? dailyYield : 0;
+  const weekend = Number.isFinite(weekendYield) ? weekendYield : 0;
+  const cursor = new Date(startDate.getFullYear(), startDate.getMonth(), startDate.getDate());
+  const end = new Date(endDate.getFullYear(), endDate.getMonth(), endDate.getDate());
+  let total = 0;
+
+  while (cursor < end) {
+    cursor.setDate(cursor.getDate() + 1);
+    const dayOfWeek = cursor.getDay();
+    const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+    if (businessDays) {
+      if (!isWeekend) total += daily;
+    } else if (isWeekend && weekend > 0) {
+      total += weekend;
+    } else {
+      total += daily;
+    }
+  }
+
+  return Math.round(total * 100) / 100;
 }
 
 export interface ResolvedAssetPolicy {
@@ -147,7 +193,9 @@ export function resolveAssetPolicy(doc: RawAssetDoc): ResolvedAssetPolicy | null
 export function calculateAssetYieldInfo(
   doc: RawAssetDoc,
   cdiAnnualPercent: number = DEFAULT_CDI_ANNUAL_PERCENT,
-  today: Date = new Date()
+  today: Date = new Date(),
+  hasMovement: boolean = false,
+  transactions: any[] = []
 ): AssetYieldInfo {
   const rawManualBalance = (doc as any).manualBalance;
   const hasManualBalance =
@@ -247,7 +295,7 @@ export function calculateAssetYieldInfo(
       yieldSinceAnchor: 0,
       dailyYield,
       daysInvested: 0,
-      yieldPercent: 0,
+      yieldPercent: principal > 0 ? Math.round((historicalYield / principal) * 10000) / 100 : 0,
       startDate: anchorDate,
       monthEndValue,
       monthYieldRemaining,
@@ -261,7 +309,8 @@ export function calculateAssetYieldInfo(
   let rawYieldSinceAnchor = 0;
   const manualWeekendYield = Number((doc as any).manualWeekendYield);
   
-  if (hasManualYield) {
+  const useManualYield = hasManualYield && !hasMovement;
+  if (useManualYield) {
     // Loop dia a dia para respeitar o final de semana
     let cur = new Date(anchorDate);
     const end = new Date(today);
@@ -299,7 +348,7 @@ export function calculateAssetYieldInfo(
   let netYieldSinceAnchor = rawYieldSinceAnchor;
 
   // CORREÇÃO: GROSS mostra bruto (sem impostos). NET desconta impostos.
-  if (hasManualYield) {
+  if (useManualYield) {
     // O valor manual do extrato JÁ É LÍQUIDO. Mantém o valor.
     netYieldSinceAnchor = rawYieldSinceAnchor;
   } else if (resolved.taxDisplayMode === 'NET') {
@@ -328,18 +377,17 @@ export function calculateAssetYieldInfo(
   // Rendimento restante do mês = saldo projetado no fim do mês - saldo de hoje
   const monthYieldRemaining = Math.round(Math.max(0, monthEndValue - currentValue) * 100) / 100;
 
-  // Rendimento total acumulado (desde o aporte inicial histórico, se informado)
-  const totalYield = Math.round(Math.max(0, currentValue - principal) * 100) / 100;
-
-  const yieldPercent = baseBalance > 0
-    ? Math.round((yieldSinceAnchor / baseBalance) * 10000) / 100
+  // Rendimento acumulado desde o aporte original (principal), não apenas do mês.
+  const accumulatedYield = Math.round(Math.max(0, currentValue - principal) * 100) / 100;
+  const yieldPercent = principal > 0
+    ? Math.round((accumulatedYield / principal) * 10000) / 100
     : 0;
 
   return {
     baseBalance,
     principal,
     currentValue,
-    accumulatedYield: totalYield > 0 ? totalYield : yieldSinceAnchor,
+    accumulatedYield,
     yieldSinceAnchor,
     dailyYield,
     daysInvested: daysSinceAnchor,
@@ -350,10 +398,38 @@ export function calculateAssetYieldInfo(
   };
 }
 
+function calculateRemainingManualYield(
+  dailyYield: number,
+  weekendYield: number,
+  businessDays: boolean,
+  today: Date
+): number {
+  const monthEnd = new Date(today.getFullYear(), today.getMonth() + 1, 0);
+  const cursor = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+  let total = 0;
+
+  while (cursor < monthEnd) {
+    cursor.setDate(cursor.getDate() + 1);
+    const dayOfWeek = cursor.getDay();
+    const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+    if (businessDays) {
+      if (!isWeekend) total += dailyYield;
+    } else if (isWeekend && Number.isFinite(weekendYield) && weekendYield > 0) {
+      total += weekendYield;
+    } else {
+      total += dailyYield;
+    }
+  }
+
+  return Math.round(total * 100) / 100;
+}
+
 export function enrichAsset<T extends { value?: number; valorInvestido?: number; change?: string; [key: string]: any }>(
   asset: T,
   cdiAnnualPercent: number = DEFAULT_CDI_ANNUAL_PERCENT,
-  today: Date = new Date()
+  today: Date = new Date(),
+  hasMovement: boolean = false,
+  transactions: any[] = []
 ): T & {
   valorInvestido: number;
   originalValue: number;
@@ -362,6 +438,7 @@ export function enrichAsset<T extends { value?: number; valorInvestido?: number;
   accumulatedYield: number;
   yieldSinceAnchor: number;
   dailyYield: number;
+  calculatedDailyYield: number;
   daysInvested: number;
   yieldPercent: number;
   yieldStartDate: Date | null;
@@ -369,25 +446,30 @@ export function enrichAsset<T extends { value?: number; valorInvestido?: number;
   monthYieldRemaining: number;
   change?: string;
 } {
-  const info = calculateAssetYieldInfo(asset as any, cdiAnnualPercent, today);
+  const info = calculateAssetYieldInfo(asset as any, cdiAnnualPercent, today, hasMovement, transactions);
 
-  const formattedYield = info.yieldSinceAnchor.toLocaleString('pt-BR', {
+  const formattedYield = info.accumulatedYield.toLocaleString('pt-BR', {
     style: 'currency',
     currency: 'BRL',
   });
-  const change = info.yieldSinceAnchor > 0
+  const change = info.accumulatedYield > 0
     ? `+${formattedYield} (+${info.yieldPercent.toFixed(2)}%)`
     : asset.change;
 
   const hasManualYield = typeof (asset as any).manualDailyYield === 'number' && (asset as any).manualDailyYield > 0;
-  const finalDailyYield = hasManualYield ? (asset as any).manualDailyYield : info.dailyYield;
-  
-  // Se o rendimento for manual, recalculamos o "monthYieldRemaining" baseado nele
-  // (estimando 30 dias restantes para simplificar, ou mantendo a proporção)
-  const isMercadoPago = (asset.name || '').toLowerCase().includes('mercado pago');
-  const monthDays = isMercadoPago ? 22 : 30;
-  const finalMonthYield = hasManualYield 
-    ? finalDailyYield * monthDays 
+  // Respeita hasMovement: se houve movimentação, usa projectTiered (info.dailyYield)
+  // em vez do manualDailyYield do extrato (que está calibrado para o saldo antigo)
+  const useManualDaily = hasManualYield && !hasMovement;
+  const finalDailyYield = useManualDaily ? (asset as any).manualDailyYield : info.dailyYield;
+  const resolved = resolveAssetPolicy(asset as any);
+  const businessDays = resolved?.policy.dayCountConvention === 'BUSINESS_DAYS_252';
+  const finalMonthYield = useManualDaily
+    ? calculateRemainingManualYield(
+        finalDailyYield,
+        Number((asset as any).manualWeekendYield),
+        businessDays,
+        today
+      )
     : info.monthYieldRemaining;
 
   return {
@@ -400,6 +482,7 @@ export function enrichAsset<T extends { value?: number; valorInvestido?: number;
     accumulatedYield: info.accumulatedYield,
     yieldSinceAnchor: info.yieldSinceAnchor,
     dailyYield: finalDailyYield,
+    calculatedDailyYield: info.dailyYield,
     daysInvested: info.daysInvested,
     yieldPercent: info.yieldPercent,
     yieldStartDate: info.startDate,

@@ -67,7 +67,9 @@ export const GoalsHeroCard: React.FC<GoalsHeroCardProps> = ({
             </div>
             <div className="bg-[var(--accent)]/10 px-3 py-1.5 rounded-xl border border-[var(--accent)]/20 text-right">
                <p className="text-[9px] text-[var(--text-muted)] uppercase font-bold">Fluxo Mensal</p>
-               <p className="text-sm font-mono font-bold text-[var(--accent)]">{privacy ? '•••' : '+' + FMT(fluxoRecorrenteLiquido)}</p>
+               <p className={`text-sm font-mono font-bold ${fluxoRecorrenteLiquido >= 0 ? 'text-[var(--accent)]' : 'text-[var(--trend-down)]'}`}>
+                 {privacy ? '•••' : `${fluxoRecorrenteLiquido >= 0 ? '+' : ''}${FMT(fluxoRecorrenteLiquido)}`}
+               </p>
             </div>
           </div>
 
@@ -88,25 +90,25 @@ export const GoalsHeroCard: React.FC<GoalsHeroCardProps> = ({
       {showDetails && (
         <div className="mt-3 p-4 bg-[var(--bg-app)] rounded-2xl border border-[var(--border-card)] text-[10px] font-mono space-y-1.5 animate-in fade-in">
            <p className="text-[var(--text-muted)] font-sans font-bold uppercase tracking-widest mb-2">1. Saldo Base (Ajuste de Únicas)</p>
-           <div className="flex justify-between text-[var(--text-secondary)]"><span>Patrimônio Atual</span><span>{FMT(currentNetWorth)}</span></div>
-           <div className="flex justify-between"><span className="text-[var(--text-secondary)]">+ Entradas Únicas</span><span className="text-[var(--trend-up)]">{FMT(debug?.entradasUnicas || 0)}</span></div>
-           <div className="flex justify-between"><span className="text-[var(--text-secondary)]">- Saídas Únicas</span><span className="text-[var(--trend-down)]">-{FMT(debug?.saidasUnicas || 0)}</span></div>
+           <div className="flex justify-between text-[var(--text-secondary)]"><span>Patrimônio Atual</span><span>{privacy ? '••••••' : FMT(currentNetWorth)}</span></div>
+           <div className="flex justify-between"><span className="text-[var(--text-secondary)]">+ Entradas Únicas</span><span className="text-[var(--trend-up)]">{privacy ? '••••••' : FMT(debug?.entradasUnicas || 0)}</span></div>
+           <div className="flex justify-between"><span className="text-[var(--text-secondary)]">- Saídas Únicas</span><span className="text-[var(--trend-down)]">{privacy ? '••••••' : `-${FMT(debug?.saidasUnicas || 0)}`}</span></div>
            <div className="flex justify-between pt-1 border-t border-[var(--border-card)] font-bold text-[11px] mt-1">
-             <span>Saldo Base</span><span className="text-[var(--accent)]">{FMT(saldoBase)}</span>
+             <span>Saldo Base</span><span className="text-[var(--accent)]">{privacy ? '••••••' : FMT(saldoBase)}</span>
            </div>
 
            <p className="text-[var(--text-muted)] font-sans font-bold uppercase tracking-widest mb-2 mt-3 pt-2 border-t border-[var(--border-card)]">2. Fluxo Recorrente</p>
-           <div className="flex justify-between text-[var(--text-secondary)]"><span>+ Rendimento Real (22/30d)</span><span className="text-[var(--trend-up)]">{FMT(debug?.yieldMensal || 0)}</span></div>
-           <div className="flex justify-between text-[var(--text-secondary)]"><span>+ Entradas Fixas</span><span className="text-[var(--trend-up)]">{FMT(debug?.entradasFixas || 0)}</span></div>
-           <div className="flex justify-between text-[var(--text-secondary)]"><span>- Saídas Fixas</span><span className="text-[var(--trend-down)]">-{FMT(debug?.saidasFixas || 0)}</span></div>
+           <div className="flex justify-between text-[var(--text-secondary)]"><span>+ Rendimento Real (22/30d)</span><span className="text-[var(--trend-up)]">{privacy ? '••••••' : FMT(debug?.yieldMensal || 0)}</span></div>
+           <div className="flex justify-between text-[var(--text-secondary)]"><span>+ Entradas Fixas</span><span className="text-[var(--trend-up)]">{privacy ? '••••••' : FMT(debug?.entradasFixas || 0)}</span></div>
+           <div className="flex justify-between text-[var(--text-secondary)]"><span>- Saídas Fixas</span><span className="text-[var(--trend-down)]">{privacy ? '••••••' : `-${FMT(debug?.saidasFixas || 0)}`}</span></div>
            
            <div className="flex justify-between pt-1 border-t border-[var(--border-card)] font-bold text-[11px] mt-1">
-             <span>Fluxo Líquido Mensal</span><span className="text-[var(--accent)]">{FMT(fluxoRecorrenteLiquido)}</span>
+             <span>Fluxo Líquido Mensal</span><span className="text-[var(--accent)]">{privacy ? '••••••' : FMT(fluxoRecorrenteLiquido)}</span>
            </div>
            
            <div className="flex justify-between text-[var(--text-secondary)] mt-3 pt-2 border-t border-[var(--border-card)]">
              <span>Taxa Efetiva Mensal</span>
-             <span className="text-[var(--accent)] font-bold">{((debug?.taxaMensal || 0) * 100).toFixed(3)}%</span>
+             <span className="text-[var(--accent)] font-bold">{privacy ? '•••' : `${((debug?.taxaMensal || 0) * 100).toFixed(3)}%`}</span>
            </div>
            <p className="text-[9px] text-[var(--text-muted)] italic mt-3 font-sans">A projeção aplica juros compostos sobre o saldo crescente e soma o fluxo mês a mês.</p>
         </div>

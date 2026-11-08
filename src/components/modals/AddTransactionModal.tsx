@@ -148,7 +148,7 @@ export function AddTransactionModal({
               <option value="">{t("Selecione uma conta...", "Select an account...")}</option>
               {selectableAssets.map((asset: any) => (
                 <option key={asset.id} value={asset.id}>
-                  {asset.name} {asset.value !== undefined ? `(R$ ${Number(asset.value).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })})` : ''}
+                  {asset.name} {(asset.currentValue ?? asset.manualBalance ?? asset.value) !== undefined ? `(R$ ${Number(asset.currentValue ?? asset.manualBalance ?? asset.value).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })})` : ''}
                 </option>
               ))}
             </select>

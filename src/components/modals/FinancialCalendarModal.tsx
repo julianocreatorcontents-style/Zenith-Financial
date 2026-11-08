@@ -1,8 +1,16 @@
 import React, { useState, useMemo } from 'react';
-import { ChevronLeft, ChevronRight, X, TrendingUp, TrendingDown, Calendar as CalendarIcon, Edit3, Save } from 'lucide-react';
+import { ChevronLeft, ChevronRight, X, Edit3, Save } from 'lucide-react';
+import { parseTransactionAmount, parseTransactionDate } from '../../lib/finance';
 
 const FMT = (val: number) => new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(val);
 const WEEK_DAYS = ['DOM', 'SEG', 'TER', 'QUA', 'QUI', 'SEX', 'SÁB'];
+
+const startOfDay = (value: Date) => new Date(value.getFullYear(), value.getMonth(), value.getDate());
+const addDays = (value: Date, amount: number) => {
+  const next = new Date(value);
+  next.setDate(next.getDate() + amount);
+  return next;
+};
 
 interface FinancialCalendarModalProps {
   assets: any[];
@@ -40,64 +48,92 @@ export const FinancialCalendarModal: React.FC<FinancialCalendarModalProps> = ({
   const dayData = useMemo(() => {
     if (selectedDay === null) return null;
 
-    const isWeekend = (day: number) => {
-      const d = new Date(currentYear, currentMonth, day).getDay();
-      return d === 0 || d === 6;
-    };
+    const targetDay = startOfDay(new Date(currentYear, currentMonth, selectedDay));
+    const today = startOfDay(new Date());
+    const monthStart = new Date(currentYear, currentMonth, 1);
 
     let totalYield = 0;
     const assetSnapshots: Record<string, { balance: number, yield: number }> = {};
     const dayTxList: any[] = [];
 
-    const baseBalances: Record<string, number> = {};
-    assets.forEach(a => { 
-      baseBalances[a.id] = a.manualBalance || a.currentValue || a.value || 0; 
-      assetSnapshots[a.id] = { balance: baseBalances[a.id], yield: 0 };
+    const txDate = (tx: any) => parseTransactionDate(tx?.date ?? tx?.createdAt);
+
+    const isBusinessDays = (asset: any) => {
+      const convention = asset?.investmentPolicy?.dayCountConvention;
+      if (convention === 'BUSINESS_DAYS_252') return true;
+      if (convention === 'CALENDAR_DAYS_365') return false;
+      return String(asset?.name || '').toLowerCase().includes('mercado pago');
+    };
+
+    const yieldForDay = (asset: any, day: Date) => {
+      const daily = Number(asset?.dailyYield ?? asset?.manualDailyYield ?? 0);
+      const weekend = Number(asset?.manualWeekendYield ?? 0);
+      const dayOfWeek = day.getDay();
+      const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+      if (isBusinessDays(asset)) return isWeekend ? 0 : daily;
+      return isWeekend && Number.isFinite(weekend) && weekend > 0 ? weekend : daily;
+    };
+
+    const flowForAsset = (tx: any) => {
+      const value = parseTransactionAmount(tx?.value);
+      const type = String(tx?.type ?? '').toLowerCase().trim();
+      if (['in', 'entrada', 'receita', 'credito', 'yield', 'rendimento'].includes(type)) return value;
+      if (['out', 'saida', 'saída', 'despesa', 'debito'].includes(type)) return -value;
+      return 0;
+    };
+
+    transactions.forEach(tx => {
+      const date = txDate(tx);
+      if (date && date.getFullYear() === currentYear && date.getMonth() === currentMonth && date.getDate() === selectedDay) {
+        dayTxList.push(tx);
+      }
     });
 
-    for (let d = 1; d <= selectedDay; d++) {
-      const weekend = isWeekend(d);
+    assets.forEach(asset => {
+      const hasManualBalance =
+        asset?.manualBalance !== undefined &&
+        asset?.manualBalance !== null &&
+        asset?.manualBalance !== '' &&
+        Number.isFinite(Number(asset.manualBalance));
+      const snapshotRaw = hasManualBalance
+        ? (parseTransactionDate(asset.manualBalanceDate) ??
+           parseTransactionDate(asset.investmentStartDate) ??
+           parseTransactionDate(asset.createdAt))
+        : null;
+      const snapshot = startOfDay(snapshotRaw ?? today);
+      const base = hasManualBalance ? Number(asset.manualBalance) : Number(asset?.currentValue ?? asset?.value ?? 0);
+      const hasProjectedYield = Number(asset?.dailyYield ?? asset?.manualDailyYield ?? 0) > 0;
 
-      assets.forEach(a => {
-        const daily = Number(a.manualDailyYield ?? a.dailyYield ?? 0);
-        const wEnd = Number(a.manualWeekendYield ?? 0);
-        const isMP = (a.name || '').toLowerCase().includes('mercado pago');
-        
-        let gain = 0;
-        if (weekend) {
-          if (!isMP && wEnd > 0) gain = wEnd;
-        } else {
-          gain = daily;
+      let balance = base;
+      let monthYield = 0;
+
+      if (targetDay > snapshot) {
+        for (let day = addDays(snapshot, 1); day <= targetDay; day = addDays(day, 1)) {
+          const gain = yieldForDay(asset, day);
+          balance += gain;
+          if (day >= monthStart) monthYield += gain;
         }
 
-        assetSnapshots[a.id].balance += gain;
-        assetSnapshots[a.id].yield += gain;
-        totalYield += gain;
-      });
+        transactions.forEach(tx => {
+          if (!tx?.assetId || tx.assetId !== asset.id) return;
+          const date = txDate(tx);
+          if (!date) return;
+          const day = startOfDay(date);
+          if (day <= snapshot || day > targetDay) return;
+          const type = String(tx?.type ?? '').toLowerCase().trim();
+          if ((type === 'yield' || type === 'rendimento') && hasProjectedYield) return;
+          balance += flowForAsset(tx);
+        });
+      }
 
-      const txs = transactions.filter(t => {
-        const txDate = t.date?.toDate ? t.date.toDate() : new Date(t.date);
-        return txDate.getDate() === d && txDate.getMonth() === currentMonth && txDate.getFullYear() === currentYear;
-      });
-
-      txs.forEach(tx => {
-        if (d === selectedDay) dayTxList.push(tx);
-        const val = Number(tx.value) || 0;
-        
-        if (tx.assetId && assetSnapshots[tx.assetId]) {
-          if (tx.type === 'in') {
-            assetSnapshots[tx.assetId].balance += val;
-          } else {
-            assetSnapshots[tx.assetId].balance -= val;
-          }
-        }
-      });
-    }
+      assetSnapshots[asset.id] = { balance, yield: monthYield };
+      totalYield += monthYield;
+    });
 
     const totalBalance = Object.values(assetSnapshots).reduce((acc, a) => acc + a.balance, 0);
 
     return { totalBalance, totalYield, assetSnapshots, dayTxList };
-  }, [selectedDay, assets, transactions]);
+  }, [selectedDay, assets, transactions, currentYear, currentMonth]);
 
   const handleSelectItem = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const val = e.target.value;
@@ -116,21 +152,30 @@ export const FinancialCalendarModal: React.FC<FinancialCalendarModalProps> = ({
     }
   };
 
+  const toNumber = (value: any, fallback = 0) => {
+    if (value === '' || value === null || value === undefined) return fallback;
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : fallback;
+  };
+
   const handleSave = async () => {
     if (!editingData) return;
     if (editingData.isAsset) {
+      const fallbackBalance = toNumber(editingData.currentValue, toNumber(editingData.value));
       await onUpdateAsset(editingData.id, {
-        manualBalance: Number(editingData.manualBalance || editingData.currentValue || editingData.value),
+        manualBalance: toNumber(editingData.manualBalance, fallbackBalance),
         manualBalanceDate: selectedDay !== null
           ? new Date(currentYear, currentMonth, selectedDay, 12, 0, 0)
           : new Date(),
-        manualDailyYield: Number(editingData.manualDailyYield || editingData.dailyYield),
-        manualWeekendYield: editingData.manualWeekendYield ? Number(editingData.manualWeekendYield) : null
+        manualDailyYield: toNumber(editingData.manualDailyYield, toNumber(editingData.dailyYield)),
+        manualWeekendYield: editingData.manualWeekendYield === '' || editingData.manualWeekendYield === null || editingData.manualWeekendYield === undefined
+          ? null
+          : toNumber(editingData.manualWeekendYield)
       });
     } else {
       await onUpdateTransaction(editingData, {
         label: editingData.label,
-        value: Number(editingData.value),
+        value: parseTransactionAmount(editingData.value),
         type: editingData.type
       });
     }
@@ -182,7 +227,8 @@ export const FinancialCalendarModal: React.FC<FinancialCalendarModalProps> = ({
             if (day === null) return <div key={`empty-${idx}`} />;
             const isSelected = selectedDay === day;
             const hasTx = transactions.some(t => {
-              const txDate = t.date?.toDate ? t.date.toDate() : new Date(t.date);
+              const txDate = parseTransactionDate(t.date ?? t.createdAt);
+              if (!txDate) return false;
               return txDate.getDate() === day && txDate.getMonth() === currentMonth && txDate.getFullYear() === currentYear;
             });
 
@@ -238,7 +284,7 @@ export const FinancialCalendarModal: React.FC<FinancialCalendarModalProps> = ({
                   <optgroup label="Lançamentos do Dia">
                     {dayData.dayTxList.map((t: any) => (
                       <option key={t.id} value={`tx-${t.id}`}>
-                        {t.type === 'in' ? '[+]' : '[-]'} {t.label} - {FMT(t.value)}
+                        {t.type === 'out' ? '[-]' : '[+]'} {t.label} - {FMT(t.value)}
                       </option>
                     ))}
                   </optgroup>
@@ -269,11 +315,11 @@ export const FinancialCalendarModal: React.FC<FinancialCalendarModalProps> = ({
                     <div className="grid grid-cols-2 gap-3">
                       <div>
                         <label className="text-[9px] uppercase text-[var(--text-muted)] block mb-1">Saldo Base</label>
-                        <input type="number" value={editingData.manualBalance || editingData.currentValue || editingData.value} onChange={e => setEditingData({...editingData, manualBalance: e.target.value})} className="w-full bg-[var(--bg-app)] border border-[var(--border-card)] rounded-lg p-2 text-sm font-mono" />
+                        <input type="number" value={editingData.manualBalance ?? editingData.currentValue ?? editingData.value ?? ''} onChange={e => setEditingData({...editingData, manualBalance: e.target.value})} className="w-full bg-[var(--bg-app)] border border-[var(--border-card)] rounded-lg p-2 text-sm font-mono" />
                       </div>
                       <div>
                         <label className="text-[9px] uppercase text-[var(--text-muted)] block mb-1">Rend. Dia Útil</label>
-                        <input type="number" value={editingData.manualDailyYield || editingData.dailyYield} onChange={e => setEditingData({...editingData, manualDailyYield: e.target.value})} className="w-full bg-[var(--bg-app)] border border-[var(--border-card)] rounded-lg p-2 text-sm font-mono" />
+                        <input type="number" value={editingData.manualDailyYield ?? editingData.dailyYield ?? ''} onChange={e => setEditingData({...editingData, manualDailyYield: e.target.value})} className="w-full bg-[var(--bg-app)] border border-[var(--border-card)] rounded-lg p-2 text-sm font-mono" />
                       </div>
                     </div>
                   </div>
@@ -293,6 +339,7 @@ export const FinancialCalendarModal: React.FC<FinancialCalendarModalProps> = ({
                         <select value={editingData.type} onChange={e => setEditingData({...editingData, type: e.target.value})} className="w-full bg-[var(--bg-app)] border border-[var(--border-card)] rounded-lg p-2 text-sm">
                           <option value="in">Entrada</option>
                           <option value="out">Saída</option>
+                          <option value="yield">Rendimento</option>
                         </select>
                       </div>
                     </div>

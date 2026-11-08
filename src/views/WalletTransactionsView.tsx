@@ -8,8 +8,9 @@ import {
   History,
   Edit3,
   Trash2,
+  ArrowLeftRight,
 } from 'lucide-react';
-import { parseTransactionDate, isExpenseTransaction } from '../lib/finance';
+import { parseTransactionAmount, parseTransactionDate, isExpenseTransaction, isIncomeTransaction, isYieldTransaction, isTransferTransaction } from '../lib/finance';
 
 export interface WalletTransactionsViewProps {
   transactions: any[];
@@ -33,14 +34,16 @@ export function WalletTransactionsView({
   const previousMonthDate = new Date(currentYear, currentMonth - 1, 1);
 
   const getTransactionDate = (tx: any): Date | null => {
-    return parseTransactionDate(tx?.date);
+    return parseTransactionDate(tx?.date ?? tx?.createdAt ?? tx?.timestamp);
   };
 
   const monthBalance = transactions.reduce((acc: number, tx: any) => {
     const date = getTransactionDate(tx);
     if (!date || date.getMonth() !== currentMonth || date.getFullYear() !== currentYear) return acc;
-    const value = Number(tx.value) || 0;
-    return acc + (isExpenseTransaction(tx) ? -value : value);
+    const value = parseTransactionAmount(tx.value);
+    if (isExpenseTransaction(tx)) return acc - value;
+    if (isIncomeTransaction(tx) || isYieldTransaction(tx)) return acc + value;
+    return acc;
   }, 0);
 
   const filteredTransactions = transactions.filter((tx: any) => {
@@ -139,8 +142,9 @@ export function WalletTransactionsView({
               </p>
             </div>
           ) : filteredTransactions.map((tx: any, idx: number) => {
-            const isIncome = !isExpenseTransaction(tx);
-            const value = Math.abs(Number(tx.value) || 0);
+            const isTransfer = isTransferTransaction(tx);
+            const isIncome = !isTransfer && !isExpenseTransaction(tx);
+            const value = parseTransactionAmount(tx.value);
             const date = getTransactionDate(tx);
 
             return (
@@ -152,10 +156,10 @@ export function WalletTransactionsView({
               >
                 <div className="flex items-center gap-4">
                   <div 
-                    className={`w-12 h-12 rounded-2xl flex items-center justify-center ${isIncome ? 'bg-[var(--accent)]/10 text-[var(--accent)]' : 'bg-[var(--trend-down)]/10'}`}
-                    style={isIncome ? undefined : { color: getColor(tx.categoria_primaria) }}
+                    className={`w-12 h-12 rounded-2xl flex items-center justify-center ${isTransfer ? 'bg-[var(--text-muted)]/10 text-[var(--text-muted)]' : isIncome ? 'bg-[var(--accent)]/10 text-[var(--accent)]' : 'bg-[var(--trend-down)]/10'}`}
+                    style={isTransfer || isIncome ? undefined : { color: getColor(tx.categoria_primaria) }}
                   >
-                    {getIcon(tx.categoria_primaria)}
+                    {isTransfer ? <ArrowLeftRight size={20} /> : getIcon(tx.categoria_primaria)}
                   </div>
                   <div>
                     <div className="flex items-center gap-2">
@@ -163,6 +167,11 @@ export function WalletTransactionsView({
                       {tx.applied === false && (
                         <span className="text-[9px] px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-400 font-bold uppercase tracking-wider">
                           {t("Agendado", "Scheduled")}
+                        </span>
+                      )}
+                      {isTransfer && (
+                        <span className="text-[9px] px-1.5 py-0.5 rounded bg-[var(--text-muted)]/10 text-[var(--text-muted)] font-bold uppercase tracking-wider">
+                          {t("Transferência", "Transfer")}
                         </span>
                       )}
                     </div>
@@ -174,8 +183,8 @@ export function WalletTransactionsView({
                 
                 <div className="flex items-center gap-6">
                   <div className="text-right">
-                    <p className={`text-base font-mono font-bold ${isIncome ? 'text-[var(--accent)]' : 'text-[var(--trend-down)]'}`}>
-                      {isIncome ? '+' : '-'} {value.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                    <p className={`text-base font-mono font-bold ${isTransfer ? 'text-[var(--text-muted)]' : isIncome ? 'text-[var(--accent)]' : 'text-[var(--trend-down)]'}`}>
+                      {isTransfer ? '↔' : isIncome ? '+' : '-'} {value.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
                     </p>
                     <div className="flex gap-1 mt-1 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
                       <button 

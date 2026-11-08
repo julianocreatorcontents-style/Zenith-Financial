@@ -5,6 +5,7 @@ import { YieldCalculator } from '../domain/yield/YieldCalculator';
 import { IncomeTaxPolicy } from '../domain/tax/IncomeTaxPolicy';
 import { IofPolicy } from '../domain/tax/IofPolicy';
 import { assetToInvestment } from '../lib/adapters/assetToInvestment';
+import { resolveAssetPolicy } from '../lib/adapters/assetYieldService';
 import type { RawAssetDoc } from '../lib/adapters/assetToInvestment';
 import type { Investment } from '../domain/investment/Investment';
 import type { YieldPolicy } from '../domain/yield/YieldPolicy';
@@ -88,9 +89,22 @@ export function YieldProjectionCard({ assets, cdiAnnualPercent = 13.65, rateSour
       .filter(a => a.type === 'investment' || a.type === 'liquidity' || a.strategy)
       .map(a => {
         if (a.strategy && a.investmentPolicy) return a;
+        const resolved = resolveAssetPolicy(a as RawAssetDoc);
+        if (!resolved) return a;
         return {
-          ...a, strategy: 'FIXED_INCOME_TIERED',
-          investmentPolicy: { indexer: 'CDI', rateType: 'PERCENT_INDEXER', dayCountConvention: 'BUSINESS_DAYS_252', taxDisplayMode: 'NET', rateTiers: [{ upTo: null, baseRateValue: 100, bonusRateValue: 0 }] }
+          ...a,
+          strategy: resolved.strategy,
+          investmentPolicy: {
+            indexer: resolved.policy.indexer,
+            rateType: resolved.policy.rateType,
+            dayCountConvention: resolved.policy.dayCountConvention,
+            taxDisplayMode: resolved.taxDisplayMode,
+            rateTiers: resolved.policy.rateTiers.map((tier) => ({
+              upTo: tier.upTo ? tier.upTo.toBRL() : null,
+              baseRateValue: tier.baseRateValue,
+              bonusRateValue: tier.bonusRateValue,
+            })),
+          },
         } as RawAssetDoc;
       });
   }, [assets]);

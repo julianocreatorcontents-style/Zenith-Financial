@@ -16,6 +16,8 @@ import {
   parseTransactionDate,
   isExpenseTransaction,
   isIncomeTransaction,
+  isTransferTransaction,
+  isYieldTransaction,
 } from './finance';
 
 describe('finance utils', () => {
@@ -56,6 +58,35 @@ describe('finance utils', () => {
       expect(isExpenseTransaction({ type: 'in' })).toBe(false);
       expect(isIncomeTransaction({ type: 'in' })).toBe(true);
       expect(isIncomeTransaction({ type: 'entrada' })).toBe(true);
+    });
+
+    it('trata transferências entre contas próprias como neutras (não despesa nem receita)', () => {
+      expect(isExpenseTransaction({ type: 'out', categoria_primaria: 'transferencia' })).toBe(false);
+      expect(isIncomeTransaction({ type: 'in', categoria_primaria: 'transferencia' })).toBe(false);
+      expect(isTransferTransaction({ categoria_primaria: 'transferencia' })).toBe(true);
+    });
+  });
+
+  describe('isYieldTransaction', () => {
+    it('reconhece rendimento explícito', () => {
+      expect(isYieldTransaction({ type: 'yield' })).toBe(true);
+      expect(isYieldTransaction({ type: 'rendimento' })).toBe(true);
+      expect(isYieldTransaction({ categoria_primaria: 'Rendimentos' })).toBe(true);
+    });
+
+    it('não confunde aporte (saída em Investimentos) com rendimento', () => {
+      const aporte = { type: 'out', categoria_primaria: 'Investimentos', value: 5000 };
+      expect(isYieldTransaction(aporte)).toBe(false);
+      expect(isExpenseTransaction(aporte)).toBe(true);
+      expect(isIncomeTransaction(aporte)).toBe(false);
+    });
+
+    it('não confunde resgate (entrada em Investimentos) com rendimento', () => {
+      expect(isYieldTransaction({ type: 'in', categoria_primaria: 'Investimentos' })).toBe(false);
+    });
+
+    it('não conta transferências como rendimento', () => {
+      expect(isYieldTransaction({ type: 'yield', categoria_primaria: 'transferencia' })).toBe(false);
     });
   });
 
@@ -114,6 +145,18 @@ describe('finance utils', () => {
       const txs = [{ type: 'in', value: 1200, date: firestoreTimestamp }];
       const totals = calculateTotals(txs, 5, 2026, []);
       expect(totals.in).toBe(1200);
+    });
+
+    it('não contabiliza aporte em Investimentos como rendimento', () => {
+      const txs = [
+        { type: 'out', value: 5000, categoria_primaria: 'Investimentos', date: new Date(2026, 5, 10) },
+        { type: 'yield', value: 45.67, date: new Date(2026, 5, 15) },
+      ];
+
+      const totals = calculateTotals(txs, 5, 2026, []);
+
+      expect(totals.out).toBe(5000);
+      expect(totals.yield).toBe(45.67);
     });
   });
 
@@ -507,6 +550,39 @@ describe('finance utils', () => {
         const result = calculateGoalProjection(1000, [past], [], 100000);
 
         expect(result.saldoBase).toBe(1000);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('ignora transferências entre contas no cálculo do saldo base e fluxo de metas', () => {
+      vi.useFakeTimers();
+      try {
+        vi.setSystemTime(new Date(2026, 10, 4, 12, 0, 0));
+
+        const futureTransferOut = {
+          type: 'out',
+          categoria_primaria: 'transferencia',
+          value: 1000,
+          date: new Date(2026, 10, 20),
+          isRecurring: false,
+          label: 'Transferência MP Saldo → 99Pay',
+        };
+
+        const futureTransferIn = {
+          type: 'in',
+          categoria_primaria: 'transferencia',
+          value: 1000,
+          date: new Date(2026, 10, 20),
+          isRecurring: false,
+          label: 'Transferência MP Saldo → 99Pay',
+        };
+
+        const result = calculateGoalProjection(1000, [futureTransferOut, futureTransferIn], [], 100000);
+
+        expect(result.saldoBase).toBe(1000);
+        expect(result.debug.entradasUnicas).toBe(0);
+        expect(result.debug.saidasUnicas).toBe(0);
       } finally {
         vi.useRealTimers();
       }

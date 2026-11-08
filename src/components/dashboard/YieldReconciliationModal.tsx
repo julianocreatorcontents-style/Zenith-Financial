@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
-import { X, Trash2 } from 'lucide-react';
+import { X } from 'lucide-react';
+import { parseTransactionAmount } from '../../lib/finance';
 
 const FMT = (val: number) => new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(val);
 
@@ -25,19 +26,19 @@ export const YieldReconciliationModal: React.FC<YieldReconciliationModalProps> =
     setInputs(prev => ({ ...prev, [id]: { ...prev[id], [field]: value } }));
   };
 
-  const handleSave = () => {
-    const updated = assets.map(a => {
-      const rawW = inputs[a.id].weekday.trim().replace(',', '.');
-      const rawE = inputs[a.id].weekend.trim().replace(',', '.');
-      const valW = rawW === '' ? null : parseFloat(rawW);
-      const valE = rawE === '' ? null : parseFloat(rawE);
+  const parseOptional = (raw: string): number | null => {
+    const trimmed = raw.trim();
+    if (!trimmed) return null;
+    const parsed = parseTransactionAmount(trimmed);
+    return parsed > 0 ? parsed : null;
+  };
 
-      return {
-        ...a,
-        manualDailyYield: isNaN(valW as number) || valW === null ? null : valW,
-        manualWeekendYield: isNaN(valE as number) || valE === null ? null : valE,
-      };
-    });
+  const handleSave = () => {
+    const updated = assets.map(a => ({
+      ...a,
+      manualDailyYield: parseOptional(inputs[a.id]?.weekday ?? ''),
+      manualWeekendYield: parseOptional(inputs[a.id]?.weekend ?? ''),
+    }));
     onSave(updated);
     onClose();
   };
@@ -69,7 +70,7 @@ export const YieldReconciliationModal: React.FC<YieldReconciliationModalProps> =
                   <div>
                     <p className="text-sm font-medium">{a.name}</p>
                     <p className="text-[10px] text-[var(--text-muted)]">
-                      Calculado: {FMT(a.dailyYield || 0)}
+                      Calculado: {FMT(Number(a.calculatedDailyYield ?? a.dailyYield ?? 0))}
                     </p>
                   </div>
                   {hasManual && (
@@ -86,7 +87,7 @@ export const YieldReconciliationModal: React.FC<YieldReconciliationModalProps> =
                       <span className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--text-muted)] text-sm font-mono">R$</span>
                       <input 
                         type="text" inputMode="decimal"
-                        placeholder={FMT(a.dailyYield || 0).replace('R$ ', '')}
+                        placeholder={FMT(Number(a.calculatedDailyYield ?? a.dailyYield ?? 0)).replace('R$ ', '')}
                         value={inputs[a.id]?.weekday || ''}
                         onChange={(e) => handleChange(a.id, 'weekday', e.target.value)}
                         className="w-full bg-[var(--bg-card)] border border-[var(--border-card)] rounded-lg py-2 pl-9 pr-2 text-sm font-mono focus:border-[var(--accent)] outline-none"

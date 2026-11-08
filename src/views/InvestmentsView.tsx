@@ -22,6 +22,14 @@ export function InvestmentsView({
   const [activeTab, setActiveTab] = useState<'Ativos' | 'Subcategorias' | 'Estratégias'>('Ativos');
 
   const filteredAssets = assets.filter((a: any) => a.type === 'investment');
+  const assetValue = (a: any) => Number(a.currentValue ?? a.manualBalance ?? a.value ?? 0) || 0;
+  const portfolioTotal = filteredAssets.reduce((acc: number, a: any) => acc + assetValue(a), 0);
+  const strategyTotals = filteredAssets.reduce((acc: Record<string, number>, a: any) => {
+    const name = String(a.estrategia || '').trim();
+    if (!name) return acc;
+    acc[name] = (acc[name] || 0) + assetValue(a);
+    return acc;
+  }, {});
 
   return (
     <div className="space-y-6 pb-24">
@@ -73,7 +81,7 @@ export function InvestmentsView({
                   </div>
                 </div>
                 <div className="text-right">
-                  <p className="text-sm font-mono font-bold text-[var(--text-primary)]">{(asset.value ?? 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</p>
+                  <p className="text-sm font-mono font-bold text-[var(--text-primary)]">{(asset.currentValue ?? asset.manualBalance ?? asset.value ?? 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</p>
                   <p className="text-[10px] text-[var(--accent)] font-bold">
                     {asset.accumulatedYield && asset.accumulatedYield > 0
                       ? `+${asset.accumulatedYield.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })} (+${asset.yieldPercent?.toFixed(2) ?? '0.00'}%)`
@@ -113,13 +121,14 @@ export function InvestmentsView({
           <div className="space-y-2">
             {['Renda Fixa', 'Ações', 'FIIs', 'Cripto'].map((cat, idx) => {
               const catAssets = filteredAssets.filter((a: any) => a.subcategoria === cat);
-              const total = catAssets.reduce((acc: number, a: any) => acc + (a.value ?? 0), 0);
+              const total = catAssets.reduce((acc: number, a: any) => acc + assetValue(a), 0);
               if (total === 0 && cat !== 'Renda Fixa') return null;
+              const percent = portfolioTotal > 0 ? (total / portfolioTotal) * 100 : 0;
               return (
                 <div key={`subcat-${cat}-${idx}`} className="bg-[var(--bg-card)] border-l-4 border-[var(--accent)] p-4 rounded-r-xl flex justify-between items-center border-y border-r border-[var(--border-card)]">
                   <span className="text-sm font-medium text-[var(--text-primary)]">{cat}</span>
                   <div className="flex gap-8 items-center">
-                    <span className="text-[10px] font-mono text-[var(--text-muted)]">25%</span>
+                    <span className="text-[10px] font-mono text-[var(--text-muted)]">{percent.toFixed(1)}%</span>
                     <span className="text-sm font-mono font-bold text-[var(--text-primary)]">{(total ?? 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</span>
                   </div>
                 </div>
@@ -131,18 +140,23 @@ export function InvestmentsView({
 
       {activeTab === 'Estratégias' && (
         <div className="grid grid-cols-2 gap-4">
-          {['Reserva', 'Aposentadoria', 'Viagem', 'Liberdade'].map((est, idx) => (
-            <div key={`strat-${est}-${idx}`} className="bg-[var(--bg-card)] border border-[var(--border-card)] p-6 rounded-[32px] flex flex-col gap-4">
+          {Object.entries(strategyTotals).map(([estrategia, total], idx) => (
+            <div key={`strat-${estrategia}-${idx}`} className="bg-[var(--bg-card)] border border-[var(--border-card)] p-6 rounded-[32px] flex flex-col gap-4">
               <div className="w-10 h-10 rounded-2xl bg-[var(--accent)]/10 flex items-center justify-center text-[var(--accent)]">
                 <Sparkles size={20} />
               </div>
               <div>
-                <h4 className="text-sm font-medium text-[var(--text-primary)]">{est}</h4>
+                <h4 className="text-sm font-medium text-[var(--text-primary)]">{estrategia}</h4>
                 <p className="text-[10px] text-[var(--text-muted)] uppercase font-bold tracking-widest">Estratégia</p>
               </div>
-              <p className="text-lg font-mono font-bold text-[var(--text-primary)]">R$ 0,00</p>
+              <p className="text-lg font-mono font-bold text-[var(--text-primary)]">{total.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</p>
             </div>
           ))}
+          {Object.keys(strategyTotals).length === 0 && (
+            <div className="col-span-2 py-16 text-center border border-dashed border-[var(--border-card)] rounded-[32px]">
+              <p className="text-[var(--text-muted)] text-sm">{t("Nenhuma estratégia definida.", "No strategy defined.")}</p>
+            </div>
+          )}
         </div>
       )}
     </div>

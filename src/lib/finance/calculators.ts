@@ -1,78 +1,68 @@
 /**
- * @Agente02 - Builder
- * Funções puras para cálculos financeiros e formatação de dados.
- * Segue o princípio de Responsabilidade Única (SRP).
+ * Cálculos financeiros essenciais do Zenith.
+ * Segue o princípio de Responsabilidade Única (SRP) com tipagem estrita sem `any`.
  */
 
-export const calculateRealProfitability = (nominalRate: number, inflationRate: number) => {
+import { parseTransactionAmount, parseTransactionDate } from './parsers';
+import {
+  roundCurrency,
+  MONTHS_PT,
+  MONTHS_SHORT,
+  startOfLocalDay,
+  endOfLocalDay,
+  addLocalDays,
+  parseDayRange
+} from './formatters';
+
+export interface TransactionInput {
+  id?: string;
+  label?: string;
+  value?: unknown;
+  type?: string;
+  date?: unknown;
+  createdAt?: unknown;
+  timestamp?: unknown;
+  data?: unknown;
+  assetId?: string;
+  applied?: boolean;
+  isRecurring?: boolean;
+  durationMonths?: number | string | null;
+  categoria_primaria?: string;
+  category?: string;
+}
+
+export interface AssetInput {
+  id?: string;
+  name?: string;
+  value?: number;
+  type?: string;
+  manualBalance?: number;
+  currentValue?: number;
+  dailyYield?: number;
+  manualDailyYield?: number;
+  manualBalanceDate?: string;
+  emissor?: string;
+  detail?: string;
+  subcategoria?: string;
+}
+
+export const calculateRealProfitability = (nominalRate: number, inflationRate: number): number => {
   // Formula: ((1 + r_nominal) / (1 + i)) - 1
   return ((1 + nominalRate / 100) / (1 + inflationRate / 100)) - 1;
 };
 
-const roundCurrency = (value: number) => Math.round(value * 100) / 100;
-
-export const parseTransactionAmount = (value: any): number => {
-  if (typeof value === 'number') return Number.isFinite(value) ? Math.abs(value) : 0;
-  if (!value) return 0;
-  const str = String(value).trim();
-  const cleaned = str.replace(/[R$\s]/g, '');
-  if (cleaned.includes(',') && !cleaned.includes('.')) {
-    const num = parseFloat(cleaned.replace(',', '.'));
-    return Number.isFinite(num) ? Math.abs(num) : 0;
-  }
-  if (cleaned.includes('.') && cleaned.includes(',')) {
-    const num = parseFloat(cleaned.replace(/\./g, '').replace(',', '.'));
-    return Number.isFinite(num) ? Math.abs(num) : 0;
-  }
-  const num = parseFloat(cleaned);
-  return Number.isFinite(num) ? Math.abs(num) : 0;
+export const isTransferTransaction = (tx: TransactionInput | null | undefined): boolean => {
+  if (!tx) return false;
+  const cat = String(tx.categoria_primaria || tx.category || '').toLowerCase().trim();
+  const label = String(tx.label || '').toLowerCase();
+  return cat === 'transferencia' || cat === 'transferência' || label.includes('transfer');
 };
 
-export const parseTransactionDate = (value: any): Date | null => {
-  if (!value) return null;
-  if (value instanceof Date) return Number.isNaN(value.getTime()) ? null : value;
-  if (typeof value?.toDate === 'function') {
-    const d = value.toDate();
-    return Number.isNaN(d.getTime()) ? null : d;
+export const isExpenseTransaction = (tx: TransactionInput | null | undefined): boolean => {
+  if (!tx || isTransferTransaction(tx)) {
+    return false;
   }
-  // Firestore Timestamp serializado: seconds ou _seconds
-  const seconds = typeof value?.seconds === 'number'
-    ? value.seconds
-    : (typeof value?._seconds === 'number' ? value._seconds : null);
-  if (seconds !== null) {
-    const d = new Date(seconds * 1000);
-    return Number.isNaN(d.getTime()) ? null : d;
-  }
-  if (typeof value === 'number') {
-    const d = value > 1e11 ? new Date(value) : new Date(value * 1000);
-    return Number.isNaN(d.getTime()) ? null : d;
-  }
-  if (typeof value === 'string') {
-    const str = value.trim();
-    if (!str) return null;
-
-    // Formato brasileiro DD/MM/YYYY ou DD-MM-YYYY
-    const brMatch = /^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})/.exec(str);
-    if (brMatch) {
-      const day = parseInt(brMatch[1] ?? '', 10);
-      const month = parseInt(brMatch[2] ?? '', 10) - 1;
-      let year = parseInt(brMatch[3] ?? '', 10);
-      if (year < 100) year += 2000;
-      const d = new Date(year, month, day, 12, 0, 0);
-      if (!Number.isNaN(d.getTime())) return d;
-    }
-
-    // Formato ISO YYYY-MM-DD
-    const normalized = str.includes('T') ? str : `${str}T12:00:00`;
-    const d = new Date(normalized);
-    return Number.isNaN(d.getTime()) ? null : d;
-  }
-  const d = new Date(value);
-  return Number.isNaN(d.getTime()) ? null : d;
-};
-
-export const isExpenseTransaction = (tx: any): boolean => {
-  const type = String(tx?.type ?? '').toLowerCase().trim();
+  const type = String(tx.type ?? '').toLowerCase().trim();
   if (type === 'out' || type === 'saida' || type === 'saída' || type === 'despesa' || type === 'debito') {
     return true;
   }
@@ -80,69 +70,93 @@ export const isExpenseTransaction = (tx: any): boolean => {
     return false;
   }
   // Inferência para transações sem type explícito
-  const cat = String(tx?.categoria_primaria || tx?.category || '').toLowerCase();
+  const cat = String(tx.categoria_primaria || tx.category || '').toLowerCase();
   if (['moradia', 'energia', 'água', 'agua', 'alimentação', 'alimentacao', 'mercado', 'transporte', 'lazer', 'saúde', 'saude', 'educação', 'educacao', 'outros'].includes(cat)) {
     return true;
   }
-  const lbl = String(tx?.label || '').toLowerCase();
+  const lbl = String(tx.label || '').toLowerCase();
   if (lbl.includes('copel') || lbl.includes('fatura') || lbl.includes('conta') || lbl.includes('compra') || lbl.includes('pagamento') || lbl.includes('débito') || lbl.includes('debito')) {
     return true;
   }
   return false;
 };
 
-export const isIncomeTransaction = (tx: any): boolean => {
-  const type = String(tx?.type ?? '').toLowerCase().trim();
+export const isIncomeTransaction = (tx: TransactionInput | null | undefined): boolean => {
+  if (!tx || isTransferTransaction(tx)) {
+    return false;
+  }
+  const type = String(tx.type ?? '').toLowerCase().trim();
   if (type === 'in' || type === 'entrada' || type === 'receita' || type === 'credito') {
     return true;
   }
   if (type === 'out' || type === 'saida' || type === 'saída' || type === 'despesa' || type === 'debito' || type === 'yield' || type === 'rendimento') {
     return false;
   }
-  const cat = String(tx?.categoria_primaria || tx?.category || '').toLowerCase();
+  const cat = String(tx.categoria_primaria || tx.category || '').toLowerCase();
   if (['salário', 'salario', 'receita', 'ganho'].includes(cat)) {
     return true;
   }
-  const lbl = String(tx?.label || '').toLowerCase();
+  const lbl = String(tx.label || '').toLowerCase();
   if (lbl.includes('salário') || lbl.includes('salario') || lbl.includes('pix recebido') || lbl.includes('depósito') || lbl.includes('deposito')) {
     return true;
   }
   return false;
 };
 
-export const isYieldTransaction = (tx: any): boolean => {
-  const type = String(tx?.type ?? '').toLowerCase().trim();
+export const isYieldTransaction = (tx: TransactionInput | null | undefined): boolean => {
+  if (!tx || isTransferTransaction(tx)) return false;
+  const type = String(tx.type ?? '').toLowerCase().trim();
   if (type === 'yield' || type === 'rendimento') {
     return true;
   }
-  const cat = String(tx?.categoria_primaria || tx?.category || '').toLowerCase();
+  if (type === 'out' || type === 'saida' || type === 'saída' || type === 'despesa' || type === 'debito') {
+    return false;
+  }
+  if (type === 'in' || type === 'entrada' || type === 'receita' || type === 'credito') {
+    return false;
+  }
+  const cat = String(tx.categoria_primaria || tx.category || '').toLowerCase().trim();
   return cat === 'investimentos' || cat === 'rendimentos';
 };
 
-const getTransactionDate = (transaction: any): Date | null => {
+export const hasAssetMovementSince = (
+  asset: AssetInput | null | undefined,
+  transactions: TransactionInput[],
+  since: Date
+): boolean => {
+  const assetId = asset?.id;
+  const assetName = String(asset?.name || '').toLowerCase();
+  const sinceDay = new Date(since.getFullYear(), since.getMonth(), since.getDate()).getTime();
+  return transactions.some(tx => {
+    if (isYieldTransaction(tx)) return false;
+    const date = parseTransactionDate(tx.date);
+    if (!date) return false;
+    const txDay = new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+    if (txDay < sinceDay) return false;
+    if (assetId && tx.assetId === assetId) return true;
+    if (assetName && String(tx.label || '').toLowerCase().includes(assetName)) return true;
+    return false;
+  });
+};
+
+const getTransactionDate = (transaction: TransactionInput): Date | null => {
   const raw = transaction?.date || transaction?.createdAt || transaction?.timestamp || transaction?.data;
   return parseTransactionDate(raw);
 };
 
-const getTransactionFlow = (transaction: any): number => {
+const getTransactionFlow = (transaction: TransactionInput): number => {
   const value = parseTransactionAmount(transaction?.value);
   if (isExpenseTransaction(transaction)) return -value;
   if (isIncomeTransaction(transaction) || isYieldTransaction(transaction)) return value;
   return 0;
 };
 
-const isAppliedToAsset = (transaction: any): boolean =>
-  Boolean(transaction?.applied && transaction?.assetId);
+const isAppliedToAsset = (transaction: TransactionInput): boolean =>
+  Boolean(transaction?.applied);
 
-/**
- * Patrimônio em uma data de corte.
- * O saldo atual dos ativos já reflete as transações aplicadas; logo, o valor
- * em uma data passada é obtido revertendo aplicações posteriores e somando
- * transações ainda não aplicadas ocorridas até a data.
- */
 export const calculateNetWorthAt = (
-  assets: any[] = [],
-  transactions: any[] = [],
+  assets: AssetInput[] = [],
+  transactions: TransactionInput[] = [],
   cutoffDate: Date,
   totalAssetsAtCutoff?: number
 ): number => {
@@ -167,12 +181,7 @@ export const calculateNetWorthAt = (
   return roundCurrency(totalAssets + adjustment);
 };
 
-/**
- * Indica se uma transação recorrente está ativa em determinado mês.
- * `durationMonths` conta a partir do mês da data da transação (inclusive);
- * `null`/indefinido significa recorrência infinita.
- */
-export function isRecurringActiveInMonth(tx: any, targetDate: Date): boolean {
+export function isRecurringActiveInMonth(tx: TransactionInput, targetDate: Date): boolean {
   const start = parseTransactionDate(tx?.date) ?? parseTransactionDate(tx?.createdAt);
   if (!start) return true;
 
@@ -181,7 +190,7 @@ export function isRecurringActiveInMonth(tx: any, targetDate: Date): boolean {
     (targetDate.getMonth() - start.getMonth());
   if (elapsedMonths < 0) return false;
 
-  if (tx?.durationMonths === null || tx?.durationMonths === undefined || tx?.durationMonths === '') {
+  if (tx?.durationMonths === null || tx?.durationMonths === undefined || (tx?.durationMonths as unknown) === '') {
     return true;
   }
 
@@ -218,15 +227,15 @@ export function resolveGoalTargets(
   };
 }
 
-export const calculateTotalAssets = (assets: any[] = []) => {
+export const calculateTotalAssets = (assets: AssetInput[] = []): number => {
   return roundCurrency(assets.reduce((acc, asset) => acc + (Number(asset?.value) || 0), 0));
 };
 
 export const calculateMonthBalance = (
-  transactions: any[] = [],
+  transactions: TransactionInput[] = [],
   month: number = new Date().getMonth(),
   year: number = new Date().getFullYear()
-) => {
+): number => {
   let balance = 0;
 
   transactions.forEach((transaction) => {
@@ -246,29 +255,28 @@ export const calculateMonthBalance = (
   return roundCurrency(balance);
 };
 
-/**
- * Single source of truth for net worth:
- * total de ativos consolidados ajustado pelas transações aplicadas após a
- * data de corte e pelas transações ainda não aplicadas até ela.
- */
 export const calculateNetWorth = (
-  assets: any[] = [],
-  transactions: any[] = [],
+  assets: AssetInput[] = [],
+  transactions: TransactionInput[] = [],
   month: number = new Date().getMonth(),
   year: number = new Date().getFullYear(),
   assetsValueAt?: (date: Date) => number
-) => {
+): number => {
   const today = new Date();
-  today.setHours(23, 59, 59, 999); // Fim do dia: inclui transações de hoje
+  today.setHours(23, 59, 59, 999);
 
   const monthEnd = new Date(year, month + 1, 0, 23, 59, 59, 999);
-  // Meses passados usam o fim do mês; mês atual/futuro usa o fim de hoje.
   const cutoff = monthEnd.getTime() > today.getTime() ? today : monthEnd;
 
   return calculateNetWorthAt(assets, transactions, cutoff, assetsValueAt?.(cutoff));
 };
 
-export const calculateTotals = (transactions: any[], month: number, year: number, assets: any[] = []) => {
+export const calculateTotals = (
+  transactions: TransactionInput[],
+  month: number,
+  year: number,
+  assets: AssetInput[] = []
+): { in: number; out: number; yield: number; investments: number } => {
   const filtered = transactions.filter(t => {
     const rawDate = t?.date || t?.createdAt || t?.timestamp || t?.data;
     const d = parseTransactionDate(rawDate);
@@ -291,10 +299,10 @@ export const calculateTotals = (transactions: any[], month: number, year: number
 };
 
 export const calculateCategoryExpenses = (
-  transactions: any[] = [],
+  transactions: TransactionInput[] = [],
   month: number = new Date().getMonth(),
   year: number = new Date().getFullYear()
-) => {
+): Array<{ name: string; value: number }> => {
   const totals: Record<string, number> = {};
 
   for (const transaction of transactions) {
@@ -311,13 +319,11 @@ export const calculateCategoryExpenses = (
     .sort((a, b) => b.value - a.value);
 };
 
-export const calculateVariation = (current: number, previous: number) => {
-  if (previous === 0) return current > 0 ? '+100%' : '0%';
-  const v = ((current - previous) / previous) * 100;
-  return `${v > 0 ? '+' : ''}${v.toFixed(1)}%`;
-};
-
-export const getMiniChartData = (transactions: any[], type: string) => {
+export const getMiniChartData = (
+  transactions: TransactionInput[],
+  type: string,
+  referenceDate?: Date | null
+): Array<{ v: number }> => {
   const isOut = type === 'out';
   const isIn = type === 'in';
   const filtered = transactions
@@ -326,14 +332,18 @@ export const getMiniChartData = (transactions: any[], type: string) => {
       transaction: t,
       date: getTransactionDate(t),
     }))
+    .filter(({ date }) => {
+      if (!referenceDate) return true;
+      if (!date) return false;
+      return date.getMonth() === referenceDate.getMonth() && date.getFullYear() === referenceDate.getFullYear();
+    })
     .sort((a, b) => (a.date?.getTime() ?? 0) - (b.date?.getTime() ?? 0))
     .slice(-10);
 
   if (filtered.length === 0) return [];
   const points = filtered.map(({ transaction }) => ({ v: parseTransactionAmount(transaction.value) }));
-  // Garante que o Recharts consiga desenhar uma linha/área mesmo com apenas 1 lançamento
   if (points.length === 1) {
-    return [{ v: 0 }, points[0]];
+    return [{ v: 0 }, points[0]!];
   }
   return points;
 };
@@ -345,7 +355,6 @@ export type EvolutionChartFilter = {
 };
 
 export type EvolutionChartOptions = {
-  /** Valor consolidado dos ativos na data informada (inclui rendimentos históricos). */
   assetsValueAt?: (date: Date) => number;
 };
 
@@ -356,33 +365,9 @@ type EvolutionPoint = {
   date: string;
 };
 
-const MONTHS_PT = [
-  'Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho',
-  'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'
-];
-const MONTHS_SHORT = ['JAN', 'FEV', 'MAR', 'ABR', 'MAI', 'JUN', 'JUL', 'AGO', 'SET', 'OUT', 'NOV', 'DEZ'];
-
-const startOfLocalDay = (date: Date) => new Date(date.getFullYear(), date.getMonth(), date.getDate());
-const endOfLocalDay = (date: Date) => new Date(date.getFullYear(), date.getMonth(), date.getDate(), 23, 59, 59, 999);
-const addLocalDays = (date: Date, days: number) => {
-  const next = new Date(date);
-  next.setDate(next.getDate() + days);
-  return next;
-};
-
-const parseDayRange = (value?: string): [number, number] | null => {
-  if (!value || value === 'Todos') return null;
-  const match = /^(\d{1,2})\s*-\s*(\d{1,2})$/.exec(value.trim());
-  if (!match) return null;
-  const start = Number(match[1]);
-  const end = Number(match[2]);
-  if (!Number.isFinite(start) || !Number.isFinite(end)) return null;
-  return [Math.max(1, start), Math.min(31, end)];
-};
-
 export const calculateEvolutionData = (
-  assets: any[] = [],
-  transactions: any[] = [],
+  assets: AssetInput[] = [],
+  transactions: TransactionInput[] = [],
   filter?: EvolutionChartFilter,
   options?: EvolutionChartOptions
 ): EvolutionPoint[] => {
@@ -419,9 +404,6 @@ export const calculateEvolutionData = (
     return points;
   }
 
-  // Valor do patrimônio no dia especificado, considerando todo o histórico:
-  // transações aplicadas depois da data são revertidas (já estão no saldo atual)
-  // e transações ainda não aplicadas até a data são somadas.
   const valueAt = (date: Date) => {
     const cutoff = endOfLocalDay(date);
     return calculateNetWorthAt(assets, transactions, cutoff, options?.assetsValueAt?.(cutoff));
@@ -481,7 +463,9 @@ export const calculateEvolutionData = (
   return points;
 };
 
-export const calculateCashFlowData = (transactions: any[]) => {
+export const calculateCashFlowData = (
+  transactions: TransactionInput[]
+): Array<{ name: string; value: number; isPredicted: boolean }> => {
   const months = ['JAN', 'FEV', 'MAR', 'ABR', 'MAI', 'JUN', 'JUL', 'AGO', 'SET', 'OUT', 'NOV', 'DEZ'];
   const now = new Date();
   const currentMonth = now.getMonth();
@@ -508,8 +492,6 @@ export const calculateCashFlowData = (transactions: any[]) => {
     };
   };
 
-  // A projeção usa apenas meses completos; o mês atual, ainda em andamento,
-  // distorceria a média (especialmente no início do mês).
   const completedMonths = [1, 2, 3].map(offset => {
     const date = new Date(currentYear, currentMonth - offset, 1);
     return getMonthValue(date.getMonth(), date.getFullYear());
@@ -536,23 +518,27 @@ export const calculateCashFlowData = (transactions: any[]) => {
   });
 };
 
-/**
- * Calcula a projeção de uma meta financeira, considerando:
- * - Saldo base (saldo + transações únicas)
- * - Transações recorrentes (respeitando duração)
- * - Rendimento mensal (juros compostos)
- */
+export interface GoalProjectionDebug {
+  yieldMensal: number;
+  entradasFixas: number;
+  saidasFixas: number;
+  entradasUnicas: number;
+  saidasUnicas: number;
+  taxaMensal: number;
+  fluxoVariavelMedio: number;
+}
+
 export interface GoalProjectionResult {
   saldoBase: number;
   fluxoRecorrenteLiquido: number;
   monthsToGoal: number;
-  debug?: any;
+  debug: GoalProjectionDebug;
 }
 
 export function calculateGoalProjection(
   currentBalance: number,
-  transactions: any[],
-  assets: any[],
+  transactions: TransactionInput[],
+  assets: AssetInput[],
   target: number
 ): GoalProjectionResult {
   const today = new Date();
@@ -562,15 +548,18 @@ export function calculateGoalProjection(
   const currentMonth = today.getMonth();
   const currentYear = today.getFullYear();
 
-  let entradasFixas = 0, saidasFixas = 0;
-  let entradasUnicasMesAtual = 0, saidasUnicasMesAtual = 0;
-  const singlesByMonth: Record<number, { in: number, out: number }> = {};
+  let entradasFixas = 0;
+  let saidasFixas = 0;
+  let entradasUnicasMesAtual = 0;
+  let saidasUnicasMesAtual = 0;
+  const singlesByMonth: Record<number, { in: number; out: number }> = {};
   const varExp: Record<string, { total: number; count: number }> = {};
 
   for (const tx of transactions) {
-    const value = Number(tx.value) || 0;
-    const isIn = tx.type === 'in';
-    const isOut = tx.type === 'out';
+    if (isTransferTransaction(tx) || isYieldTransaction(tx)) continue;
+    const value = parseTransactionAmount(tx.value);
+    const isIn = isIncomeTransaction(tx);
+    const isOut = isExpenseTransaction(tx);
     if (!isIn && !isOut) continue;
 
     if (tx.isRecurring) {
@@ -583,28 +572,27 @@ export function calculateGoalProjection(
       const monthsFromNow = (txDate.getFullYear() - currentYear) * 12 + (txDate.getMonth() - currentMonth);
 
       if (monthsFromNow === 0) {
-        // O patrimônio atual (currentBalance) já inclui as transações do mês até hoje.
-        // Só somamos as que ainda não foram refletidas no saldo (futuras dentro do mês).
         const alreadyInCurrentBalance = parsedTxDate !== null && txDate.getTime() <= endOfToday.getTime();
         if (!alreadyInCurrentBalance) {
           if (isIn) entradasUnicasMesAtual += value; else saidasUnicasMesAtual += value;
         }
       } else if (monthsFromNow > 0) {
         if (!singlesByMonth[monthsFromNow]) singlesByMonth[monthsFromNow] = { in: 0, out: 0 };
-        if (isIn) singlesByMonth[monthsFromNow].in += value;
-        else singlesByMonth[monthsFromNow].out += value;
+        if (isIn) singlesByMonth[monthsFromNow]!.in += value;
+        else singlesByMonth[monthsFromNow]!.out += value;
       }
 
       if (isOut) {
-        const label = tx.label?.toLowerCase().trim() || 'desconhecido';
+        const label = String(tx.label || '').toLowerCase().trim() || 'desconhecido';
         if (!varExp[label]) varExp[label] = { total: 0, count: 0 };
-        varExp[label].total += value;
-        varExp[label].count += 1;
+        varExp[label]!.total += value;
+        varExp[label]!.count += 1;
       }
     }
   }
 
-  let avgOut = 0; Object.values(varExp).forEach(v => { avgOut += v.total / v.count; });
+  let avgOut = 0;
+  Object.values(varExp).forEach(v => { avgOut += v.total / v.count; });
   const fluxoVariavelMedio = -avgOut;
 
   let yieldMensal = 0;
@@ -612,19 +600,16 @@ export function calculateGoalProjection(
   for (const asset of assets) {
     const daily = Number(asset.manualDailyYield ?? asset.dailyYield ?? 0);
     const val = Number(asset.currentValue ?? asset.manualBalance ?? asset.value) || 0;
-    const isMP = (asset.name || '').toLowerCase().includes('mercado pago');
+    const isMP = String(asset.name || '').toLowerCase().includes('mercado pago');
     yieldMensal += daily * (isMP ? 22 : 30);
     totalAssetsValue += val;
   }
   const taxaMensal = totalAssetsValue > 0 ? (yieldMensal / totalAssetsValue) : 0;
 
-  // Saldo Base = patrimônio real + transações únicas do mês atual
   const saldoBase = currentBalance + entradasUnicasMesAtual - saidasUnicasMesAtual;
-  
-  // Fluxo Líquido para exibição na UI (Mês 1) = o que realmente vai entrar e sair neste mês
-  const fluxoLiquidoMes1 = yieldMensal + entradasFixas - saidasFixas + (entradasUnicasMesAtual - saidasUnicasMesAtual);
+  const fluxoLiquidoMes1 = yieldMensal + entradasFixas - saidasFixas;
 
-  const debug = { yieldMensal, entradasFixas, saidasFixas, entradasUnicas: entradasUnicasMesAtual, saidasUnicas: saidasUnicasMesAtual, taxaMensal, fluxoVariavelMedio };
+  const debug: GoalProjectionDebug = { yieldMensal, entradasFixas, saidasFixas, entradasUnicas: entradasUnicasMesAtual, saidasUnicas: saidasUnicasMesAtual, taxaMensal, fluxoVariavelMedio };
 
   if (saldoBase >= target) return { saldoBase, fluxoRecorrenteLiquido: fluxoLiquidoMes1, monthsToGoal: 0, debug };
 
@@ -635,14 +620,16 @@ export function calculateGoalProjection(
     meses++;
     
     const projectionMonth = new Date(currentYear, currentMonth + meses, 1);
-    let fixasIn = 0, fixasOut = 0;
+    let fixasIn = 0;
+    let fixasOut = 0;
     for (const tx of transactions) {
       if (!tx.isRecurring) continue;
-      const isIn = tx.type === 'in';
-      const isOut = tx.type === 'out';
+      if (isTransferTransaction(tx) || isYieldTransaction(tx)) continue;
+      const isIn = isIncomeTransaction(tx);
+      const isOut = isExpenseTransaction(tx);
       if (!isIn && !isOut) continue;
       if (!isRecurringActiveInMonth(tx, projectionMonth)) continue;
-      const value = Number(tx.value) || 0;
+      const value = parseTransactionAmount(tx.value);
       if (isIn) fixasIn += value; else fixasOut += value;
     }
 

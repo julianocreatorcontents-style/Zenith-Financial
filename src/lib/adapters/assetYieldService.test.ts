@@ -301,5 +301,51 @@ describe('assetYieldService — Âncora de Saldo e Rendimentos', () => {
       expect(enriched.yieldSinceAnchor).toBe(0);
       expect(enriched.dailyYield).toBe(0);
     });
+
+    it('mantém o acumulado desde o aporte, mesmo quando há transações de yield no mês', () => {
+      const today = new Date(2026, 9, 27);
+      const raw = {
+        id: 'asset-99pay',
+        name: '99Pay',
+        value: 5082.12,
+        valorInvestido: 5000.00,
+        investmentStartDate: new Date(2026, 9, 25),
+        type: 'investment',
+        uid: 'user-1',
+      };
+      const yieldTx = {
+        type: 'yield',
+        value: 4.74,
+        assetId: 'asset-99pay',
+        date: new Date(2026, 9, 26),
+      };
+
+      const info = calculateAssetYieldInfo(raw, 13.65, today, false, [yieldTx]);
+
+      expect(info.accumulatedYield).toBeCloseTo(86.86, 1);
+      expect(info.yieldPercent).toBeCloseTo(1.74, 2);
+      expect(info.yieldSinceAnchor).toBeCloseTo(4.74, 1);
+    });
+
+    it('projeta o mês restante do override manual apenas pelos dias que faltam', () => {
+      const today = new Date(2026, 9, 27);
+      const raw = {
+        id: 'asset-manual-99',
+        name: '99Pay',
+        value: 5082.12,
+        manualBalance: 5082.12,
+        manualBalanceDate: new Date(2026, 9, 25),
+        manualDailyYield: 2.37,
+        manualWeekendYield: 2.37,
+        valorInvestido: 5000.00,
+        type: 'investment',
+        uid: 'user-1',
+      };
+
+      const enriched = enrichAsset(raw, 13.65, today);
+
+      expect(enriched.monthYieldRemaining).toBeCloseTo(2.37 * 4, 1);
+      expect(enriched.monthEndValue).toBeCloseTo(enriched.currentValue + 2.37 * 4, 1);
+    });
   });
 });

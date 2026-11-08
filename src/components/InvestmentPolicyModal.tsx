@@ -49,7 +49,32 @@ const DEFAULT_FORM: InvestmentPolicyData = {
 
 function parseBRL(value: string): number {
   if (!value) return 0;
-  return parseFloat(value.replace(/\./g, '').replace(',', '.')) || 0;
+  const clean = String(value).replace(/[^\d,.-]/g, '').trim();
+  if (!clean) return 0;
+
+  const lastComma = clean.lastIndexOf(',');
+  const lastDot = clean.lastIndexOf('.');
+  let normalized = clean;
+
+  if (lastComma >= 0 && lastDot >= 0) {
+    if (lastComma > lastDot) {
+      normalized = clean.replace(/\./g, '').replace(',', '.');
+    } else {
+      normalized = clean.replace(/,/g, '');
+    }
+  } else if (lastComma >= 0) {
+    normalized = clean.replace(',', '.');
+  } else if (lastDot >= 0) {
+    const decimals = clean.length - lastDot - 1;
+    const hasMultipleDots = clean.indexOf('.') !== lastDot;
+    const looksLikeThousands = decimals === 3 && lastDot > 0 && !clean.startsWith('0');
+    if (hasMultipleDots || looksLikeThousands) {
+      normalized = clean.replace(/\./g, '');
+    }
+  }
+
+  const parsed = parseFloat(normalized);
+  return Number.isFinite(parsed) ? parsed : 0;
 }
 
 export function InvestmentPolicyModal({ isOpen, mode = 'edit', onClose, onSave, initialData }: Props) {

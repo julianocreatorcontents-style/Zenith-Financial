@@ -4,6 +4,12 @@ import { X, Plus, BarChart as BarChartIcon, ArrowRightLeft, Landmark, TrendingUp
 import { ResponsiveContainer, BarChart, Bar, CartesianGrid, XAxis, YAxis, Tooltip } from 'recharts';
 import { Transaction } from '../../types/app';
 import { Timeline } from '../dashboard/Timeline';
+import {
+  calculateVariation,
+  isExpenseTransaction,
+  parseTransactionAmount,
+  parseTransactionDate,
+} from '../../lib/finance';
 
 interface CategoryDetailModalProps {
   isOpen: boolean;
@@ -25,8 +31,8 @@ export const CategoryDetailModal: React.FC<CategoryDetailModalProps> = ({
   timeFilter,
   setTimeFilter,
   onOpenAddMenu,
-  cashFlowData,
-  metricsOutTotal,
+  cashFlowData: _cashFlowData,
+  metricsOutTotal: _metricsOutTotal,
   privacyMode,
   transactions
 }) => {
@@ -34,6 +40,41 @@ export const CategoryDetailModal: React.FC<CategoryDetailModalProps> = ({
 
   const formatBRL = (val: number) =>
     val.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+
+  const categoryTransactions = transactions.filter(
+    (t) => !activeCategoryDetail
+      || t.categoria_primaria === activeCategoryDetail
+      || t.label.includes(activeCategoryDetail)
+  );
+
+  const now = new Date();
+  const monthlySeries = Array.from({ length: 6 }, (_, index) => {
+    const monthDate = new Date(now.getFullYear(), now.getMonth() - (5 - index), 1);
+    const value = categoryTransactions.reduce((acc, t) => {
+      if (!isExpenseTransaction(t)) return acc;
+      const date = parseTransactionDate((t as any).date ?? (t as any).createdAt);
+      if (!date || date.getMonth() !== monthDate.getMonth() || date.getFullYear() !== monthDate.getFullYear()) {
+        return acc;
+      }
+      return acc + parseTransactionAmount((t as any).value);
+    }, 0);
+
+    return {
+      name: monthDate.toLocaleDateString('pt-BR', { month: 'short' }).replace('.', '').toUpperCase(),
+      value,
+    };
+  });
+
+  const totalSpent = monthlySeries.reduce((acc, point) => acc + point.value, 0);
+  const currentMonthValue = monthlySeries[monthlySeries.length - 1]?.value ?? 0;
+  const previousMonthValue = monthlySeries[monthlySeries.length - 2]?.value ?? 0;
+  const variation = calculateVariation(currentMonthValue, previousMonthValue);
+
+  const summaryMetrics = [
+    { label: 'Total Gasto (6m)', value: formatBRL(totalSpent), color: 'var(--trend-down)' },
+    { label: 'Média Mensal', value: formatBRL(totalSpent / 6), color: 'var(--accent)' },
+    { label: 'Variação %', value: variation, color: 'var(--trend-up)' },
+  ];
 
   return (
     <motion.div 
@@ -92,7 +133,7 @@ export const CategoryDetailModal: React.FC<CategoryDetailModalProps> = ({
             </div>
             <div className="h-48 w-full">
               <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={cashFlowData.slice(-6)}>
+                <BarChart data={monthlySeries}>
                   <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="var(--border-card)" opacity={0.3} />
                   <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fill: 'var(--text-primary)', fontSize: 10 }} />
                   <YAxis hide />
@@ -108,16 +149,12 @@ export const CategoryDetailModal: React.FC<CategoryDetailModalProps> = ({
           </div>
 
           <div className="space-y-4">
-            {[
-              { label: 'Total Gasto', value: metricsOutTotal, color: 'var(--trend-down)' },
-              { label: 'Média Mensal', value: metricsOutTotal / 6, color: 'var(--accent)' },
-              { label: 'Variação %', value: '+12.5%', color: 'var(--trend-up)', isPercent: true }
-            ].map((m, i) => (
+            {summaryMetrics.map((m, i) => (
               <div key={`summary-metric-${i}`} className="bg-[var(--bg-card)] border border-[var(--border-card)] rounded-3xl p-5 flex justify-between items-center">
                 <div>
                   <p className="text-[10px] font-bold text-[var(--text-muted)] uppercase tracking-widest mb-1">{m.label}</p>
                   <p className="text-xl font-mono font-bold text-[var(--text-primary)]">
-                    {privacyMode ? '••••' : m.isPercent ? m.value : `R$ ${Number(m.value ?? 0).toLocaleString('pt-BR', { minimumFractionDigits: 0 })}`}
+                    {privacyMode ? '••••' : m.value}
                   </p>
                 </div>
                 <div className="w-10 h-10 rounded-xl flex items-center justify-center" style={{ backgroundColor: `${m.color}10`, color: m.color }}>

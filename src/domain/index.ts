@@ -22,3 +22,17 @@ export type { TaxDisplayMode } from './investment/Investment';
 export type { ClockPort } from './ports/ClockPort';
 export type { MarketRatePort } from './ports/MarketRatePort';
 export type { InvestmentRepoPort } from './ports/InvestmentRepoPort';
+export type {
+  IAIProvider,
+  AIMessage,
+  AIContentPart,
+  AIInlineData,
+  AIFunctionCall,
+  AIFunctionResponse,
+  AIToolDeclaration,
+  AIToolProperty,
+  AIToolPropertyType,
+  AIGenerateOptions,
+  AIGenerateResult,
+  AIRole,
+} from './ports/IAIProvider';

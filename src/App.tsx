@@ -20,7 +20,7 @@ import { ProfileDrawer } from "./components/drawers/ProfileDrawer";
 import type { VisualSettings } from "./components/CardSettingsPanel";
 import { IngestionHub, ReviewModal } from "./components/modals/IngestionModals";
 import { NavItem } from "./components/layout/NavItem";
-import { Asset } from "./types/app";
+import type { Asset, Transaction } from "./types/app";
 import { useZenithData, DEFAULT_SETTINGS } from "./hooks/useZenithData";
 import { usePersistentState } from "./hooks/usePersistentState";
 import { applyTheme } from "./lib/theme";
@@ -88,7 +88,7 @@ export default function ZenithApp() {
   const [isAddingAsset, setIsAddingAsset] = useState(false);
   const [isAddingTransaction, setIsAddingTransaction] = useState(false);
   const [isEditingTransaction, setIsEditingTransaction] = useState(false);
-  const [selectedTransaction, setSelectedTransaction] = useState<any>(null);
+  const [selectedTransaction, setSelectedTransaction] = useState<Transaction | null>(null);
   const [isProfileDrawerOpen, setIsProfileDrawerOpen] = useState(false);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   const [hasUnreadNotification, setHasUnreadNotification] = useState(true);
@@ -96,7 +96,8 @@ export default function ZenithApp() {
     if (!hasUnreadNotification) return;
     const tryPlay = () => {
       try {
-        const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
+        const AudioCtx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+        const ctx = new AudioCtx();
         const p = (f: number, s: number, d: number) => {
           const o = ctx.createOscillator();
           const g = ctx.createGain();
@@ -196,7 +197,7 @@ export default function ZenithApp() {
 
   const handleAiError = useCallback((e: unknown) => {
     if (e instanceof MissingApiKeyError || e instanceof InvalidApiKeyError) {
-      setApiKeyError(e.message);
+      setApiKeyError((e as Error).message);
       openDrawer('ai_key');
       return;
     }
@@ -219,8 +220,9 @@ export default function ZenithApp() {
     } else {
       input.accept = 'image/*,application/pdf';
     }
-    input.onchange = (e: any) => {
-      const file = e.target.files?.[0];
+    input.onchange = (e: Event) => {
+      const target = e.target as HTMLInputElement | null;
+      const file = target?.files?.[0];
       if (file) {
         setIsIngestionHubOpen(false);
         handleFileUpload(file).then(() => {
@@ -310,7 +312,7 @@ export default function ZenithApp() {
               {t("Sua evolução patrimonial começa com a próxima decisão inteligente.", "Your net worth evolution starts with the next smart decision.")}
             </p>
           </div>
-          <button onClick={() => { if (navigator.vibrate) navigator.vibrate([100,50,100]); try { const ctx = new (window.AudioContext || (window as any).webkitAudioContext)(); const p = (f:number,s:number,d:number) => { const o = ctx.createOscillator(); const g = ctx.createGain(); o.type = "sine"; o.frequency.value = f; g.gain.setValueAtTime(0.1, s); g.gain.exponentialRampToValueAtTime(0.001, s+d); o.connect(g); g.connect(ctx.destination); o.start(s); o.stop(s+d); }; p(880, ctx.currentTime, 0.1); p(1108, ctx.currentTime + 0.1, 0.2); } catch(e) {} setHasUnreadNotification(false); setDrawerPageRequest("notifications"); setIsProfileDrawerOpen(true); }} className="relative p-2.5 bg-[var(--bg-card)] border border-[var(--border-card)] rounded-full text-[var(--text-muted)] hover:text-[var(--accent)] transition-colors shrink-0" aria-label="Notificacoes"><Bell size={20} />{hasUnreadNotification && (<span className="absolute top-1 right-1 w-2.5 h-2.5 bg-red-500 border-2 border-[var(--bg-card)] rounded-full animate-pulse" />)}</button>
+          <button onClick={() => { if (navigator.vibrate) navigator.vibrate([100,50,100]); try { const AudioCtx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext; const ctx = new AudioCtx(); const p = (f:number,s:number,d:number) => { const o = ctx.createOscillator(); const g = ctx.createGain(); o.type = "sine"; o.frequency.value = f; g.gain.setValueAtTime(0.1, s); g.gain.exponentialRampToValueAtTime(0.001, s+d); o.connect(g); g.connect(ctx.destination); o.start(s); o.stop(s+d); }; p(880, ctx.currentTime, 0.1); p(1108, ctx.currentTime + 0.1, 0.2); } catch(e) {} setHasUnreadNotification(false); setDrawerPageRequest("notifications"); setIsProfileDrawerOpen(true); }} className="relative p-2.5 bg-[var(--bg-card)] border border-[var(--border-card)] rounded-full text-[var(--text-muted)] hover:text-[var(--accent)] transition-colors shrink-0" aria-label="Notificacoes"><Bell size={20} />{hasUnreadNotification && (<span className="absolute top-1 right-1 w-2.5 h-2.5 bg-red-500 border-2 border-[var(--bg-card)] rounded-full animate-pulse" />)}</button>
         </header>
 
         {/* --- CONTEÚDO PRINCIPAL --- */}
@@ -417,11 +419,11 @@ export default function ZenithApp() {
               <DetalhesGastosPage 
                 transactions={transactions}
                 language={settings?.language}
-                onEdit={(tx: any) => {
+                onEdit={(tx: Transaction) => {
                   setSelectedTransaction(tx);
                   setIsEditingTransaction(true);
                 }}
-                onDelete={(tx: any) => moveToTrash(tx, 'transactions')}
+                onDelete={(tx: Transaction) => moveToTrash(tx, 'transactions')}
               />
             </Suspense>
           )}
@@ -444,7 +446,20 @@ export default function ZenithApp() {
                 language={settings?.language}
                 transactions={transactions}
                 assets={assets}
+                goals={goals}
                 getGeminiApiKey={getGeminiApiKey}
+                onAddTransaction={addTransaction}
+                onUpdateTransaction={updateTransaction}
+                onDeleteTransaction={(item: Transaction) => moveToTrash(item, 'transactions')}
+                onCreateAsset={createAsset}
+                onUpdateAsset={updateAsset}
+                onDeleteAsset={(item: Asset) => moveToTrash(item, 'assets')}
+                onUpdateGoals={updateGoals}
+                onNavigateTab={(tab: string) => {
+                  if (['Início', 'Carteira', 'Investimentos', 'IA', 'Armazenamento'].includes(tab)) {
+                    setCurrentTab(tab as 'Início' | 'Carteira' | 'Investimentos' | 'IA' | 'Armazenamento');
+                  }
+                }}
                 onApiKeyError={handleAiError}
                 userRules={userRules}
               />
