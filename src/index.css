@@ -21,6 +21,7 @@ html.dark {
   --trend-down: #FF003C;
   --neon-red: #FF003C;
   --trend-yield: #9B51E0;
+  --destructive: #FF003C;
 }
 
 .light,
@@ -37,6 +38,7 @@ html.light {
   --trend-up: #00C881;
   --trend-down: #D00000;
   --trend-yield: #7B2CBF;
+  --destructive: #D00000;
 }
 
 .high-contrast,
@@ -53,6 +55,7 @@ html.high-contrast {
   --trend-up: #00FF00;
   --trend-down: #FF0000;
   --trend-yield: #FF00FF;
+  --destructive: #FF0000;
 }
 
 @layer base {

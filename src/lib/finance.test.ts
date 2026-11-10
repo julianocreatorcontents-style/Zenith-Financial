@@ -40,6 +40,25 @@ describe('finance utils', () => {
       expect(parsedStr?.getFullYear()).toBe(2026);
       expect(parsedStr?.getMonth()).toBe(9); // Outubro
       expect(parsedStr?.getDate()).toBe(28);
+
+      // Datas brasileiras e datas com shift UTC (ex: 8 e 9 de novembro)
+      const d8Br = parseTransactionDate('08/11/2026');
+      expect(d8Br?.getFullYear()).toBe(2026);
+      expect(d8Br?.getMonth()).toBe(10); // Novembro
+      expect(d8Br?.getDate()).toBe(8);
+
+      const d9Br = parseTransactionDate('09/11/2026');
+      expect(d9Br?.getFullYear()).toBe(2026);
+      expect(d9Br?.getMonth()).toBe(10); // Novembro
+      expect(d9Br?.getDate()).toBe(9);
+
+      const d8Utc = parseTransactionDate('2026-11-08T00:00:00.000Z');
+      expect(d8Utc?.getDate()).toBe(8);
+      expect(d8Utc?.getMonth()).toBe(10);
+
+      const d9Utc = parseTransactionDate('2026-11-09 14:30:00');
+      expect(d9Utc?.getDate()).toBe(9);
+      expect(d9Utc?.getMonth()).toBe(10);
     });
 
     it('retorna null para valores nulos ou inválidos', () => {

@@ -1,5 +1,19 @@
-import { useState, useEffect, useMemo } from 'react';
-import { db, collection, query, where, orderBy, onSnapshot, handleFirestoreError, OperationType } from '../firebase';
+import { useState, useEffect, useMemo, useCallback } from 'react';
+import {
+  db,
+  collection,
+  query,
+  where,
+  orderBy,
+  onSnapshot,
+  handleFirestoreError,
+  OperationType,
+  addDoc,
+  updateDoc,
+  deleteDoc,
+  doc,
+  serverTimestamp,
+} from '../firebase';
 import { enrichAsset, parseAssetDate } from '../lib/adapters/assetYieldService';
 import { hasAssetMovementSince } from '../lib/finance';
 import type { Asset, Transaction } from '../types/app';
@@ -40,5 +54,47 @@ export function useAssetsData(
     });
   }, [rawAssets, transactions, cdiAnnualPercent]);
 
-  return { rawAssets, assets, setRawAssets };
+  // Operações de CRUD de Ativos
+  const createAsset = useCallback(async (data: Partial<Asset>) => {
+    if (!user) return;
+    const now = new Date();
+    await addDoc(collection(db, 'assets'), {
+      ...data,
+      uid: user.uid,
+      valorInvestido: data.valorInvestido ?? data.value,
+      investmentStartDate: data.investmentStartDate ?? now,
+      createdAt: serverTimestamp(),
+    }).catch((e: unknown) => handleFirestoreError(e, OperationType.CREATE, 'assets'));
+  }, [user]);
+
+  const updateAsset = useCallback(async (id: string, data: Partial<Asset>) => {
+    const cleanData: Record<string, unknown> = {};
+    for (const [key, val] of Object.entries(data)) {
+      if (val !== undefined && !(typeof val === 'number' && Number.isNaN(val))) {
+        cleanData[key] = val;
+      }
+    }
+    const updatePayload = {
+      ...cleanData,
+      updatedAt: serverTimestamp(),
+    };
+    await updateDoc(doc(db, 'assets', id), updatePayload).catch((e: unknown) =>
+      handleFirestoreError(e, OperationType.UPDATE, `assets/${id}`)
+    );
+  }, []);
+
+  const deleteAsset = useCallback(async (id: string) => {
+    await deleteDoc(doc(db, 'assets', id)).catch((e: unknown) =>
+      handleFirestoreError(e, OperationType.DELETE, `assets/${id}`)
+    );
+  }, []);
+
+  return {
+    rawAssets,
+    assets,
+    setRawAssets,
+    createAsset,
+    updateAsset,
+    deleteAsset,
+  };
 }

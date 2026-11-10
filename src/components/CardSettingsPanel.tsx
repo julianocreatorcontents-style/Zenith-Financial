@@ -1,5 +1,3 @@
-import { useState } from 'react';
-
 export interface VisualSettings {
   isCustomEnabled: boolean;
   chartHeight: 'h-32' | 'h-48' | 'h-64' | 'h-80';
@@ -20,94 +18,68 @@ interface Props {
 }
 
 export function CardSettingsPanel({ settings, onChange }: Props) {
+  const currentAccent = settings.accentColor || '#00FFA3';
+  const currentOpacity = typeof settings.cardBgOpacity === 'number' ? settings.cardBgOpacity : 0.8;
+
   return (
     <div className="space-y-4">
-      <div className="bg-[#0a1a12] border border-[#00FFA3]/30 rounded-2xl p-4 shadow-lg">
-        <div className="flex items-center justify-between mb-4">
+      {/* Switch Master de Customização */}
+      <div className="bg-[var(--bg-card)] border border-[var(--border-card)] rounded-2xl p-4 shadow-lg">
+        <div className="flex items-center justify-between">
           <div>
-            <h3 className="text-[#00FFA3] text-sm font-bold uppercase tracking-widest">Customizacao Visual</h3>
-            <p className="text-[10px] text-white/40 mt-1">Ativa o tema customizado nos cards.</p>
+            <h3 className="text-[var(--accent)] text-sm font-bold uppercase tracking-widest">Customização Visual</h3>
+            <p className="text-[10px] text-[var(--text-muted)] mt-1">Ativa as cores e opacidade customizadas nos cards.</p>
           </div>
           <button
+            type="button"
             onClick={() => onChange({ ...settings, isCustomEnabled: !settings.isCustomEnabled })}
-            className={`w-12 h-6 rounded-full transition-colors relative ${settings.isCustomEnabled ? 'bg-[#00FFA3]' : 'bg-white/20'}`}
+            className={`w-12 h-6 rounded-full transition-colors relative ${settings.isCustomEnabled ? 'bg-[var(--accent)]' : 'bg-[var(--bg-app)] border border-[var(--border-card)]'}`}
           >
-            <span className={`absolute top-0.5 w-5 h-5 bg-white rounded-full transition-transform ${settings.isCustomEnabled ? 'left-6.5' : 'left-0.5'}`} />
+            <span
+              className={`absolute top-0.5 w-5 h-5 bg-white rounded-full transition-transform ${
+                settings.isCustomEnabled ? 'left-6.5' : 'left-0.5'
+              }`}
+            />
           </button>
         </div>
       </div>
 
+      {/* Controles Ativos (Somente os que realmente produzem efeito no app) */}
       <div className={`transition-opacity duration-300 ${settings.isCustomEnabled ? 'opacity-100' : 'opacity-30 pointer-events-none'}`}>
-        <div className="bg-[#0a1a12] border border-[#00FFA3]/30 rounded-2xl p-4 shadow-lg">
-          <div className="grid grid-cols-2 gap-4 mb-4">
-            <div>
-              <label className="block text-[10px] text-white/50 mb-1 uppercase">Cor de Destaque</label>
-              <div className="flex items-center gap-2 bg-[#050505] border border-white/10 rounded-lg p-1.5">
-                <input type="color" value={settings.accentColor} onChange={(e) => onChange({ ...settings, accentColor: e.target.value })} className="w-8 h-8 rounded cursor-pointer bg-transparent border-0" />
-                <span className="text-xs text-white font-mono uppercase">{settings.accentColor}</span>
-              </div>
-            </div>
-            <div>
-              <label className="block text-[10px] text-white/50 mb-1 uppercase">Cor do Texto</label>
-              <div className="flex items-center gap-2 bg-[#050505] border border-white/10 rounded-lg p-1.5">
-                <input type="color" value={settings.textColor} onChange={(e) => onChange({ ...settings, textColor: e.target.value })} className="w-8 h-8 rounded cursor-pointer bg-transparent border-0" />
-                <span className="text-xs text-white font-mono uppercase">{settings.textColor}</span>
-              </div>
-            </div>
-          </div>
-          <div className="grid grid-cols-2 gap-4 mb-4">
-            <div>
-              <label className="block text-[10px] text-white/50 mb-1 uppercase">Altura do Grafico</label>
-              <select value={settings.chartHeight} onChange={(e) => onChange({ ...settings, chartHeight: e.target.value as any })} className="w-full bg-[#050505] border border-white/10 rounded-lg p-2 text-xs text-white outline-none">
-                <option value="h-32">Compacto</option>
-                <option value="h-48">Medio</option>
-                <option value="h-64">Grande</option>
-                <option value="h-80">Gigante</option>
-              </select>
-            </div>
-            <div>
-              <label className="block text-[10px] text-white/50 mb-1 uppercase">Linha do Grafico</label>
-              <select value={settings.lineThickness} onChange={(e) => onChange({ ...settings, lineThickness: Number(e.target.value) as any })} className="w-full bg-[#050505] border border-white/10 rounded-lg p-2 text-xs text-white outline-none">
-                <option value={0.5}>Ultra Fina</option>
-                <option value={1}>Fina</option>
-                <option value={1.5}>Media</option>
-                <option value={2}>Grossa</option>
-              </select>
-            </div>
-          </div>
-          <div className="grid grid-cols-2 gap-4 mb-4">
-            <div>
-              <label className="block text-[10px] text-white/50 mb-1 uppercase">Fonte</label>
-              <select value={settings.fontFamily} onChange={(e) => onChange({ ...settings, fontFamily: e.target.value })} className="w-full bg-[#050505] border border-white/10 rounded-lg p-2 text-xs text-white outline-none">
-                <option value="sans-serif">Sans-serif</option>
-                <option value="monospace">Monospace</option>
-                <option value="serif">Serif</option>
-              </select>
-            </div>
-            <div>
-              <label className="block text-[10px] text-white/50 mb-1 uppercase">Tamanho (Escala)</label>
-              <input type="range" min="0.8" max="1.5" step="0.1" value={settings.textSizeScale} onChange={(e) => onChange({ ...settings, textSizeScale: Number(e.target.value) })} className="w-full accent-[#00FFA3]" />
-            </div>
-          </div>
-          <div className="grid grid-cols-2 gap-4 mb-4">
-            <div>
-              <label className="block text-[10px] text-white/50 mb-1 uppercase">Opacidade Fundo ({Math.round(settings.cardBgOpacity * 100)}%)</label>
-              <input type="range" min="0.1" max="1" step="0.1" value={settings.cardBgOpacity} onChange={(e) => onChange({ ...settings, cardBgOpacity: Number(e.target.value) })} className="w-full accent-[#00FFA3]" />
-            </div>
-            <div>
-              <label className="block text-[10px] text-white/50 mb-1 uppercase">Opacidade Texto ({Math.round(settings.textOpacity * 100)}%)</label>
-              <input type="range" min="0.1" max="1" step="0.1" value={settings.textOpacity} onChange={(e) => onChange({ ...settings, textOpacity: Number(e.target.value) })} className="w-full accent-[#00FFA3]" />
-            </div>
-          </div>
-          <div className="flex gap-4 mt-4 pt-4 border-t border-white/10">
-            <label className="flex items-center gap-2 cursor-pointer">
-              <input type="checkbox" checked={settings.showAxes} onChange={(e) => onChange({ ...settings, showAxes: e.target.checked })} className="accent-[#00FFA3]" />
-              <span className="text-[10px] text-white/70 uppercase">Eixos X/Y</span>
+        <div className="bg-[var(--bg-card)] border border-[var(--border-card)] rounded-2xl p-4 shadow-lg space-y-4">
+          {/* Cor de Destaque */}
+          <div>
+            <label className="block text-[10px] text-[var(--text-secondary)] mb-1 uppercase font-bold tracking-widest">
+              Cor de Destaque (Accent)
             </label>
-            <label className="flex items-center gap-2 cursor-pointer">
-              <input type="checkbox" checked={settings.showProjections} onChange={(e) => onChange({ ...settings, showProjections: e.target.checked })} className="accent-[#00FFA3]" />
-              <span className="text-[10px] text-white/70 uppercase">Projecoes</span>
-            </label>
+            <div className="flex items-center gap-3 bg-[var(--bg-app)] border border-[var(--border-card)] rounded-xl p-2">
+              <input
+                type="color"
+                value={currentAccent}
+                onChange={(e) => onChange({ ...settings, accentColor: e.target.value })}
+                className="w-9 h-9 rounded-lg cursor-pointer bg-transparent border-0"
+              />
+              <span className="text-xs text-[var(--text-primary)] font-mono uppercase font-bold">{currentAccent}</span>
+            </div>
+          </div>
+
+          {/* Opacidade de Fundo dos Cards */}
+          <div>
+            <div className="flex justify-between items-center mb-1">
+              <label className="block text-[10px] text-[var(--text-secondary)] uppercase font-bold tracking-widest">
+                Opacidade de Fundo dos Cards
+              </label>
+              <span className="text-xs font-mono text-[var(--text-primary)]">{Math.round(currentOpacity * 100)}%</span>
+            </div>
+            <input
+              type="range"
+              min="0.2"
+              max="1"
+              step="0.05"
+              value={currentOpacity}
+              onChange={(e) => onChange({ ...settings, cardBgOpacity: Number(e.target.value) })}
+              className="w-full accent-[var(--accent)] cursor-pointer"
+            />
           </div>
         </div>
       </div>

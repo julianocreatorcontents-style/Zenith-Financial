@@ -1,17 +1,15 @@
 import { useMemo, useState, useEffect, useRef } from 'react';
 import { ResponsiveContainer, AreaChart, Area, YAxis, XAxis, CartesianGrid } from 'recharts';
 import { ChevronDown } from 'lucide-react';
-import { YieldCalculator } from '../domain/yield/YieldCalculator';
-import { IncomeTaxPolicy } from '../domain/tax/IncomeTaxPolicy';
-import { IofPolicy } from '../domain/tax/IofPolicy';
-import { assetToInvestment } from '../lib/adapters/assetToInvestment';
-import { resolveAssetPolicy } from '../lib/adapters/assetYieldService';
-import type { RawAssetDoc } from '../lib/adapters/assetToInvestment';
-import type { Investment } from '../domain/investment/Investment';
-import type { YieldPolicy } from '../domain/yield/YieldPolicy';
-import { InvestmentPolicyModal } from '../components/InvestmentPolicyModal';
-import type { InvestmentPolicyData } from '../components/InvestmentPolicyModal';
-import type { VisualSettings } from '../components/CardSettingsPanel';
+import { YieldCalculator } from '../../domain/yield/YieldCalculator';
+import { IncomeTaxPolicy } from '../../domain/tax/IncomeTaxPolicy';
+import { IofPolicy } from '../../domain/tax/IofPolicy';
+import { assetToInvestment } from '../../lib/adapters/assetToInvestment';
+import { resolveAssetPolicy } from '../../lib/adapters/assetYieldService';
+import type { RawAssetDoc } from '../../lib/adapters/assetToInvestment';
+import type { Investment } from '../../domain/investment/Investment';
+import type { YieldPolicy } from '../../domain/yield/YieldPolicy';
+import type { VisualSettings } from '../CardSettingsPanel';
 
 interface YieldProjectionCardProps {
   assets?: RawAssetDoc[];
@@ -39,8 +37,6 @@ function buildNetPolicy(policy: YieldPolicy, taxRate: number): YieldPolicy {
 
 export function YieldProjectionCard({ assets, cdiAnnualPercent = 13.65, rateSource = 'default', language = 'pt-BR', onUpdateAsset, onCreateAsset, forceOpenCreateModal, onCloseCreateModal, visualSettings }: YieldProjectionCardProps) {
   const isEn = language === 'en-US';
-  const [modalOpen, setModalOpen] = useState(false);
-  const [modalMode, setModalMode] = useState<'create' | 'edit'>('edit');
   const [selectedAssetId, setSelectedAssetId] = useState<string | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const hasInitialized = useRef(false);
@@ -72,17 +68,6 @@ export function YieldProjectionCard({ assets, cdiAnnualPercent = 13.65, rateSour
     opacity: isCustom ? settings.textOpacity * baseOpacity : baseOpacity,
   });
 
-  useEffect(() => {
-    if (forceOpenCreateModal) {
-      setModalMode('create'); setSelectedAssetId(null); setModalOpen(true);
-    }
-  }, [forceOpenCreateModal]);
-
-  const handleClose = () => {
-    setModalOpen(false);
-    if (modalMode === 'create' && onCloseCreateModal) onCloseCreateModal();
-  };
-
   const normalizedAssets = useMemo(() => {
     if (!assets || assets.length === 0) return [];
     return assets
@@ -108,25 +93,6 @@ export function YieldProjectionCard({ assets, cdiAnnualPercent = 13.65, rateSour
         } as RawAssetDoc;
       });
   }, [assets]);
-
-  const handleSave = async (data: InvestmentPolicyData) => {
-    const newPolicy = {
-      indexer: data.indexer, rateType: data.rateType, dayCountConvention: data.dayCountConvention, taxDisplayMode: data.taxDisplayMode,
-      rateTiers: [
-        { upTo: data.hasTier2 ? data.tier2Limit : null, baseRateValue: data.baseRateValue, bonusRateValue: data.bonusRateValue },
-        ...(data.hasTier2 ? [{ upTo: null, baseRateValue: data.tier2BaseRate, bonusRateValue: data.tier2BonusRate }] : [])
-      ]
-    };
-
-    if (modalMode === 'create' && onCreateAsset) {
-      await onCreateAsset({ name: data.name, value: data.initialBalance || 0, type: 'investment', strategy: 'FIXED_INCOME_TIERED', investmentPolicy: newPolicy });
-    } else if (modalMode === 'edit' && selectedAssetId && onUpdateAsset) {
-      if (!selectedAssetId.startsWith('demo-')) {
-        await onUpdateAsset(selectedAssetId, { name: data.name, value: data.initialBalance, strategy: 'FIXED_INCOME_TIERED', investmentPolicy: newPolicy });
-      }
-    }
-    handleClose();
-  };
 
   const projections = useMemo(() => {
     const fromProps = normalizedAssets.map(assetToInvestment).filter((inv): inv is Investment => inv !== null);
@@ -237,7 +203,7 @@ export function YieldProjectionCard({ assets, cdiAnnualPercent = 13.65, rateSour
       <div className="space-y-3" style={dynamicStyles}>
         <div className="flex justify-between items-center mb-2 px-1">
           <h3 style={{ color: textPrimary }} className="text-sm font-bold">Rendimento projetado</h3>
-          {onCreateAsset && <button type="button" onClick={() => { setModalMode('create'); setSelectedAssetId(null); setModalOpen(true); }} style={{ color: textPrimary }} className="hover:text-[var(--accent)] font-bold text-lg">+</button>}
+          {onCreateAsset && <button type="button" onClick={() => onCreateAsset({ name: 'Novo Ativo', value: 0, type: 'investment' })} style={{ color: textPrimary }} className="hover:text-[var(--accent)] font-bold text-lg">+</button>}
         </div>
 
         {/* HERO CARD (SOMA TOTAL) */}
@@ -323,7 +289,7 @@ export function YieldProjectionCard({ assets, cdiAnnualPercent = 13.65, rateSour
                     <div className="px-3 py-1 rounded-lg bg-white/5 border border-white/10 backdrop-blur-sm">
                       <span style={{ ...txtStyle(11, 0.6), color: textMuted }} className="font-bold tracking-wide">{p.rateStr}</span>
                     </div>
-                    <button type="button" onClick={(e) => { e.stopPropagation(); setModalMode('edit'); setSelectedAssetId(p.id); setModalOpen(true); }} className="hover:text-[var(--accent)] p-1" style={{ color: textMuted }}>⚙️</button>
+                    <button type="button" onClick={(e) => { e.stopPropagation(); setSelectedAssetId(p.id); }} className="hover:text-[var(--accent)] p-1" style={{ color: textMuted }}>⚙️</button>
                   </div>
                 </div>
 
@@ -396,25 +362,6 @@ export function YieldProjectionCard({ assets, cdiAnnualPercent = 13.65, rateSour
           );
         }))}
       </div>
-
-      <InvestmentPolicyModal isOpen={modalOpen} mode={modalMode} onClose={handleClose} onSave={handleSave} initialData={modalMode === 'edit' && selectedAssetId ? (() => {
-        const inv = projections.find(x => x.id === selectedAssetId);
-        const asset = normalizedAssets.find(x => x.id === selectedAssetId);
-        if (!inv || !asset) return undefined;
-        const tiers = asset.investmentPolicy?.rateTiers || [];
-        const t1 = tiers[0] || { upTo: null, baseRateValue: 100, bonusRateValue: 0 };
-        const t2 = tiers[1] || { upTo: null, baseRateValue: 0, bonusRateValue: 0 };
-        return {
-          name: inv.name, initialBalance: inv.balance,
-          indexer: asset.investmentPolicy?.indexer || 'CDI',
-          rateType: asset.investmentPolicy?.rateType || 'PERCENT_INDEXER',
-          dayCountConvention: asset.investmentPolicy?.dayCountConvention || 'BUSINESS_DAYS_252',
-          taxDisplayMode: asset.investmentPolicy?.taxDisplayMode || 'NET',
-          baseRateValue: t1.baseRateValue, bonusRateValue: t1.bonusRateValue,
-          hasTier2: tiers.length > 1, tier2Limit: t1.upTo ? Number(t1.upTo) : 0,
-          tier2BaseRate: t2.baseRateValue, tier2BonusRate: t2.bonusRateValue,
-        };
-      })() : undefined} />
     </>
   );
 }

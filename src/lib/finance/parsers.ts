@@ -22,16 +22,7 @@ export const parseTransactionAmount = (value: unknown): number => {
 
 export const parseTransactionDate = (value: unknown): Date | null => {
   if (!value) return null;
-  // String "YYYY-MM-DD": parsear em LOCAL (evita shift UTC→BRT de 3h)
-  if (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value)) {
-    const parts = value.split('-').map(Number);
-    const y = parts[0];
-    const m = parts[1];
-    const d = parts[2];
-    if (y !== undefined && m !== undefined && d !== undefined) {
-      return new Date(y, m - 1, d);
-    }
-  }
+
   if (value instanceof Date) return Number.isNaN(value.getTime()) ? null : value;
   
   if (typeof value === 'object' && value !== null && 'toDate' in value && typeof (value as { toDate: () => unknown }).toDate === 'function') {
@@ -52,11 +43,23 @@ export const parseTransactionDate = (value: unknown): Date | null => {
     const d = value > 1e11 ? new Date(value) : new Date(value * 1000);
     return Number.isNaN(d.getTime()) ? null : d;
   }
+
   if (typeof value === 'string') {
     const str = value.trim();
     if (!str) return null;
 
-    // Formato brasileiro DD/MM/YYYY ou DD-MM-YYYY
+    // String estrita "YYYY-MM-DD": parsear em LOCAL (evita shift UTC→BRT de 3h)
+    if (/^\d{4}-\d{2}-\d{2}$/.test(str)) {
+      const parts = str.split('-').map(Number);
+      const y = parts[0];
+      const m = parts[1];
+      const d = parts[2];
+      if (y !== undefined && m !== undefined && d !== undefined) {
+        return new Date(y, m - 1, d);
+      }
+    }
+
+    // Formato brasileiro DD/MM/YYYY ou DD-MM-YYYY (com ou sem hora)
     const brMatch = /^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})/.exec(str);
     if (brMatch) {
       const day = parseInt(brMatch[1] ?? '', 10);
@@ -67,11 +70,26 @@ export const parseTransactionDate = (value: unknown): Date | null => {
       if (!Number.isNaN(d.getTime())) return d;
     }
 
-    // Formato ISO YYYY-MM-DD
-    const normalized = str.includes('T') ? str : `${str}T12:00:00`;
+    // Formato ISO ou data iniciando por YYYY-MM-DD
+    const isoPrefixMatch = /^(\d{4})-(\d{2})-(\d{2})/.exec(str);
+    if (isoPrefixMatch) {
+      const y = parseInt(isoPrefixMatch[1] ?? '', 10);
+      const m = parseInt(isoPrefixMatch[2] ?? '', 10) - 1;
+      const d = parseInt(isoPrefixMatch[3] ?? '', 10);
+      // Se não possui hora ou é meia-noite UTC (ex: 2026-11-08T00:00:00Z ou 2026-11-08 00:00:00),
+      // fixa 12:00 local para evitar que fusos negativos (ex: GMT-3 do Brasil) recuem para o dia anterior
+      if (!str.includes('T') || str.includes(' 00:00') || str.includes('T00:00:00')) {
+        const localDate = new Date(y, m, d, 12, 0, 0);
+        if (!Number.isNaN(localDate.getTime())) return localDate;
+      }
+    }
+
+    // Formato ISO YYYY-MM-DD com hora
+    const normalized = str.includes('T') ? str : `${str.replace(' ', 'T')}`;
     const d = new Date(normalized);
-    return Number.isNaN(d.getTime()) ? null : d;
+    if (!Number.isNaN(d.getTime())) return d;
   }
+
   const d = new Date(value as string | number | Date);
   return Number.isNaN(d.getTime()) ? null : d;
 };

@@ -10,6 +10,7 @@ import {
   Plus, 
   RefreshCw 
 } from 'lucide-react';
+import LoadingSpinner from '../components/LoadingSpinner';
 import { chatWithZenithAI } from '../lib/ai';
 import type { ChatAIResult } from '../lib/ai';
 import type { FinancialGoalTargets } from '../lib/finance';
@@ -540,9 +541,8 @@ export default function ZenithIAView({
             <div className="w-8 h-8 rounded-full bg-[var(--accent)]/20 flex items-center justify-center">
               <Sparkles size={14} />
             </div>
-            <div className="bg-[var(--bg-card)] border border-[var(--border-card)] rounded-2xl rounded-bl-sm p-3 flex items-center gap-2 shadow-sm">
-              <Loader2 size={14} className="animate-spin" />
-              <span className="text-xs">{loadingStatus || t("Executando tarefa...", "Executing task...")}</span>
+            <div className="bg-[var(--bg-card)] border border-[var(--border-card)] rounded-2xl rounded-bl-sm px-4 py-2 flex items-center shadow-sm">
+              <LoadingSpinner label={loadingStatus || t("Executando tarefa...", "Executing task...")} />
             </div>
           </motion.div>
         )}

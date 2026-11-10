@@ -1,11 +1,26 @@
 import { useState, useEffect } from 'react';
-import { auth, db, doc, setDoc, onSnapshot, serverTimestamp, handleFirestoreError, OperationType } from '../firebase';
+import { auth, db, doc, setDoc, updateDoc, onSnapshot, serverTimestamp, handleFirestoreError, OperationType } from '../firebase';
 import { getSyncCachedUser } from '../lib/authSession';
 import type { UserProfile, Settings } from '../types/app';
 import type { ZenithUser } from './useZenithData';
 
+export type AppLanguage = 'pt-BR' | 'en-US' | 'es-ES';
+
+export const IDIOMA_MAP: Record<string, AppLanguage> = {
+  'Português (Brasil)': 'pt-BR',
+  'pt-BR': 'pt-BR',
+  'English (US)': 'en-US',
+  'en-US': 'en-US',
+  'Español': 'es-ES',
+  'es-ES': 'es-ES',
+};
+
+export function mapIdiomaToLanguage(idioma?: string): AppLanguage {
+  if (!idioma) return 'pt-BR';
+  return IDIOMA_MAP[idioma] || 'pt-BR';
+}
+
 export const DEFAULT_SETTINGS: Settings = {
-  theme: 'dark',
   language: 'pt-BR',
   privacyMode: false,
   activeWidgets: ['all'],
@@ -16,7 +31,7 @@ export const DEFAULT_SETTINGS: Settings = {
     master_states: {
       modo_privacidade: false,
       insights_ia_ativo: true,
-      idioma: 'pt-BR',
+      idioma: 'Português (Brasil)',
       tema_global: 'Escuro',
       dashboard_management_expanded: false,
     },
@@ -65,17 +80,31 @@ export function useUserSettings(user: ZenithUser | null) {
       const cached = typeof window !== 'undefined' ? localStorage.getItem(`zenith_config_${u.uid}`) : null;
       if (cached) {
         const data = JSON.parse(cached);
+        const resolvedLanguage = mapIdiomaToLanguage(data.master_states?.idioma);
+        const resolvedPrivacy = data.master_states?.modo_privacidade ?? false;
         return {
           ...DEFAULT_SETTINGS,
+          language: resolvedLanguage,
           zenith_config: data,
-          privacyMode: data.master_states?.modo_privacidade ?? false,
+          privacyMode: resolvedPrivacy,
         };
       }
     } catch {}
     return DEFAULT_SETTINGS;
   });
 
-  const [privacyMode, setPrivacyMode] = useState(false);
+  const [privacyMode, setPrivacyMode] = useState<boolean>(() => {
+    const u = auth.currentUser || getSyncCachedUser();
+    if (!u) return false;
+    try {
+      const cached = typeof window !== 'undefined' ? localStorage.getItem(`zenith_config_${u.uid}`) : null;
+      if (cached) {
+        const data = JSON.parse(cached);
+        return data.master_states?.modo_privacidade ?? false;
+      }
+    } catch {}
+    return false;
+  });
 
   // 3. Profile Listener
   useEffect(() => {
@@ -134,12 +163,15 @@ export function useUserSettings(user: ZenithUser | null) {
       const cached = localStorage.getItem(`zenith_config_${user.uid}`);
       if (cached) {
         const data = JSON.parse(cached);
+        const resolvedLanguage = mapIdiomaToLanguage(data.master_states?.idioma);
+        const resolvedPrivacy = data.master_states?.modo_privacidade ?? false;
         setSettings({
           ...DEFAULT_SETTINGS,
+          language: resolvedLanguage,
           zenith_config: data,
-          privacyMode: data.master_states?.modo_privacidade ?? false,
+          privacyMode: resolvedPrivacy,
         });
-        setPrivacyMode(data.master_states?.modo_privacidade ?? false);
+        setPrivacyMode(resolvedPrivacy);
       } else {
         setSettings((curr) => curr || DEFAULT_SETTINGS);
       }
@@ -152,13 +184,24 @@ export function useUserSettings(user: ZenithUser | null) {
       doc(db, 'settings', user.uid),
       (snap) => {
         if (snap.exists()) {
-          const data = snap.data() as Settings;
-          setSettings(data);
-          setPrivacyMode(data.privacyMode);
+          const rawData = snap.data() as Partial<Settings>;
+          const configIdioma = rawData.zenith_config?.master_states?.idioma;
+          const resolvedLanguage = configIdioma ? mapIdiomaToLanguage(configIdioma) : (rawData.language || 'pt-BR');
+          const resolvedPrivacy = rawData.privacyMode ?? rawData.zenith_config?.master_states?.modo_privacidade ?? false;
 
-          if (data.zenith_config) {
+          const unifiedData: Settings = {
+            ...DEFAULT_SETTINGS,
+            ...rawData,
+            language: resolvedLanguage,
+            privacyMode: resolvedPrivacy,
+          };
+
+          setSettings(unifiedData);
+          setPrivacyMode(resolvedPrivacy);
+
+          if (unifiedData.zenith_config) {
             try {
-              localStorage.setItem(`zenith_config_${user.uid}`, JSON.stringify(data.zenith_config));
+              localStorage.setItem(`zenith_config_${user.uid}`, JSON.stringify(unifiedData.zenith_config));
             } catch (e) {
               console.warn('Storage failed:', e);
             }
@@ -173,6 +216,36 @@ export function useUserSettings(user: ZenithUser | null) {
     );
     return unsub;
   }, [user]);
+
+  // Sincronização de idioma: escuta zenith_config.master_states.idioma e sincroniza com settings.language
+  useEffect(() => {
+    const rawIdioma = settings?.zenith_config?.master_states?.idioma;
+    if (!rawIdioma) return;
+    const targetLanguage = mapIdiomaToLanguage(rawIdioma);
+    if (settings.language !== targetLanguage) {
+      setSettings((current) => (current ? { ...current, language: targetLanguage } : current));
+      if (user) {
+        updateDoc(doc(db, 'settings', user.uid), { language: targetLanguage }).catch((e) =>
+          handleFirestoreError(e, OperationType.UPDATE, `settings/${user.uid}`)
+        );
+      }
+    }
+  }, [settings?.zenith_config?.master_states?.idioma, settings?.language, user]);
+
+  // Sincronização de privacidade: garante que settings.privacyMode é a única fonte da verdade
+  useEffect(() => {
+    if (!settings) return;
+    const configPrivacy = settings.zenith_config?.master_states?.modo_privacidade;
+    if (configPrivacy !== undefined && configPrivacy !== settings.privacyMode) {
+      setSettings((current) => (current ? { ...current, privacyMode: configPrivacy } : current));
+      setPrivacyMode(configPrivacy);
+      if (user) {
+        updateDoc(doc(db, 'settings', user.uid), { privacyMode: configPrivacy }).catch((e) =>
+          handleFirestoreError(e, OperationType.UPDATE, `settings/${user.uid}`)
+        );
+      }
+    }
+  }, [settings?.zenith_config?.master_states?.modo_privacidade, settings?.privacyMode, user]);
 
   return {
     profile,

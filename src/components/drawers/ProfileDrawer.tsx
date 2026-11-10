@@ -2,6 +2,7 @@ import { CardSettingsPanel } from '../CardSettingsPanel';
 import type { VisualSettings } from '../CardSettingsPanel';
 import React, { useState, useEffect, useRef, Suspense, lazy } from 'react';
 import { motion } from 'motion/react';
+import type { ZenithConfig, UserProfile } from '../../types/app';
 import {
   User as UserIcon,
   Bell,
@@ -17,6 +18,8 @@ import {
   BellOff,
 } from 'lucide-react';
 import LoadingSpinner from '../LoadingSpinner';
+import { testApiKey } from '../../lib/ai';
+import { DeleteAccountModal } from './DeleteAccountModal';
 
 const StorageTrashView = lazy(() => import('../../views/StorageTrashView'));
 const HeritageSettings = lazy(() =>
@@ -58,12 +61,23 @@ export function imageFileToAvatar(file: File): Promise<string> {
   });
 }
 
-export function ProfileSection({ profile, onSave, onDone, language }: any) {
+interface ProfileSectionProps {
+  profile?: Partial<UserProfile> | null;
+  onSave: (profile: any) => Promise<void>;
+  onDone: () => void;
+  language?: string;
+  onDeleteAccount?: () => Promise<{ success: boolean; error?: string }>;
+}
+
+export function ProfileSection({ profile, onSave, onDone, language, onDeleteAccount }: ProfileSectionProps) {
   const t = (pt: string, en: string) => (language === 'en-US' ? en : pt);
-  const [formData, setFormData] = useState({ ...profile });
+  const [formData, setFormData] = useState<Partial<UserProfile>>({ ...(profile ?? {}) });
   const [saving, setSaving] = useState(false);
   const [photoLoading, setPhotoLoading] = useState(false);
   const [photoError, setPhotoError] = useState<string | null>(null);
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handlePhotoChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -87,7 +101,7 @@ export function ProfileSection({ profile, onSave, onDone, language }: any) {
   };
 
   const handleSave = async () => {
-    if (!formData.displayName?.trim()) {
+    if (!(formData.displayName as string | undefined)?.trim()) {
       alert(t('O nome não pode estar vazio.', 'The name cannot be empty.'));
       return;
     }
@@ -97,6 +111,25 @@ export function ProfileSection({ profile, onSave, onDone, language }: any) {
       onDone();
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleDeleteConfirm = async () => {
+    if (!onDeleteAccount) return;
+    setIsDeleting(true);
+    setDeleteError(null);
+    const result = await onDeleteAccount();
+    if (!result.success) {
+      setDeleteError(
+        result.error?.includes('requires-recent-login')
+          ? t(
+              'Por segurança, faça logout e login novamente antes de excluir sua conta.',
+              'For security, please log out and log in again before deleting your account.'
+            )
+          : (result.error ?? t('Erro ao excluir conta. Tente novamente.', 'Failed to delete account. Try again.'))
+      );
+      setIsDeleting(false);
+      setShowDeleteModal(false);
     }
   };
 
@@ -135,7 +168,7 @@ export function ProfileSection({ profile, onSave, onDone, language }: any) {
         <label className="text-[10px] uppercase font-bold text-[var(--text-muted)] tracking-widest">{t('Perfil de Investidor', 'Investor Profile')}</label>
         <select
           value={formData.investor_profile || 'Conservador'}
-          onChange={e => setFormData({ ...formData, investor_profile: e.target.value })}
+          onChange={e => setFormData({ ...formData, investor_profile: e.target.value as 'Conservador' | 'Sofisticado' | 'Arrojado' })}
           className="mt-1 w-full bg-[var(--bg-app)] border border-[var(--border-card)] rounded-xl p-3 text-[var(--text-primary)] text-sm focus:border-[var(--accent)] outline-none"
         >
           <option value="Conservador">Conservador</option>
@@ -151,6 +184,32 @@ export function ProfileSection({ profile, onSave, onDone, language }: any) {
       >
         <Save size={16} /> {t('Salvar Alterações', 'Save Changes')}
       </button>
+
+      {onDeleteAccount && (
+        <div className="mt-2 pt-4 border-t border-[var(--destructive)]/20">
+          <p className="text-[9px] font-black uppercase tracking-widest text-[var(--destructive)] mb-3">
+            {t('Zona de Perigo', 'Danger Zone')}
+          </p>
+          {deleteError && (
+            <p className="text-[10px] text-[var(--destructive)] mb-3 leading-relaxed">{deleteError}</p>
+          )}
+          <button
+            onClick={() => setShowDeleteModal(true)}
+            className="w-full py-3 border border-[var(--destructive)]/40 text-[var(--destructive)] rounded-2xl text-[10px] font-black uppercase tracking-widest hover:bg-[var(--destructive)]/10 transition-all"
+          >
+            {t('Excluir minha conta', 'Delete my account')}
+          </button>
+        </div>
+      )}
+
+      {showDeleteModal && (
+        <DeleteAccountModal
+          language={language}
+          isDeleting={isDeleting}
+          onConfirm={handleDeleteConfirm}
+          onCancel={() => { setShowDeleteModal(false); setDeleteError(null); }}
+        />
+      )}
     </div>
   );
 }
@@ -187,16 +246,33 @@ export function AiKeySection({ apiKey, error, onSave, onClearError, language }: 
   const t = (pt: string, en: string) => (language === 'en-US' ? en : pt);
   const [draft, setDraft] = useState(apiKey || '');
   const [localError, setLocalError] = useState<string | null>(null);
-  const [saved, setSaved] = useState(false);
+  const [isValidating, setIsValidating] = useState(false);
+  const [validationStatus, setValidationStatus] = useState<'idle' | 'ok' | 'error'>('idle');
 
-  const handleSave = () => {
+  const handleSave = async () => {
     if (!draft.trim()) {
       setLocalError(t('Informe uma chave válida.', 'Enter a valid key.'));
       return;
     }
-    onSave(draft);
+    setIsValidating(true);
+    setValidationStatus('idle');
     setLocalError(null);
-    setSaved(true);
+    onClearError?.();
+    try {
+      const result = await testApiKey(draft.trim());
+      if (!result.valid) {
+        setValidationStatus('error');
+        setLocalError(result.error ?? t('Chave inválida.', 'Invalid key.'));
+        return;
+      }
+      onSave(draft.trim());
+      setValidationStatus('ok');
+    } catch {
+      setValidationStatus('error');
+      setLocalError(t('Erro ao validar. Tente novamente.', 'Validation error. Please try again.'));
+    } finally {
+      setIsValidating(false);
+    }
   };
 
   return (
@@ -209,8 +285,8 @@ export function AiKeySection({ apiKey, error, onSave, onClearError, language }: 
         <h3 className="text-sm font-bold text-[var(--text-primary)]">{t('Chave da API Gemini', 'Gemini API Key')}</h3>
         <p className="text-[11px] text-[var(--text-secondary)] leading-relaxed">
           {t(
-            'Informe sua própria chave do Google AI Studio. Ela fica salva apenas neste navegador.',
-            'Enter your own Google AI Studio key. It is stored only in this browser.'
+            'Informe sua própria chave do Google AI Studio. Ela fica salva com segurança neste dispositivo.',
+            'Enter your own Google AI Studio key. It is stored securely on this device.'
           )}
         </p>
       </div>
@@ -221,7 +297,7 @@ export function AiKeySection({ apiKey, error, onSave, onClearError, language }: 
         onChange={(e) => {
           setDraft(e.target.value);
           setLocalError(null);
-          setSaved(false);
+          setValidationStatus('idle');
           onClearError?.();
         }}
         placeholder="AIza..."
@@ -232,8 +308,10 @@ export function AiKeySection({ apiKey, error, onSave, onClearError, language }: 
         <p className="text-xs text-[var(--destructive)] font-medium">{localError || error}</p>
       )}
 
-      {saved && (
-        <p className="text-xs text-[var(--accent)] font-medium">{t('Chave salva neste navegador.', 'Key saved in this browser.')}</p>
+      {validationStatus === 'ok' && !localError && !error && (
+        <p className="text-xs text-[var(--accent)] font-medium">
+          {t('✓ Chave válida e salva com segurança.', '✓ Valid key saved securely.')}
+        </p>
       )}
 
       <p className="text-[10px] text-[var(--text-muted)] leading-relaxed">
@@ -250,9 +328,17 @@ export function AiKeySection({ apiKey, error, onSave, onClearError, language }: 
 
       <button
         onClick={handleSave}
-        className="w-full py-4 bg-[var(--accent)] text-[var(--bg-app)] rounded-2xl font-black text-[10px] uppercase tracking-widest hover:bg-[var(--accent)]/80 transition-colors"
+        disabled={isValidating}
+        className="w-full py-4 bg-[var(--accent)] text-[var(--bg-app)] rounded-2xl font-black text-[10px] uppercase tracking-widest hover:bg-[var(--accent)]/80 transition-colors flex items-center justify-center gap-2 disabled:opacity-60"
       >
-        {t('Salvar chave', 'Save key')}
+        {isValidating ? (
+          <>
+            <Loader2 size={14} className="animate-spin" />
+            {t('Verificando chave...', 'Verifying key...')}
+          </>
+        ) : (
+          t('Verificar e Salvar', 'Verify & Save')
+        )}
       </button>
     </div>
   );
@@ -275,12 +361,14 @@ export interface ProfileDrawerProps {
   apiKeyError?: string | null;
   onClearApiKeyError?: () => void;
   onSaveApiKey?: (key: string) => void;
-  onSaveProfile?: (profile: any) => Promise<void>;
+  onSaveProfile?: (profile: UserProfile) => Promise<void>;
   userId: string;
-  onRestoreTrash?: (item: any) => Promise<void>;
-  currentConfig?: any;
+  onRestoreTrash?: (item: unknown) => Promise<void>;
+  currentConfig?: ZenithConfig;
   settingsLanguage?: string;
   onLogout: () => void;
+  onDeleteAccount?: () => Promise<{ success: boolean; error?: string }>;
+  onOpenSettings?: (initialTab?: 'perfil' | 'aparencia' | 'seguranca' | 'dashboard' | 'ia') => void;
 }
 
 export function ProfileDrawer({
@@ -305,6 +393,8 @@ export function ProfileDrawer({
   onLogout,
   visualSettings,
   onChangeVisualSettings,
+  onDeleteAccount,
+  onOpenSettings,
 }: ProfileDrawerProps) {
   const t = (pt: string, en: string) => (language === 'en-US' ? en : pt);
   const [activeDrawerPage, setActiveDrawerPage] = useState<DrawerPage>('menu');
@@ -394,7 +484,26 @@ export function ProfileDrawer({
                 {menuItems.map((item) => (
                   <button
                     key={item.id}
-                    onClick={() => setActiveDrawerPage(item.id)}
+                    onClick={() => {
+                      if (onOpenSettings) {
+                        if (item.id === 'settings') {
+                          onClose();
+                          onOpenSettings('dashboard');
+                          return;
+                        }
+                        if (item.id === 'profile') {
+                          onClose();
+                          onOpenSettings('perfil');
+                          return;
+                        }
+                        if (item.id === 'ai_key') {
+                          onClose();
+                          onOpenSettings('ia');
+                          return;
+                        }
+                      }
+                      setActiveDrawerPage(item.id);
+                    }}
                     className="w-full flex items-center gap-4 p-4 rounded-2xl text-[var(--text-secondary)] hover:bg-[var(--bg-app)] hover:text-[var(--text-primary)] transition-all"
                   >
                     <span className="relative">
@@ -410,10 +519,11 @@ export function ProfileDrawer({
 
           {activeDrawerPage === 'profile' && (
             <ProfileSection
-              profile={profile}
+              profile={profile ?? {}}
               language={language}
-              onSave={onSaveProfile}
+              onSave={onSaveProfile ?? (() => Promise.resolve())}
               onDone={goBack}
+              onDeleteAccount={onDeleteAccount}
             />
           )}
 

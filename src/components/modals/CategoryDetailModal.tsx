@@ -3,7 +3,7 @@ import { motion } from 'motion/react';
 import { X, Plus, BarChart as BarChartIcon, ArrowRightLeft, Landmark, TrendingUp, LayoutGrid } from 'lucide-react';
 import { ResponsiveContainer, BarChart, Bar, CartesianGrid, XAxis, YAxis, Tooltip } from 'recharts';
 import { Transaction } from '../../types/app';
-import { Timeline } from '../dashboard/Timeline';
+import { DashboardTimeline } from '../dashboard/DashboardTimeline';
 import {
   calculateVariation,
   isExpenseTransaction,
@@ -171,9 +171,10 @@ export const CategoryDetailModal: React.FC<CategoryDetailModalProps> = ({
             <LayoutGrid size={14} className="text-[var(--accent)]" />
             <span className="text-xs font-bold text-[var(--text-muted)] uppercase tracking-widest">Timeline de Transações</span>
           </div>
-          <Timeline 
+          <DashboardTimeline 
             transactions={transactions.filter(t => !activeCategoryDetail || t.categoria_primaria === activeCategoryDetail || t.label.includes(activeCategoryDetail))} 
             privacyMode={privacyMode} 
+            t={(pt) => pt}
           />
         </div>
       </div>

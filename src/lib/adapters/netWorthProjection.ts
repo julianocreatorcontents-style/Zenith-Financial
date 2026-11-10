@@ -6,7 +6,7 @@ import { IofPolicy } from '../../domain/tax/IofPolicy';
 import { Money } from '../../domain/money/Money';
 import type { Investment } from '../../domain/investment/Investment';
 import type { YieldPolicy } from '../../domain/yield/YieldPolicy';
-import { calculateNetWorth, calculateCashFlowData } from '../finance';
+import { calculateNetWorth, calculateCashFlowData, parseTransactionAmount } from '../finance';
 
 export const DEFAULT_CDI_ANNUAL_PERCENT = 13.65;
 
@@ -242,10 +242,10 @@ export function calculateNetWorthProjection(
       if (monthTx.length > 0) {
         const inVal = monthTx
           .filter((t) => t.type === 'in' || t.type === 'yield')
-          .reduce((acc, t) => acc + (Number(t.value) || 0), 0);
+          .reduce((acc, t) => acc + parseTransactionAmount(t.value), 0);
         const outVal = monthTx
           .filter((t) => t.type === 'out')
-          .reduce((acc, t) => acc + (Number(t.value) || 0), 0);
+          .reduce((acc, t) => acc + parseTransactionAmount(t.value), 0);
         cumulativeCashFlow += inVal - outVal;
       } else {
         cumulativeCashFlow += historicalMonthlySavings;

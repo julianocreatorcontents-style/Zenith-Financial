@@ -7,6 +7,7 @@ import { doc, updateDoc } from 'firebase/firestore';
 import type { UpdateData } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType } from '../firebase';
 import { applyTheme } from '../lib/theme';
+import { mapIdiomaToLanguage } from '../hooks/useUserSettings';
 import type { ChartSlot, CategorySlot, MasterStates, ZenithConfig } from '../types/app';
 import { GlobalSettingsSection } from './settings/GlobalSettingsSection';
 import { ChartFilterCard } from './settings/ChartFilterCard';
@@ -19,6 +20,7 @@ interface HeritageSettingsProps {
   language: string;
   chartFilter?: { period: string; month: string; day: string };
   onChartFilterChange?: (filter: { period: string; month: string; day: string }) => void;
+  hideGlobalSettings?: boolean;
 }
 
 export const HeritageSettings: React.FC<HeritageSettingsProps> = ({ 
@@ -26,7 +28,8 @@ export const HeritageSettings: React.FC<HeritageSettingsProps> = ({
   userId, 
   currentConfig,
   chartFilter,
-  onChartFilterChange
+  onChartFilterChange,
+  hideGlobalSettings = false,
 }) => {
   // Hardcoded Charts for Backtest
   const HARDCODED_CHARTS: Record<string, ChartSlot> = {
@@ -305,9 +308,18 @@ export const HeritageSettings: React.FC<HeritageSettingsProps> = ({
       applyTheme(value);
     }
     
-    await updateDoc(doc(db, 'settings', userId), {
+    const updates: Record<string, unknown> = {
       [`zenith_config.master_states.${field}`]: value
-    }).catch(e => handleFirestoreError(e, OperationType.UPDATE, `settings/${userId}`));
+    };
+    if (field === 'modo_privacidade') {
+      updates['privacyMode'] = Boolean(value);
+    }
+    if (field === 'idioma' && typeof value === 'string') {
+      updates['language'] = mapIdiomaToLanguage(value);
+    }
+
+    await updateDoc(doc(db, 'settings', userId), updates as UpdateData<Record<string, unknown>>)
+      .catch(e => handleFirestoreError(e, OperationType.UPDATE, `settings/${userId}`));
   };
 
   const updateChartConfig = async (id: string, updates: Partial<ChartSlot>, isMetric: boolean = false) => {
@@ -357,10 +369,12 @@ export const HeritageSettings: React.FC<HeritageSettingsProps> = ({
     <div className="flex flex-col h-full min-h-0 bg-[var(--bg-app)] text-[var(--text-primary)]">
       <div className="flex-1 overflow-y-auto p-4 space-y-4">
         {/* 1. Configurações Globais */}
-        <GlobalSettingsSection
-          masterStates={localConfig.master_states}
-          onUpdateMaster={updateMaster}
-        />
+        {!hideGlobalSettings && (
+          <GlobalSettingsSection
+            masterStates={localConfig.master_states}
+            onUpdateMaster={updateMaster}
+          />
+        )}
 
         {/* 2. Gestão do Dashboard */}
         <div className="space-y-2">

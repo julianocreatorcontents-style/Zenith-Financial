@@ -16,6 +16,54 @@ export const GEMINI_API_KEY_STORAGE = 'zenith_gemini_api_key';
 export const PRIMARY_MODELS = GEMINI_PRIMARY_MODELS;
 
 /**
+ * Carrega a chave da API de IA do storage persistente (Preferences nativo em produção, localStorage na web).
+ */
+export async function loadStoredApiKey(): Promise<string> {
+  try {
+    const { Capacitor } = await import('@capacitor/core');
+    if (Capacitor.isNativePlatform()) {
+      const { Preferences } = await import('@capacitor/preferences');
+      const { value } = await Preferences.get({ key: GEMINI_API_KEY_STORAGE });
+      return value ?? '';
+    }
+  } catch {
+    // fallback to localStorage
+  }
+  try {
+    return localStorage.getItem(GEMINI_API_KEY_STORAGE) ?? '';
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * Testa a validade de uma chave de API do Gemini fazendo uma chamada real de listagem de modelos.
+ * Retorna 'ok' se a chave funcionar, ou uma string de erro amigável se inválida.
+ */
+export async function testApiKey(key: string): Promise<{ valid: boolean; error?: string }> {
+  if (!key || key.trim().length <= 10) {
+    return { valid: false, error: 'Chave muito curta ou inválida.' };
+  }
+  try {
+    await getSupportedModels(key.trim());
+    return { valid: true };
+  } catch (err) {
+    if (err instanceof InvalidApiKeyError) {
+      return { valid: false, error: 'Chave inválida. Verifique no Google AI Studio.' };
+    }
+    if (err instanceof MissingApiKeyError) {
+      return { valid: false, error: 'Chave não informada.' };
+    }
+    const message = err instanceof Error ? err.message : String(err);
+    if (message.includes('API_KEY_INVALID') || message.includes('401') || message.includes('403')) {
+      return { valid: false, error: 'Chave rejeitada pela API. Verifique permissões.' };
+    }
+    // Network error ou outros — não bloquear o salvamento (chave pode ser válida)
+    return { valid: false, error: 'Não foi possível verificar a chave. Verifique sua conexão.' };
+  }
+}
+
+/**
  * Fábrica do provedor padrão de IA (Google Gemini).
  */
 export function createAIProvider(apiKey: string): IAIProvider {

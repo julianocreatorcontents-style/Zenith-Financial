@@ -15,6 +15,7 @@ import {
   getAiErrorMessage
 } from './lib/ai';
 import LoadingSpinner from './components/LoadingSpinner';
+import Modal from './components/ui/Modal';
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { ProfileDrawer } from "./components/drawers/ProfileDrawer";
 import type { VisualSettings } from "./components/CardSettingsPanel";
@@ -23,6 +24,7 @@ import { NavItem } from "./components/layout/NavItem";
 import type { Asset, Transaction } from "./types/app";
 import { useZenithData, DEFAULT_SETTINGS } from "./hooks/useZenithData";
 import { usePersistentState } from "./hooks/usePersistentState";
+import { useAppNavigation } from "./hooks/useAppNavigation";
 import { applyTheme } from "./lib/theme";
 
 const StorageTrashView = lazy(() => import('./views/StorageTrashView'));
@@ -34,6 +36,8 @@ const DetalhesGastosPage = lazy(() =>
 const InvestmentsView = lazy(() =>
   import('./views/InvestmentsView').then(m => ({ default: m.InvestmentsView }))
 );
+const SettingsView = lazy(() => import('./views/SettingsView'));
+import type { SettingsTab } from './views/SettingsView';
 const AuthView = lazy(() =>
   import('./views/AuthView').then(m => ({ default: m.AuthView }))
 );
@@ -72,54 +76,69 @@ export default function ZenithApp() {
     metrics, chartData, projectionData, cashFlowData,
     portfolioAllocationPercent, goals, updateGoals, t, getGeminiApiKey,
     togglePrivacyMode, handleSaveProfile, handleSaveApiKey,
-    handleGoogleLogin, handleEmailLogin, handleRegister, handleLogout,
+    handleGoogleLogin, handleEmailLogin, handleRegister, handleLogout, handleDeleteAccount,
     handleAcceptDDA, handleRejectDDA, moveToTrash, restoreFromTrash,
     createAsset, updateAsset, deleteAsset,
     addTransaction, updateTransaction, confirmPendingTransaction,
     handleFileUpload
   } = data;
 
-  // Estados locais de navegação e modais da UI
-  const [currentTab, setCurrentTab] = useState<'Início' | 'Carteira' | 'Investimentos' | 'IA' | 'Armazenamento'>('Início');
-  const [isAddMenuOpen, setIsAddMenuOpen] = useState(false);
-  const [forceCreateInvestment, setForceCreateInvestment] = useState(false);
-  const [selectedAsset, setSelectedAsset] = useState<Asset | null>(null);
-  const [selectedAssetForDeepDive, setSelectedAssetForDeepDive] = useState<Asset | null>(null);
-  const [isAddingAsset, setIsAddingAsset] = useState(false);
-  const [isAddingTransaction, setIsAddingTransaction] = useState(false);
-  const [isEditingTransaction, setIsEditingTransaction] = useState(false);
-  const [selectedTransaction, setSelectedTransaction] = useState<Transaction | null>(null);
-  const [isProfileDrawerOpen, setIsProfileDrawerOpen] = useState(false);
-  const [isOnline, setIsOnline] = useState(navigator.onLine);
-  const [hasUnreadNotification, setHasUnreadNotification] = useState(true);
-  useEffect(() => {
-    if (!hasUnreadNotification) return;
-    const tryPlay = () => {
-      try {
-        const AudioCtx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
-        const ctx = new AudioCtx();
-        const p = (f: number, s: number, d: number) => {
-          const o = ctx.createOscillator();
-          const g = ctx.createGain();
-          o.type = "sine";
-          o.frequency.value = f;
-          g.gain.setValueAtTime(0.1, s);
-          g.gain.exponentialRampToValueAtTime(0.001, s + d);
-          o.connect(g);
-          g.connect(ctx.destination);
-          o.start(s);
-          o.stop(s + d);
-        };
-        p(880, ctx.currentTime, 0.1);
-        p(1108, ctx.currentTime + 0.1, 0.2);
-        document.removeEventListener("click", tryPlay);
-        document.removeEventListener("touchstart", tryPlay);
-      } catch (e) {}
-    };
-    tryPlay();
-    document.addEventListener("click", tryPlay, { once: true });
-    document.addEventListener("touchstart", tryPlay, { once: true });
-  }, []);
+  // Estados locais de navegação e modais da UI delegados para useAppNavigation
+  const {
+    currentTab,
+    setCurrentTab,
+    isAddMenuOpen,
+    setIsAddMenuOpen,
+    forceCreateInvestment,
+    setForceCreateInvestment,
+    selectedAsset,
+    setSelectedAsset,
+    selectedAssetForDeepDive,
+    setSelectedAssetForDeepDive,
+    isAddingAsset,
+    setIsAddingAsset,
+    isAddingTransaction,
+    setIsAddingTransaction,
+    isEditingTransaction,
+    setIsEditingTransaction,
+    selectedTransaction,
+    setSelectedTransaction,
+    isProfileDrawerOpen,
+    setIsProfileDrawerOpen,
+    isSettingsViewOpen,
+    setIsSettingsViewOpen,
+    settingsInitialTab,
+    drawerPageRequest,
+    setDrawerPageRequest,
+    isIngestionHubOpen,
+    setIsIngestionHubOpen,
+    isReviewModalOpen,
+    setIsReviewModalOpen,
+    isCategoryDetailsOpen,
+    setIsCategoryDetailsOpen,
+    activeCategoryDetail,
+    setActiveCategoryDetail,
+    timeFilter,
+    setTimeFilter,
+    chartFilterValue,
+    setChartFilterValue,
+    evolutionView,
+    setEvolutionView,
+    projectionTaxMode,
+    setProjectionTaxMode,
+    isOnline,
+    hasUnreadNotification,
+    setHasUnreadNotification,
+    openDrawer,
+    handleOpenSettings,
+    handleAiError,
+    handleUniversalIngestion,
+  } = useAppNavigation({
+    settings,
+    handleFileUpload,
+    setApiKeyError,
+    setError,
+  });
 
   const [visualSettings, setVisualSettings] = usePersistentState<VisualSettings>('zenith_visual_settings', {
     isCustomEnabled: true,
@@ -137,108 +156,42 @@ export default function ZenithApp() {
 
   
 
-  // Aplica o tema Customizado Global (Verde Glass) em todo o app
+  // Sincronização do tema: Tema Global vs Customização Visual
   useEffect(() => {
     const root = document.documentElement;
+    const temaGlobal = settings?.zenith_config?.master_states?.tema_global || 'Escuro';
+
     if (visualSettings.isCustomEnabled) {
+      // Configura classe base escura para o tema customizado
+      root.classList.remove('light', 'high-contrast');
+      root.classList.add('dark');
+      root.setAttribute('data-theme', 'dark');
+      root.setAttribute('data-mantine-color-scheme', 'dark');
+
+      const cardOpacity = typeof visualSettings.cardBgOpacity === 'number' ? visualSettings.cardBgOpacity : 0.6;
       root.style.setProperty('--bg-app', '#0a1a12');
-      root.style.setProperty('--bg-card', 'rgba(10, 26, 18, 0.6)');
+      root.style.setProperty('--bg-card', `rgba(10, 26, 18, ${cardOpacity})`);
       root.style.setProperty('--text-primary', '#FFFFFF');
       root.style.setProperty('--text-muted', '#9CA3AF');
       root.style.setProperty('--border-card', 'rgba(0, 255, 163, 0.2)');
       root.style.setProperty('--accent', visualSettings.accentColor || '#00FFA3');
     } else {
-      // Remove as variáveis customizadas, deixando o tema original do Zenith prevalecer
+      // Remove variáveis customizadas para restaurar/aplicar o tema global selecionado
       root.style.removeProperty('--bg-app');
       root.style.removeProperty('--bg-card');
       root.style.removeProperty('--text-primary');
       root.style.removeProperty('--text-muted');
       root.style.removeProperty('--border-card');
       root.style.removeProperty('--accent');
+
+      applyTheme(temaGlobal);
     }
-  }, [visualSettings.isCustomEnabled, visualSettings.accentColor]);
+  }, [visualSettings.isCustomEnabled, visualSettings.accentColor, visualSettings.cardBgOpacity, settings?.zenith_config?.master_states?.tema_global]);
 
-
-  const [drawerPageRequest, setDrawerPageRequest] = useState<'menu' | 'profile' | 'notifications' | 'settings' | 'ai_key' | 'trash'>('menu');
-  const [isIngestionHubOpen, setIsIngestionHubOpen] = useState(false);
-  const [isReviewModalOpen, setIsReviewModalOpen] = useState(false);
-  const [isCategoryDetailsOpen, setIsCategoryDetailsOpen] = useState(false);
-  const [activeCategoryDetail, setActiveCategoryDetail] = useState<string | null>(null);
-  const [timeFilter, setTimeFilter] = useState<'7' | '15' | '30'>('30');
-  const [chartFilterValue, setChartFilterValue] = useState<{ type: 'category' | 'asset' | null, value: string | null }>({ type: null, value: null });
-  const [evolutionView, setEvolutionView] = useState<'historico' | 'projecao'>('historico');
-  const [projectionTaxMode, setProjectionTaxMode] = useState<'liquido' | 'bruto'>('liquido');
-
-  // Sincronização global do tema (Escuro, Claro, Contraste)
-  useEffect(() => {
-    // Se o tema customizado estiver ativo, o tema global é ignorado
-    // para não sobrescrever as variáveis CSS do custom.
-    if (visualSettings.isCustomEnabled) return;
-    const tema = settings?.zenith_config?.master_states?.tema_global || settings?.theme || 'Escuro';
-    applyTheme(tema);
-  }, [settings?.zenith_config?.master_states?.tema_global, settings?.theme, visualSettings.isCustomEnabled]);
-
-  
-  useEffect(() => {
-    const handleOnline = () => setIsOnline(true);
-    const handleOffline = () => setIsOnline(false);
-    window.addEventListener('online', handleOnline);
-    window.addEventListener('offline', handleOffline);
-    return () => {
-      window.removeEventListener('online', handleOnline);
-      window.removeEventListener('offline', handleOffline);
-    };
-  }, []);
-
-  const openDrawer = useCallback((page: 'menu' | 'profile' | 'notifications' | 'settings' | 'ai_key' | 'trash' = 'menu') => {
-    setDrawerPageRequest(page);
-    setIsProfileDrawerOpen(true);
-  }, []);
-
-  const handleAiError = useCallback((e: unknown) => {
-    if (e instanceof MissingApiKeyError || e instanceof InvalidApiKeyError) {
-      setApiKeyError((e as Error).message);
-      openDrawer('ai_key');
-      return;
-    }
-    setError(getAiErrorMessage(e, settings?.language || 'pt-BR'));
-  }, [settings?.language, openDrawer, setApiKeyError, setError]);
-
-  const handleUniversalIngestion = async (type: 'scanner' | 'upload' | 'spreadsheet' | 'manual') => {
-    if (type === 'manual') {
-      setIsIngestionHubOpen(false);
-      setIsAddingTransaction(true);
-      return;
-    }
-    const input = document.createElement('input');
-    input.type = 'file';
-    if (type === 'scanner') {
-      input.accept = 'image/*';
-      input.capture = 'environment';
-    } else if (type === 'spreadsheet') {
-      input.accept = '.csv, .xlsx, .xls';
-    } else {
-      input.accept = 'image/*,application/pdf';
-    }
-    input.onchange = (e: Event) => {
-      const target = e.target as HTMLInputElement | null;
-      const file = target?.files?.[0];
-      if (file) {
-        setIsIngestionHubOpen(false);
-        handleFileUpload(file).then(() => {
-          if (!file.name.toLowerCase().endsWith('.csv') && !file.name.toLowerCase().endsWith('.xlsx') && !file.name.toLowerCase().endsWith('.xls')) {
-            setIsReviewModalOpen(true);
-          }
-        });
-      }
-    };
-    input.click();
-  };
-
-  if (!isAuthReady) {
+    if (!isAuthReady) {
     return (
       <div className="min-h-screen bg-[var(--bg-app)] flex items-center justify-center">
-        <div className="w-8 h-8 border-2 border-[var(--accent)] border-t-transparent rounded-full animate-spin" />
+        <LoadingSpinner />
       </div>
     );
   }
@@ -248,7 +201,7 @@ export default function ZenithApp() {
       <Suspense
         fallback={
           <div className="min-h-screen bg-[var(--bg-app)] flex items-center justify-center">
-            <div className="w-8 h-8 border-2 border-[var(--accent)] border-t-transparent rounded-full animate-spin" />
+            <LoadingSpinner />
           </div>
         }
       >
@@ -267,12 +220,7 @@ export default function ZenithApp() {
   if (!settings && isOnline) {
     return (
       <div className="min-h-screen bg-[var(--bg-app)] flex items-center justify-center">
-        <div className="flex flex-col items-center gap-4">
-          <div className="w-12 h-12 border-4 border-[var(--accent)] border-t-transparent rounded-full animate-spin" />
-          <p className="text-[var(--text-muted)] text-xs font-bold uppercase tracking-widest animate-pulse">
-            Sincronizando Zenith Engine...
-          </p>
-        </div>
+        <LoadingSpinner label="Sincronizando Zenith Engine..." />
       </div>
     );
   }
@@ -418,12 +366,14 @@ export default function ZenithApp() {
             <Suspense fallback={<LoadingSpinner />}>
               <DetalhesGastosPage 
                 transactions={transactions}
-                language={settings?.language}
+                assets={assets}
+                language={activeSettings.language}
                 onEdit={(tx: Transaction) => {
                   setSelectedTransaction(tx);
                   setIsEditingTransaction(true);
                 }}
                 onDelete={(tx: Transaction) => moveToTrash(tx, 'transactions')}
+                onAddTransaction={() => setIsAddingTransaction(true)}
               />
             </Suspense>
           )}
@@ -488,7 +438,32 @@ export default function ZenithApp() {
             onChangeVisualSettings={setVisualSettings}
             settingsLanguage={settings?.language}
             onLogout={handleLogout}
+            onDeleteAccount={handleDeleteAccount}
+            onOpenSettings={handleOpenSettings}
           />
+
+          {/* Central de Configurações em Tela Cheia */}
+          {isSettingsViewOpen && (
+            <Suspense fallback={<LoadingSpinner />}>
+              <SettingsView
+                user={user}
+                profile={profile}
+                settings={activeSettings}
+                currentConfig={settings?.zenith_config}
+                language={activeSettings.language}
+                visualSettings={visualSettings}
+                onChangeVisualSettings={setVisualSettings}
+                onSaveProfile={handleSaveProfile}
+                onDeleteAccount={handleDeleteAccount}
+                apiKey={geminiApiKey}
+                apiKeyError={apiKeyError}
+                onSaveApiKey={handleSaveApiKey}
+                onClearApiKeyError={() => setApiKeyError(null)}
+                initialTab={settingsInitialTab}
+                onClose={() => setIsSettingsViewOpen(false)}
+              />
+            </Suspense>
+          )}
 
           {/* Asset Detail / Edit Modal */}
           {selectedAsset && (
@@ -596,50 +571,47 @@ export default function ZenithApp() {
           )}
 
           {/* Biometry Modal */}
-          {isBiometryModalOpen && (
-            <div className="fixed inset-0 z-[100] flex items-center justify-center p-6 bg-black/60 backdrop-blur-sm">
-              <motion.div 
-                initial={{ opacity: 0, scale: 0.9 }}
-                animate={{ opacity: 1, scale: 1 }}
-                className="bg-[var(--bg-card)] border border-[var(--border-card)] rounded-[40px] p-8 max-w-sm w-full space-y-6 text-center shadow-2xl"
-              >
-                <div className="w-20 h-20 bg-[var(--accent)]/10 rounded-full flex items-center justify-center mx-auto text-[var(--accent)]">
-                  <ShieldCheck size={40} />
-                </div>
-                <div className="space-y-2">
-                  <h3 className="text-xl font-bold text-[var(--text-primary)]">{t("Ativar Biometria?", "Activate Biometrics?")}</h3>
-                  <p className="text-sm text-[var(--text-secondary)]">
-                    {t("Deseja ativar o acesso por biometria para facilitar seus próximos logins?", "Would you like to activate biometric access to facilitate your next logins?")}
-                  </p>
-                </div>
-                <div className="grid grid-cols-2 gap-3 pt-2">
-                  <button 
-                    onClick={() => {
-                      try {
-                        localStorage.setItem(`biometry_${user?.uid}`, 'later');
-                      } catch (e) { console.warn(e); }
-                      setIsBiometryModalOpen(false);
-                    }}
-                    className="py-3 px-4 border border-[var(--border-card)] rounded-2xl text-[10px] font-bold uppercase tracking-widest text-[var(--text-secondary)] hover:bg-[var(--text-primary)]/5 transition-colors"
-                  >
-                    {t("Mais tarde", "Later")}
-                  </button>
-                  <button 
-                    onClick={() => {
-                      try {
-                        localStorage.setItem(`biometry_${user?.uid}`, 'enabled');
-                        localStorage.setItem(`biometry_active_${user?.uid}`, 'true');
-                      } catch (e) { console.warn(e); }
-                      setIsBiometryModalOpen(false);
-                    }}
-                    className="py-3 px-4 bg-[var(--accent)] text-[var(--bg-app)] rounded-2xl text-[10px] font-bold uppercase tracking-widest hover:bg-[var(--accent)]/80 transition-colors shadow-lg shadow-[var(--accent)]/20"
-                  >
-                    {t("Ativar", "Activate")}
-                  </button>
-                </div>
-              </motion.div>
+          <Modal
+            open={isBiometryModalOpen}
+            onClose={() => setIsBiometryModalOpen(false)}
+            showClose={false}
+            className="max-w-sm w-full rounded-[40px] p-8 space-y-6 text-center"
+          >
+            <div className="w-20 h-20 bg-[var(--accent)]/10 rounded-full flex items-center justify-center mx-auto text-[var(--accent)]">
+              <ShieldCheck size={40} />
             </div>
-          )}
+            <div className="space-y-2">
+              <h3 className="text-xl font-bold text-[var(--text-primary)]">{t("Ativar Biometria?", "Activate Biometrics?")}</h3>
+              <p className="text-sm text-[var(--text-secondary)]">
+                {t("Deseja ativar o acesso por biometria para facilitar seus próximos logins?", "Would you like to activate biometric access to facilitate your next logins?")}
+              </p>
+            </div>
+            <div className="grid grid-cols-2 gap-3 pt-2">
+              <button 
+                onClick={() => {
+                  try {
+                    localStorage.setItem(`biometry_${user?.uid}`, 'later');
+                  } catch (e) { console.warn(e); }
+                  setIsBiometryModalOpen(false);
+                }}
+                className="py-3 px-4 border border-[var(--border-card)] rounded-2xl text-[10px] font-bold uppercase tracking-widest text-[var(--text-secondary)] hover:bg-[var(--text-primary)]/5 transition-colors active:scale-95"
+              >
+                {t("Mais tarde", "Later")}
+              </button>
+              <button 
+                onClick={() => {
+                  try {
+                    localStorage.setItem(`biometry_${user?.uid}`, 'enabled');
+                    localStorage.setItem(`biometry_active_${user?.uid}`, 'true');
+                  } catch (e) { console.warn(e); }
+                  setIsBiometryModalOpen(false);
+                }}
+                className="py-3 px-4 bg-[var(--accent)] text-[var(--bg-app)] rounded-2xl text-[10px] font-bold uppercase tracking-widest hover:bg-[var(--accent)]/80 transition-colors shadow-lg shadow-[var(--accent)]/20 active:scale-95"
+              >
+                {t("Ativar", "Activate")}
+              </button>
+            </div>
+          </Modal>
 
           {/* Ingestion Hub */}
           <IngestionHub 

@@ -63,3 +63,29 @@ export function calculateAssetBalanceUpdate(
 
   return update;
 }
+
+export type AssetDeltaMap = Map<string, number>;
+
+export function addAssetDelta(deltas: AssetDeltaMap, assetId: string | undefined, delta: number) {
+  if (!assetId || !Number.isFinite(delta) || delta === 0) return;
+  deltas.set(assetId, (deltas.get(assetId) ?? 0) + delta);
+}
+
+export function applyAssetDeltas<T extends { id: string } & AssetBalanceSnapshot>(
+  batch: { update: (ref: any, data: any) => void },
+  docFn: (collectionPath: string, docId: string) => any,
+  serverTimestampFn: () => any,
+  deltas: AssetDeltaMap,
+  assets: T[]
+) {
+  for (const [assetId, delta] of deltas) {
+    if (delta === 0) continue;
+    const asset = assets.find((a) => a.id === assetId);
+    if (!asset) continue;
+    const update = calculateAssetBalanceUpdate(asset, Math.abs(delta), delta > 0);
+    batch.update(docFn('assets', assetId), {
+      ...update,
+      updatedAt: serverTimestampFn(),
+    });
+  }
+}

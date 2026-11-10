@@ -8,10 +8,12 @@ const config: CapacitorConfig = {
   android: {
     allowMixedContent: true,
   },
-  server: {
-      url: process.env.CAP_SERVER_URL || "http://127.0.0.1:3000",
+  ...(process.env.CAP_SERVER_URL ? {
+    server: {
+      url: process.env.CAP_SERVER_URL,
       cleartext: true,
-    },
+    }
+  } : {}),
     plugins: {
     SplashScreen: {
       backgroundColor: "#0a1a12",

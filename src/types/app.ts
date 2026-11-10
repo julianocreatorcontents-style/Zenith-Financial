@@ -163,8 +163,7 @@ export interface ZenithConfig {
 }
 
 export interface Settings {
-  theme: 'dark' | 'light' | 'high-contrast';
-  language: 'pt-BR' | 'en-US';
+  language: 'pt-BR' | 'en-US' | 'es-ES';
   privacyMode: boolean;
   activeWidgets: string[];
   yieldColor: string;

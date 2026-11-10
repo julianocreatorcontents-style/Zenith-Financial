@@ -2,7 +2,7 @@ import React from 'react';
 import { Sparkles, Settings as SettingsIcon, CreditCard, Landmark, Car } from 'lucide-react';
 import { PieChart as RePieChart, Pie, Cell, Tooltip, ResponsiveContainer } from 'recharts';
 import type { Asset } from '../../types/app';
-import { HomeInvestmentCard, SummaryCard } from './MetricCards';
+import { HomeInvestmentCard, SummaryCard } from './cards';
 
 export type DrawerPage = 'menu' | 'profile' | 'notifications' | 'settings' | 'ai_key' | 'trash';
 export type NavigationTab = 'Início' | 'Carteira' | 'Investimentos' | 'IA' | 'Armazenamento';

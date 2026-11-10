@@ -3,6 +3,7 @@ import { friendlyFirebaseError } from '../lib/errorUtils';
 import { motion } from 'motion/react';
 import { TrendingUp, AlertCircle } from 'lucide-react';
 import { Capacitor } from '@capacitor/core';
+import Card from '../components/ui/Card';
 
 interface AuthViewProps {
   onGoogleLogin: () => Promise<void>;
@@ -82,7 +83,7 @@ export const AuthView: React.FC<AuthViewProps> = ({
           </div>
         </div>
 
-        <div className="bg-[var(--bg-card)] border border-[var(--border-card)] rounded-[32px] p-8 shadow-xl space-y-6">
+        <Card className="p-8 shadow-xl space-y-6">
           <div className="flex bg-[var(--bg-app)] p-1 rounded-2xl border border-[var(--border-card)]">
             {(['login', 'register'] as const).map((view) => (
               <button
@@ -185,7 +186,7 @@ export const AuthView: React.FC<AuthViewProps> = ({
           )}
 
           
-        </div>
+        </Card>
       </motion.div>
     </div>
   );
