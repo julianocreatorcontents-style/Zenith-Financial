@@ -112,7 +112,8 @@ export function useTransactionsCron(
             });
 
             if (!alreadyExists) {
-              const newYieldRef = doc(collection(db, 'transactions'));
+              const yieldId = `yield_${asset.id}_${targetKey}`;
+              const newYieldRef = doc(db, 'transactions', yieldId);
               const yieldTx = {
                 uid: user.uid,
                 label: `Rendimento ${asset.name}`,

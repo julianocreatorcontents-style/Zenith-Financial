@@ -18,6 +18,8 @@ import {
   Search,
   X,
   Plus,
+  RefreshCw,
+  Calendar,
 } from 'lucide-react';
 import {
   parseTransactionAmount,
@@ -27,9 +29,11 @@ import {
   isYieldTransaction,
   isTransferTransaction,
 } from '../lib/finance';
-import { parseAssetDate } from '../lib/adapters/assetYieldService';
 import Card from '../components/ui/Card';
+import Modal from '../components/ui/Modal';
 import type { Transaction, Asset } from '../types/app';
+import { YieldReconciliationModal } from '../components/dashboard/YieldReconciliationModal';
+import { FinancialCalendarModal } from '../components/modals/FinancialCalendarModal';
 
 export interface WalletTransactionsViewProps {
   transactions: Transaction[];
@@ -38,6 +42,8 @@ export interface WalletTransactionsViewProps {
   onEdit: (tx: Transaction) => void;
   onDelete: (tx: Transaction) => void;
   onAddTransaction?: () => void;
+  onUpdateAsset?: (id: string, data: Partial<Asset>) => Promise<void>;
+  onUpdateTransaction?: (tx: Transaction, data: Partial<Transaction>) => Promise<void>;
 }
 
 export function WalletTransactionsView({
@@ -47,10 +53,33 @@ export function WalletTransactionsView({
   onEdit,
   onDelete,
   onAddTransaction,
+  onUpdateAsset,
+  onUpdateTransaction,
 }: WalletTransactionsViewProps) {
   const t = (pt: string, en: string) => (language === 'en-US' ? en : pt);
   const [period, setPeriod] = useState<'current' | 'previous' | 'all'>('current');
   const [searchTerm, setSearchTerm] = useState('');
+  const [showReconciliation, setShowReconciliation] = useState(false);
+  const [showCalendar, setShowCalendar] = useState(false);
+  const [transactionToDelete, setTransactionToDelete] = useState<Transaction | null>(null);
+
+  const handleSaveReconciliation = async (
+    updatedAssets: Array<{ id: string; manualDailyYield?: number | null; manualWeekendYield?: number | null }>
+  ) => {
+    if (!onUpdateAsset || !assets) return;
+    for (const asset of updatedAssets) {
+      const original = assets.find((a) => a.id === asset.id);
+      const nextDaily = asset.manualDailyYield ?? null;
+      const nextWeekend = asset.manualWeekendYield ?? null;
+      const previousDaily = original?.manualDailyYield ?? null;
+      const previousWeekend = original?.manualWeekendYield ?? null;
+      if (nextDaily === previousDaily && nextWeekend === previousWeekend) continue;
+      await onUpdateAsset(asset.id, {
+        manualDailyYield: nextDaily ?? undefined,
+        manualWeekendYield: nextWeekend ?? undefined,
+      });
+    }
+  };
 
   const now = new Date();
   const currentMonth = now.getMonth();
@@ -66,75 +95,13 @@ export function WalletTransactionsView({
     return tx.categoria_primaria || tx.category || 'Outros';
   };
 
-  // Garante que todos os lançamentos reais e rendimentos diários dos ativos (ex: 8 e 9 de novembro)
-  // estejam visíveis na Carteira mesmo antes de serem persistidos no banco
   const allTransactions = useMemo(() => {
-    const list = [...transactions];
-    if (!assets || assets.length === 0) return list;
-
-    const today = new Date();
-    // Verifica os últimos 7 dias para cobrir rendimentos recentes (incluindo 08/11 e 09/11)
-    for (let offset = 0; offset <= 7; offset++) {
-      const d = new Date(today.getFullYear(), today.getMonth(), today.getDate() - offset, 12, 0, 0);
-      const dKey = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-      const isWeekend = d.getDay() === 0 || d.getDay() === 6;
-
-      for (const asset of assets) {
-        const isBusinessDays =
-          (asset as unknown as { investmentPolicy?: { dayCountConvention?: string } })?.investmentPolicy?.dayCountConvention === 'BUSINESS_DAYS_252' ||
-          (asset.name || '').toLowerCase().includes('mercado pago');
-        if (isBusinessDays && isWeekend) continue;
-
-        const daily = Number(asset.dailyYield ?? asset.manualDailyYield ?? 0);
-        const weekend = Number(asset.manualWeekendYield ?? 0);
-        const amount = isWeekend && weekend > 0 ? weekend : daily;
-        if (amount <= 0) continue;
-
-        const anchor =
-          parseAssetDate(asset.manualBalanceDate) ??
-          parseAssetDate(asset.investmentStartDate) ??
-          parseAssetDate(asset.createdAt);
-        if (anchor && d < new Date(anchor.getFullYear(), anchor.getMonth(), anchor.getDate())) {
-          continue;
-        }
-
-        const alreadyPresent = list.some((t) => {
-          if (!isYieldTransaction(t)) return false;
-          const tDate = getTransactionDate(t);
-          if (!tDate) return false;
-          const matchAsset =
-            (t.assetId && t.assetId === asset.id) ||
-            String(t.label || '').toLowerCase().includes(asset.name.toLowerCase());
-          if (!matchAsset) return false;
-          const tKey = `${tDate.getFullYear()}-${String(tDate.getMonth() + 1).padStart(2, '0')}-${String(tDate.getDate()).padStart(2, '0')}`;
-          return tKey === dKey;
-        });
-
-        if (!alreadyPresent) {
-          list.push({
-            id: `yield-${asset.id}-${dKey}`,
-            label: `Rendimento ${asset.name}`,
-            value: Math.round(amount * 100) / 100,
-            type: 'yield',
-            categoria_primaria: 'Rendimentos',
-            assetId: asset.id,
-            applied: true,
-            status: 'Confirmado',
-            date: d,
-            uid: asset.uid || '',
-          });
-        }
-      }
-    }
-
-    list.sort((a, b) => {
+    return [...transactions].sort((a, b) => {
       const da = getTransactionDate(a)?.getTime() || 0;
       const db = getTransactionDate(b)?.getTime() || 0;
       return db - da;
     });
-
-    return list;
-  }, [transactions, assets]);
+  }, [transactions]);
 
   const periodFiltered = useMemo(() => {
     return allTransactions.filter((tx) => {
@@ -323,6 +290,26 @@ export function WalletTransactionsView({
         </div>
       </Card>
 
+      {/* Ações Rápidas: Conciliar Rendimentos & Histórico de Extratos */}
+      <div className="flex flex-col sm:flex-row gap-2.5">
+        <button
+          type="button"
+          onClick={() => setShowReconciliation(true)}
+          className="flex-1 flex items-center justify-center gap-2 py-3 px-4 bg-[var(--bg-card)] border border-[var(--border-card)] rounded-2xl text-xs font-bold text-[var(--text-secondary)] hover:text-[var(--accent)] hover:border-[var(--accent)]/40 active:scale-95 transition-all shadow-sm"
+        >
+          <RefreshCw size={15} className="text-[var(--accent)] shrink-0" />
+          <span>{t('Conciliar Rendimentos', 'Reconcile Yields')}</span>
+        </button>
+        <button
+          type="button"
+          onClick={() => setShowCalendar(true)}
+          className="flex-1 flex items-center justify-center gap-2 py-3 px-4 bg-[var(--bg-card)] border border-[var(--border-card)] rounded-2xl text-xs font-bold text-[var(--text-secondary)] hover:text-[var(--accent)] hover:border-[var(--accent)]/40 active:scale-95 transition-all shadow-sm"
+        >
+          <Calendar size={15} className="text-[var(--accent)] shrink-0" />
+          <span>{t('Histórico de Extratos', 'Statement Calendar')}</span>
+        </button>
+      </div>
+
       {/* Histórico de Transações */}
       <div className="space-y-4">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between px-2">
@@ -486,9 +473,9 @@ export function WalletTransactionsView({
                           <Edit3 size={16} />
                         </button>
                         <button
-                          onClick={() => onDelete(tx)}
+                          onClick={() => setTransactionToDelete(tx)}
                           aria-label={t('Excluir transação', 'Delete transaction')}
-                          className="p-2 text-[var(--text-muted)] hover:text-[var(--trend-down)] transition-colors bg-white/5 rounded-lg sm:bg-transparent"
+                          className="p-2 text-[var(--text-muted)] hover:text-[var(--trend-down)] transition-colors bg-white/5 rounded-lg sm:bg-transparent active:scale-95"
                         >
                           <Trash2 size={16} />
                         </button>
@@ -501,6 +488,61 @@ export function WalletTransactionsView({
           )}
         </div>
       </div>
+
+      {showReconciliation && assets && (
+        <YieldReconciliationModal
+          assets={assets}
+          onClose={() => setShowReconciliation(false)}
+          onSave={handleSaveReconciliation}
+        />
+      )}
+
+      {showCalendar && (
+        <FinancialCalendarModal
+          assets={assets || []}
+          transactions={transactions}
+          onClose={() => setShowCalendar(false)}
+          onUpdateAsset={onUpdateAsset ?? (() => Promise.resolve())}
+          onUpdateTransaction={onUpdateTransaction ?? (() => Promise.resolve())}
+        />
+      )}
+
+      {transactionToDelete && (
+        <Modal
+          open={Boolean(transactionToDelete)}
+          onClose={() => setTransactionToDelete(null)}
+          title={t('Excluir Transação', 'Delete Transaction')}
+          className="max-w-sm"
+        >
+          <div className="space-y-4 pt-1">
+            <p className="text-xs text-[var(--text-secondary)] leading-relaxed">
+              {t(
+                `Deseja realmente mover a transação "${transactionToDelete.label || 'Transação'}" para a lixeira?`,
+                `Are you sure you want to move the transaction "${transactionToDelete.label || 'Transaction'}" to trash?`
+              )}
+            </p>
+            <div className="flex gap-2 justify-end pt-3">
+              <button
+                type="button"
+                onClick={() => setTransactionToDelete(null)}
+                className="px-4 py-2.5 rounded-xl border border-[var(--border-card)] text-xs font-bold text-[var(--text-muted)] hover:text-[var(--text-primary)] active:scale-95 transition-all"
+              >
+                {t('Cancelar', 'Cancel')}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  onDelete(transactionToDelete);
+                  setTransactionToDelete(null);
+                }}
+                className="px-4 py-2.5 rounded-xl bg-[var(--trend-down)]/15 text-[var(--trend-down)] border border-[var(--trend-down)]/30 hover:bg-[var(--trend-down)]/25 text-xs font-bold active:scale-95 transition-all"
+              >
+                {t('Excluir', 'Delete')}
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
     </div>
   );
 }
