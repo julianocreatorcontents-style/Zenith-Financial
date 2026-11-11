@@ -7,7 +7,7 @@ import React, { useState, useCallback, lazy, Suspense, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   X, CreditCard, TrendingUp,
-  LayoutGrid, Plus, AlertCircle, Sparkles, ShieldCheck, Bell
+  LayoutGrid, Plus, AlertCircle, Sparkles, ShieldCheck, Bell, Send
 } from 'lucide-react';
 import { 
   MissingApiKeyError,
@@ -21,6 +21,8 @@ import { ProfileDrawer } from "./components/drawers/ProfileDrawer";
 import type { VisualSettings } from "./components/CardSettingsPanel";
 import { IngestionHub, ReviewModal } from "./components/modals/IngestionModals";
 import { NavItem } from "./components/layout/NavItem";
+import { ZenithFab } from "./components/ai/ZenithFab";
+import { QuickAIChat } from "./components/ai/QuickAIChat";
 import type { Asset, Transaction } from "./types/app";
 import { useZenithData, DEFAULT_SETTINGS } from "./hooks/useZenithData";
 import { usePersistentState } from "./hooks/usePersistentState";
@@ -141,7 +143,7 @@ export default function ZenithApp() {
   });
 
   const [visualSettings, setVisualSettings] = usePersistentState<VisualSettings>('zenith_visual_settings', {
-    isCustomEnabled: true,
+    isCustomEnabled: false,
     chartHeight: 'h-64',
     lineThickness: 0.5,
     showAxes: true,
@@ -154,37 +156,41 @@ export default function ZenithApp() {
     textOpacity: 1
   });
 
-  
+  const [initialAIPrompt, setInitialAIPrompt] = useState<string>('');
+  const [isQuickAIChatOpen, setIsQuickAIChatOpen] = useState(false);
+  const [aiQuickInput, setAiQuickInput] = useState('');
 
   // Sincronização do tema: Tema Global vs Customização Visual
   useEffect(() => {
     const root = document.documentElement;
     const temaGlobal = settings?.zenith_config?.master_states?.tema_global || 'Escuro';
+    const resolvedTheme = applyTheme(temaGlobal);
 
     if (visualSettings.isCustomEnabled) {
-      // Configura classe base escura para o tema customizado
-      root.classList.remove('light', 'high-contrast');
-      root.classList.add('dark');
-      root.setAttribute('data-theme', 'dark');
-      root.setAttribute('data-mantine-color-scheme', 'dark');
-
-      const cardOpacity = typeof visualSettings.cardBgOpacity === 'number' ? visualSettings.cardBgOpacity : 0.6;
-      root.style.setProperty('--bg-app', '#0a1a12');
-      root.style.setProperty('--bg-card', `rgba(10, 26, 18, ${cardOpacity})`);
-      root.style.setProperty('--text-primary', '#FFFFFF');
-      root.style.setProperty('--text-muted', '#9CA3AF');
-      root.style.setProperty('--border-card', 'rgba(0, 255, 163, 0.2)');
-      root.style.setProperty('--accent', visualSettings.accentColor || '#00FFA3');
-    } else {
-      // Remove variáveis customizadas para restaurar/aplicar o tema global selecionado
-      root.style.removeProperty('--bg-app');
-      root.style.removeProperty('--bg-card');
-      root.style.removeProperty('--text-primary');
-      root.style.removeProperty('--text-muted');
-      root.style.removeProperty('--border-card');
-      root.style.removeProperty('--accent');
-
-      applyTheme(temaGlobal);
+      if (resolvedTheme === 'light') {
+        const cardOpacity = typeof visualSettings.cardBgOpacity === 'number' ? visualSettings.cardBgOpacity : 0.95;
+        root.style.setProperty('--bg-app', '#F5F5F5');
+        root.style.setProperty('--bg-card', `rgba(255, 255, 255, ${cardOpacity})`);
+        root.style.setProperty('--text-primary', '#000000');
+        root.style.setProperty('--text-muted', '#666666');
+        root.style.setProperty('--border-card', 'rgba(0, 0, 0, 0.08)');
+        if (visualSettings.accentColor) {
+          root.style.setProperty('--accent', visualSettings.accentColor);
+        }
+      } else if (resolvedTheme === 'high-contrast') {
+        if (visualSettings.accentColor) {
+          root.style.setProperty('--accent', visualSettings.accentColor);
+        }
+      } else {
+        // Escuro / dark
+        const cardOpacity = typeof visualSettings.cardBgOpacity === 'number' ? visualSettings.cardBgOpacity : 0.6;
+        root.style.setProperty('--bg-app', '#0a1a12');
+        root.style.setProperty('--bg-card', `rgba(10, 26, 18, ${cardOpacity})`);
+        root.style.setProperty('--text-primary', '#FFFFFF');
+        root.style.setProperty('--text-muted', '#9CA3AF');
+        root.style.setProperty('--border-card', 'rgba(0, 255, 163, 0.2)');
+        root.style.setProperty('--accent', visualSettings.accentColor || '#00FFA3');
+      }
     }
   }, [visualSettings.isCustomEnabled, visualSettings.accentColor, visualSettings.cardBgOpacity, settings?.zenith_config?.master_states?.tema_global]);
 
@@ -374,6 +380,8 @@ export default function ZenithApp() {
                 }}
                 onDelete={(tx: Transaction) => moveToTrash(tx, 'transactions')}
                 onAddTransaction={() => setIsAddingTransaction(true)}
+                onUpdateAsset={updateAsset}
+                onUpdateTransaction={updateTransaction}
               />
             </Suspense>
           )}
@@ -412,6 +420,8 @@ export default function ZenithApp() {
                 }}
                 onApiKeyError={handleAiError}
                 userRules={userRules}
+                initialPrompt={initialAIPrompt}
+                onClearInitialPrompt={() => setInitialAIPrompt('')}
               />
             </Suspense>
           )}
@@ -644,27 +654,120 @@ export default function ZenithApp() {
         {/* ADD MENU MODAL */}
         {isAddMenuOpen && (
           <div className="fixed inset-0 z-[150] flex items-end justify-center p-4 bg-black/60 backdrop-blur-sm pb-28 transition-opacity" onClick={() => setIsAddMenuOpen(false)}>
-            <div className="bg-[var(--bg-card)] w-full max-w-md rounded-3xl p-6 shadow-2xl flex flex-col gap-4 animate-in slide-in-from-bottom-5" onClick={e => e.stopPropagation()}>
-                <h3 className="text-lg font-bold text-[var(--text-primary)] text-center mb-2">O que deseja adicionar?</h3>
+            <div className="bg-[var(--bg-card)] w-full max-w-md rounded-3xl p-6 shadow-2xl flex flex-col gap-3.5 animate-in slide-in-from-bottom-5" onClick={e => e.stopPropagation()}>
+                <h3 className="text-lg font-bold text-[var(--text-primary)] text-center mb-1">
+                  {t("Central de Criação & IA", "Creation Hub & AI")}
+                </h3>
+
+                {/* Prompt Rápido para Zenith IA */}
+                <form
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    if (!aiQuickInput.trim()) return;
+                    setInitialAIPrompt(aiQuickInput.trim());
+                    setAiQuickInput('');
+                    setIsAddMenuOpen(false);
+                    setCurrentTab('IA');
+                  }}
+                  className="flex items-center gap-2 p-2 bg-[var(--bg-app)] border border-[var(--border-card)] focus-within:border-[var(--accent)] rounded-2xl transition-colors mb-1"
+                >
+                  <div className="w-8 h-8 rounded-xl bg-[var(--accent)]/15 text-[var(--accent)] flex items-center justify-center shrink-0">
+                    <Sparkles size={16} />
+                  </div>
+                  <input
+                    type="text"
+                    value={aiQuickInput}
+                    onChange={(e) => setAiQuickInput(e.target.value)}
+                    placeholder={t("Pergunte ou comande a Zenith IA...", "Ask or command Zenith AI...")}
+                    className="flex-1 bg-transparent text-xs text-[var(--text-primary)] placeholder-[var(--text-muted)] outline-none"
+                  />
+                  <button
+                    type="submit"
+                    disabled={!aiQuickInput.trim()}
+                    aria-label={t("Enviar para Zenith IA", "Send to Zenith AI")}
+                    className="w-8 h-8 rounded-xl bg-[var(--accent)] text-[var(--bg-app)] flex items-center justify-center disabled:opacity-30 hover:scale-105 active:scale-95 transition-all shrink-0"
+                  >
+                    <Send size={13} />
+                  </button>
+                </form>
+
+                {/* Ação Primária: Nova Transação Manual */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsAddMenuOpen(false);
+                    setIsAddingTransaction(true);
+                  }}
+                  className="flex items-center gap-4 p-4 bg-[var(--accent)]/10 border border-[var(--accent)]/40 hover:border-[var(--accent)] rounded-2xl transition text-left active:scale-[0.98]"
+                >
+                  <div className="w-10 h-10 rounded-full bg-[var(--accent)] text-[var(--bg-app)] flex items-center justify-center shrink-0 shadow-md shadow-[var(--accent)]/30">
+                    <Plus size={22} />
+                  </div>
+                  <div>
+                    <p className="font-bold text-[var(--text-primary)]">{t("Nova Transação Manual", "New Manual Transaction")}</p>
+                    <p className="text-xs text-[var(--text-muted)]">{t("Lançar despesa, receita ou transferência", "Add expense, income, or transfer")}</p>
+                  </div>
+                </button>
                 
-                <button type="button" onClick={() => { setIsAddMenuOpen(false); setIsIngestionHubOpen(true); }} className="flex items-center gap-4 p-4 bg-[var(--bg-app)] rounded-2xl border border-[var(--border-card)] hover:border-[var(--accent)] transition text-left">
+                {/* Importar Dados */}
+                <button type="button" onClick={() => { setIsAddMenuOpen(false); setIsIngestionHubOpen(true); }} className="flex items-center gap-4 p-4 bg-[var(--bg-app)] rounded-2xl border border-[var(--border-card)] hover:border-[var(--accent)] transition text-left active:scale-[0.98]">
                   <div className="w-10 h-10 rounded-full bg-[var(--accent)]/10 flex items-center justify-center text-[var(--accent)] shrink-0"><LayoutGrid size={20}/></div>
                   <div>
-                    <p className="font-bold text-[var(--text-primary)]">Importar Dados</p>
-                    <p className="text-xs text-[var(--text-muted)]">Extratos bancários ou notas</p>
+                    <p className="font-bold text-[var(--text-primary)]">{t("Importar Dados", "Import Data")}</p>
+                    <p className="text-xs text-[var(--text-muted)]">{t("Extratos bancários ou notas fiscais", "Bank statements or invoices")}</p>
                   </div>
                 </button>
     
-                <button type="button" onClick={() => { setIsAddMenuOpen(false); setForceCreateInvestment(true); }} className="flex items-center gap-4 p-4 bg-[var(--bg-app)] rounded-2xl border border-[var(--border-card)] hover:border-[var(--accent)] transition text-left">
+                {/* Novo Investimento */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsAddMenuOpen(false);
+                    setCurrentTab('Investimentos');
+                    setIsAddingAsset(true);
+                  }}
+                  className="flex items-center gap-4 p-4 bg-[var(--bg-app)] rounded-2xl border border-[var(--border-card)] hover:border-[var(--accent)] transition text-left active:scale-[0.98]"
+                >
                   <div className="w-10 h-10 rounded-full bg-[var(--accent)]/10 flex items-center justify-center text-[var(--accent)] shrink-0"><TrendingUp size={20}/></div>
                   <div>
-                    <p className="font-bold text-[var(--text-primary)]">Novo Investimento</p>
-                    <p className="text-xs text-[var(--text-muted)]">CDB, Tesouro, 99Pay, etc</p>
+                    <p className="font-bold text-[var(--text-primary)]">{t("Novo Ativo / Investimento", "New Asset / Investment")}</p>
+                    <p className="text-xs text-[var(--text-muted)]">{t("CDB, Tesouro, 99Pay, Ações, FIIs", "Fixed income, Treasury, Stocks, etc")}</p>
                   </div>
                 </button>
             </div>
           </div>
         )}
+
+        {/* FAB Quick-AI flutuante (Início, Carteira, Investimentos) */}
+        {['Início', 'Carteira', 'Investimentos'].includes(currentTab) && (
+          <ZenithFab
+            onClick={() => setIsQuickAIChatOpen(true)}
+            isOpen={isQuickAIChatOpen}
+            ariaLabel={t("Abrir Zenith IA Express", "Open Zenith AI Express")}
+          />
+        )}
+
+        {/* Quick-AI Chat Bottom Sheet */}
+        <QuickAIChat
+          isOpen={isQuickAIChatOpen}
+          onClose={() => setIsQuickAIChatOpen(false)}
+          getGeminiApiKey={getGeminiApiKey}
+          transactions={transactions}
+          assets={assets}
+          goals={goals}
+          language={activeSettings.language}
+          onNavigateFullAI={(prompt) => {
+            if (prompt) setInitialAIPrompt(prompt);
+            setIsQuickAIChatOpen(false);
+            setCurrentTab('IA');
+          }}
+          onAddTransaction={addTransaction}
+          onUpdateTransaction={updateTransaction}
+          onDeleteTransaction={(item: Transaction) => moveToTrash(item, 'transactions')}
+          onCreateAsset={createAsset}
+          onUpdateAsset={updateAsset}
+          onDeleteAsset={(item: Asset) => moveToTrash(item, 'assets')}
+        />
         
         {/* --- NAV DOCK --- */}
         <div className="fixed bottom-0 inset-x-0 p-6 z-40 pointer-events-none">

@@ -42,12 +42,33 @@ export function usePersistentState<T>(key: string, defaultValue: T): [T, React.D
         } else {
           localStorage.setItem(key, value);
         }
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new CustomEvent('zenith_persistent_state', { detail: { key, value } }));
+        }
       } catch (e) {
         console.warn(`Erro ao salvar ${key}:`, e);
       }
     };
     save();
   }, [key, state, isLoaded]);
+
+  // Sincroniza em tempo real com outras instâncias do mesmo hook no app
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const handleSync = (e: Event) => {
+      const ce = e as CustomEvent<{ key: string; value: string }>;
+      if (ce.detail?.key === key) {
+        try {
+          const parsed = JSON.parse(ce.detail.value);
+          setState((prev) => (JSON.stringify(prev) === ce.detail.value ? prev : parsed));
+        } catch {
+          // ignora falha de parse
+        }
+      }
+    };
+    window.addEventListener('zenith_persistent_state', handleSync);
+    return () => window.removeEventListener('zenith_persistent_state', handleSync);
+  }, [key]);
 
   return [state, setState, isLoaded];
 }

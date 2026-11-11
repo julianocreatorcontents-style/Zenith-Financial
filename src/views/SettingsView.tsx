@@ -21,8 +21,10 @@ import { TabSwitcher, type TabOption } from '../components/ui/TabSwitcher';
 import { ProfileSection, AiKeySection } from '../components/drawers/ProfileDrawer';
 import { GlobalSettingsSection } from '../components/settings/GlobalSettingsSection';
 import { CardSettingsPanel, type VisualSettings } from '../components/CardSettingsPanel';
+import { HomeLayoutSelector } from '../components/settings/HomeLayoutSelector';
 import LoadingSpinner from '../components/LoadingSpinner';
 import { mapIdiomaToLanguage } from '../hooks/useUserSettings';
+import { applyTheme } from '../lib/theme';
 import type { MasterStates, Settings, ZenithConfig, UserProfile } from '../types/app';
 
 const HeritageSettings = lazy(() =>
@@ -73,9 +75,7 @@ export function SettingsView({
   const [activeTab, setActiveTab] = useState<SettingsTab>(initialTab);
   const [resetEmailSending, setResetEmailSending] = useState(false);
   const [resetEmailMessage, setResetEmailMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
-
   const t = (pt: string, en: string) => (language === 'en-US' ? en : pt);
-
   const isGoogleUser = user?.providerData?.[0]?.providerId === 'google.com';
   const hasBiometrySupport = typeof window !== 'undefined' && !!window.PublicKeyCredential;
   const isBiometryEnabled =
@@ -129,6 +129,12 @@ export function SettingsView({
 
   const handleUpdateMaster = async (field: keyof MasterStates, value: MasterStates[keyof MasterStates]) => {
     if (!user?.uid) return;
+    if (field === 'tema_global' && typeof value === 'string') {
+      applyTheme(value);
+      if (onChangeVisualSettings && visualSettings?.isCustomEnabled) {
+        onChangeVisualSettings({ ...visualSettings, isCustomEnabled: false });
+      }
+    }
     const updates: Record<string, unknown> = {
       [`zenith_config.master_states.${field}`]: value,
     };
@@ -398,7 +404,7 @@ export function SettingsView({
 
           {/* ABA 4: DASHBOARD */}
           {activeTab === 'dashboard' && (
-            <div className="space-y-4">
+            <div className="space-y-6">
               <div className="flex items-center gap-3 px-1">
                 <div className="w-8 h-8 rounded-xl bg-[var(--accent)]/10 flex items-center justify-center text-[var(--accent)]">
                   <LayoutDashboard size={18} />
@@ -411,6 +417,11 @@ export function SettingsView({
                     {t('Ordene, oculte ou configure a visibilidade de cards e gráficos da página inicial.', 'Reorder, hide, and configure cards and charts visibility on the home page.')}
                   </p>
                 </div>
+              </div>
+
+              {/* Seletor de Layout dos Cards */}
+              <div className="p-4 bg-[var(--bg-card)] border border-[var(--border-card)] rounded-3xl">
+                <HomeLayoutSelector language={language} />
               </div>
 
               <Suspense fallback={<LoadingSpinner />}>

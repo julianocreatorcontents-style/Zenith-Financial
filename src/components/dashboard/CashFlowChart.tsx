@@ -34,6 +34,7 @@ export interface CashFlowChartProps {
   opacity?: number;
   tooltipsEnabled?: boolean;
   showValues?: boolean;
+  privacyMode?: boolean;
   openDrawer: (page?: DrawerPage) => void;
   t: (pt: string, en: string) => string;
 }
@@ -45,6 +46,7 @@ export const CashFlowChart: React.FC<CashFlowChartProps> = ({
   opacity = 1,
   tooltipsEnabled = true,
   showValues = true,
+  privacyMode = false,
   openDrawer,
   t,
 }) => {
@@ -66,10 +68,10 @@ export const CashFlowChart: React.FC<CashFlowChartProps> = ({
               tickLine={false} 
               tick={{ fill: 'var(--text-primary)', fontSize: 8, opacity: 0.6 }} 
               hide={!showValues}
-              tickFormatter={(value) => formatBRL(Number(value))}
+              tickFormatter={(value) => (privacyMode ? '••••' : formatBRL(Number(value)))}
             />
             {tooltipsEnabled && (
-              <Tooltip formatter={(value) => formatBRL(Number(value))} />
+              <Tooltip formatter={(value) => (privacyMode ? '••••' : formatBRL(Number(value)))} />
             )}
             <Bar dataKey="value" radius={[4, 4, 0, 0]}>
               {cashFlowData.map((entry, idx) => (

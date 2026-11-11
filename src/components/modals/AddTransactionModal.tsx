@@ -3,7 +3,7 @@ import Modal from '../ui/Modal';
 
 export interface AddTransactionModalProps {
   onClose: () => void;
-  onAdd: (data: any) => void;
+  onAdd: (data: any) => void | Promise<unknown>;
   initialData?: any;
   language?: string;
   assets?: any[];
@@ -47,9 +47,10 @@ export function AddTransactionModal({
     categoria_primaria: initialData?.categoria_primaria || initialData?.category || 'Outros',
     date: formatLocalDate(initialData?.date)
   });
-  const [isRecurring, setIsRecurring] = useState(initialData?.isRecurring ?? true);
+  const [isRecurring, setIsRecurring] = useState(initialData?.isRecurring ?? false);
   const [durationMonths, setDurationMonths] = useState<number | null>(initialData?.durationMonths ?? null);
   const [displayValue, setDisplayValue] = useState(initialData?.value ? (initialData.value ?? 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }) : '');
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   const handleValueChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const rawValue = e.target.value.replace(/\D/g, '');
@@ -58,17 +59,23 @@ export function AddTransactionModal({
     setDisplayValue((numericValue ?? 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }));
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!formData.label || formData.value <= 0) {
-      alert(t('Preencha todos os campos corretamente.', 'Fill in all fields correctly.'));
-      return;
+    if (isSubmitting) return;
+    setIsSubmitting(true);
+    try {
+      if (!formData.label || formData.value <= 0) {
+        alert(t('Preencha todos os campos corretamente.', 'Fill in all fields correctly.'));
+        return;
+      }
+      if ((formData.type === 'out' || formData.type === 'in') && !formData.assetId) {
+        alert(t('Selecione a conta de origem.', 'Select the source account.'));
+        return;
+      }
+      await onAdd({ ...formData, isRecurring, durationMonths: isRecurring ? durationMonths : null });
+    } finally {
+      setIsSubmitting(false);
     }
-    if ((formData.type === 'out' || formData.type === 'in') && !formData.assetId) {
-      alert(t('Selecione a conta de origem.', 'Select the source account.'));
-      return;
-    }
-    onAdd({ ...formData, isRecurring, durationMonths: isRecurring ? durationMonths : null });
   };
 
   return (
@@ -215,9 +222,14 @@ export function AddTransactionModal({
 
         <button
           type="submit"
-          className="mt-4 w-full rounded-2xl bg-[var(--accent)] py-4 text-sm font-bold uppercase tracking-widest text-[var(--bg-app)] transition-all hover:bg-[var(--accent)]/80"
+          disabled={isSubmitting}
+          className="mt-4 w-full rounded-2xl bg-[var(--accent)] py-4 text-sm font-bold uppercase tracking-widest text-[var(--bg-app)] transition-all hover:bg-[var(--accent)]/80 disabled:cursor-not-allowed disabled:opacity-60"
         >
-          {initialData ? t('Salvar Alterações', 'Save Changes') : t('Confirmar Transação', 'Confirm Transaction')}
+          {isSubmitting
+            ? t('Salvando...', 'Saving...')
+            : initialData
+            ? t('Salvar Alterações', 'Save Changes')
+            : t('Confirmar Transação', 'Confirm Transaction')}
         </button>
       </form>
     </Modal>

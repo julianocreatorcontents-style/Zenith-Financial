@@ -73,9 +73,10 @@ const MiniMetricCardBase: React.FC<MiniMetricCardProps> = ({
                 <button
                   type="button"
                   onClick={(e) => { e.stopPropagation(); onSettings(); }}
-                  className="opacity-0 group-hover:opacity-100 transition-opacity text-[var(--text-muted)] hover:text-[var(--accent)]"
+                  aria-label="Configurar métrica"
+                  className="p-1 rounded-md text-[var(--text-muted)] hover:text-[var(--accent)] active:scale-95 transition-all"
                 >
-                  <SettingsIcon size={10} />
+                  <SettingsIcon size={11} />
                 </button>
               )}
             </div>

@@ -57,6 +57,8 @@ interface ZenithIAViewProps {
   onNavigateTab?: (tab: string) => void;
   onApiKeyError?: (error: unknown) => void;
   userRules?: unknown[];
+  initialPrompt?: string;
+  onClearInitialPrompt?: () => void;
 }
 
 export default function ZenithIAView({
@@ -74,6 +76,8 @@ export default function ZenithIAView({
   onUpdateGoals,
   onNavigateTab,
   onApiKeyError,
+  initialPrompt,
+  onClearInitialPrompt,
 }: ZenithIAViewProps) {
   const t = (pt: string, en: string) => (language === 'en-US' ? en : pt);
   const [messages, setMessages] = useState<Message[]>([]);
@@ -107,6 +111,17 @@ export default function ZenithIAView({
     }
   }, [input]);
 
+  // Carrega prompt inicial se redirecionado de outro componente (ex: FAB Central Inteligente)
+  useEffect(() => {
+    if (initialPrompt && initialPrompt.trim()) {
+      setInput(initialPrompt.trim());
+      onClearInitialPrompt?.();
+      if (textareaRef.current) {
+        textareaRef.current.focus();
+      }
+    }
+  }, [initialPrompt, onClearInitialPrompt]);
+
   // Gera título da sessão a partir da primeira mensagem do usuário
   const generateSessionTitle = (msgs: Message[]) => {
     const first = msgs.find(m => m.role === 'user');
@@ -118,8 +133,12 @@ export default function ZenithIAView({
   // Salvar sessão atual no histórico
   const archiveCurrentSession = useCallback(() => {
     if (messages.length < 2) return; // Precisa de pelo menos 1 pergunta e 1 resposta
+    const sessionId = activeSessionId || Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+    if (!activeSessionId) {
+      setActiveSessionId(sessionId);
+    }
     const session: ChatSession = {
-      id: activeSessionId || Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+      id: sessionId,
       title: generateSessionTitle(messages),
       date: new Date().toISOString(),
       messages: [...messages],
@@ -134,9 +153,12 @@ export default function ZenithIAView({
   // Auto-salvar a conversa ativa quando mensagens mudam (com pelo menos 2 mensagens)
   useEffect(() => {
     if (messages.length >= 2) {
-      archiveCurrentSession();
+      const savedId = archiveCurrentSession();
+      if (!activeSessionId && savedId) {
+        setActiveSessionId(savedId);
+      }
     }
-  }, [messages, archiveCurrentSession]);
+  }, [messages, activeSessionId, archiveCurrentSession]);
 
   // Copiar texto da mensagem
   const handleCopy = async (text: string, index: number) => {

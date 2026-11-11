@@ -22,6 +22,7 @@ import {
   isExpenseTransaction,
   isIncomeTransaction,
   isYieldTransaction,
+  isTransferTransaction,
 } from '../lib/finance';
 import { calculateAssetBalanceUpdate } from '../lib/adapters/assetBalance';
 import { parseAssetDate } from '../lib/adapters/assetYieldService';
@@ -126,7 +127,7 @@ export function useTransactionsData({ user, rawAssets, setError }: UseTransactio
         if (!user) return;
 
         const deltas: AssetDeltaMap = new Map();
-        if (collectionName === 'transactions' && item.applied && item.assetId) {
+        if (collectionName === 'transactions' && item.applied && item.assetId && !isTransferTransaction(item)) {
           const amount = parseTransactionAmount(item.value);
           const isOut = isExpenseTransaction(item);
           addAssetDelta(deltas, item.assetId, isOut ? amount : -amount);
@@ -165,7 +166,7 @@ export function useTransactionsData({ user, rawAssets, setError }: UseTransactio
         const { id: _id, ref: _ref, ...restoredData } = data;
 
         const deltas: AssetDeltaMap = new Map();
-        if (item.originalCollection === 'transactions' && data.applied && data.assetId) {
+        if (item.originalCollection === 'transactions' && data.applied && data.assetId && !isTransferTransaction(data)) {
           const amount = Number(data.value) || 0;
           const isOut = isExpenseTransaction(data);
           addAssetDelta(deltas, data.assetId, isOut ? -amount : amount);
@@ -207,7 +208,7 @@ export function useTransactionsData({ user, rawAssets, setError }: UseTransactio
       };
 
       const deltas: AssetDeltaMap = new Map();
-      if (applied && data.assetId) {
+      if (applied && data.assetId && !isTransferTransaction(data as Transaction)) {
         const amount = Number(data.value) || 0;
         const isOut = isExpenseTransaction(data as Transaction);
         addAssetDelta(deltas, data.assetId, isOut ? -amount : amount);
@@ -247,12 +248,12 @@ export function useTransactionsData({ user, rawAssets, setError }: UseTransactio
       };
 
       const deltas: AssetDeltaMap = new Map();
-      if (selectedTx.applied && selectedTx.assetId) {
+      if (selectedTx.applied && selectedTx.assetId && !isTransferTransaction(selectedTx)) {
         const oldAmount = parseTransactionAmount(selectedTx.value);
         const wasOut = isExpenseTransaction(selectedTx);
         addAssetDelta(deltas, selectedTx.assetId, wasOut ? oldAmount : -oldAmount);
       }
-      if (applied && data.assetId) {
+      if (applied && data.assetId && !isTransferTransaction(data as Transaction)) {
         const newAmount = parseTransactionAmount(data.value);
         const isOut = isExpenseTransaction(data as Transaction);
         addAssetDelta(deltas, data.assetId, isOut ? -newAmount : newAmount);
@@ -310,7 +311,7 @@ export function useTransactionsData({ user, rawAssets, setError }: UseTransactio
         });
 
         const deltas: AssetDeltaMap = new Map();
-        if (!isFuture && validated.assetId) {
+        if (!isFuture && validated.assetId && !isTransferTransaction(validated as Transaction)) {
           const amount = parseTransactionAmount(validated.value);
           const isOut = isExpenseTransaction(validated as Transaction);
           addAssetDelta(deltas, validated.assetId, isOut ? -amount : amount);

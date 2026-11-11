@@ -1,20 +1,11 @@
 import React, { useState, useMemo } from 'react';
 import { motion } from 'motion/react';
 import {
-  Zap,
   TrendingUp,
   TrendingDown,
-  Building2,
-  Droplets,
-  ShoppingBag,
-  Car,
-  Smile,
-  Sparkles,
-  Tag,
   History,
   Edit3,
   Trash2,
-  ArrowLeftRight,
   Search,
   X,
   Plus,
@@ -34,6 +25,98 @@ import Modal from '../components/ui/Modal';
 import type { Transaction, Asset } from '../types/app';
 import { YieldReconciliationModal } from '../components/dashboard/YieldReconciliationModal';
 import { FinancialCalendarModal } from '../components/modals/FinancialCalendarModal';
+
+const normalizeText = (value: string): string =>
+  value
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase();
+
+const getTransactionLogo = (tx: Transaction, asset?: Asset): string | null => {
+  const labelText = normalizeText(tx.label || '');
+  const compactLabel = labelText.replace(/\s+/g, '');
+
+  if (compactLabel.includes('copel')) return '/logos/copel.png';
+  if (compactLabel.includes('sanepar')) return '/logos/sanepar.png';
+  if (compactLabel.includes('inss')) return '/logos/inss.png';
+  if (compactLabel.includes('bpc')) return '/logos/bpc.png';
+  if (compactLabel.includes('dombosco') || compactLabel.includes('cdb')) return '/logos/cdb.png';
+  if (compactLabel.includes('clc') || compactLabel.includes('literatura')) return '/logos/clc.png';
+  if (compactLabel.includes('domestica')) return '/logos/domestica.png';
+  if (compactLabel.includes('internet')) return '/logos/internet.png';
+  if (/\bmei\b/.test(labelText) || compactLabel.includes('dasmei')) return '/logos/mei.png';
+
+  const brandFromLabel = normalizeText(tx.label || '').replace(/\s+/g, '');
+  const brandFromAsset = normalizeText(
+    [asset?.name, asset?.emissor].filter(Boolean).join(' ')
+  ).replace(/\s+/g, '');
+
+  const resolveBrand = (text: string): string | null => {
+    if (text.includes('99pay') || text.includes('cofrinho99') || text === '99') {
+      return '/logos/99pay.png';
+    }
+    if (text.includes('mercadopago')) return '/logos/mercadopago.png';
+    return null;
+  };
+
+  const logo = resolveBrand(brandFromLabel) ?? resolveBrand(brandFromAsset);
+
+  if (compactLabel.includes('copel')) {
+    console.log('[Carteira] getTransactionLogo:', { label: tx.label, logo });
+  }
+
+  return logo;
+};
+
+const getInstitutionColor = (name: string): string => {
+  let hash = 0;
+  for (let i = 0; i < name.length; i += 1) {
+    hash = name.charCodeAt(i) + ((hash << 5) - hash);
+  }
+  return `hsl(${Math.abs(hash) % 360} 45% 42%)`;
+};
+
+function FallbackAvatar({ name }: { name: string }) {
+  const initial = Array.from(name.trim())[0]?.toUpperCase() || 'R';
+  return (
+    <div
+      className="w-12 h-12 rounded-full flex items-center justify-center shrink-0 text-base font-bold text-white"
+      style={{ backgroundColor: getInstitutionColor(name) }}
+    >
+      {initial}
+    </div>
+  );
+}
+
+function TransactionLogo({ src, name }: { src: string; name: string }) {
+  const [logoFailed, setLogoFailed] = useState(false);
+
+  if (logoFailed) {
+    return <FallbackAvatar name={name} />;
+  }
+
+  return (
+    <div className="w-12 h-12 rounded-full overflow-hidden bg-white/5 flex items-center justify-center shrink-0">
+      <img
+        src={src}
+        alt={name}
+        className="w-full h-full object-contain"
+        onError={() => setLogoFailed(true)}
+      />
+    </div>
+  );
+}
+
+function TransactionIcon({ tx, asset }: { tx: Transaction; asset?: Asset }) {
+  const fallbackName = tx.label || asset?.emissor || asset?.name || 'Transação';
+  const logo = getTransactionLogo(tx, asset);
+
+  if (logo) {
+    return <TransactionLogo src={logo} name={fallbackName} />;
+  }
+
+  return <FallbackAvatar name={fallbackName} />;
+}
 
 export interface WalletTransactionsViewProps {
   transactions: Transaction[];
@@ -119,19 +202,26 @@ export function WalletTransactionsView({
   }, [allTransactions, period, currentMonth, currentYear, previousMonthDate]);
 
   const periodTotals = useMemo(() => {
-    return periodFiltered.reduce(
-      (acc, tx) => {
-        const val = parseTransactionAmount(tx.value);
-        if (isTransferTransaction(tx)) return acc;
-        if (isExpenseTransaction(tx)) {
-          acc.expenses += val;
-        } else if (isIncomeTransaction(tx) || isYieldTransaction(tx)) {
-          acc.income += val;
-        }
-        return acc;
-      },
-      { income: 0, expenses: 0 }
-    );
+    return periodFiltered
+      .filter(
+        (tx) =>
+          tx.applied !== false &&
+          tx.status !== 'Futuro' &&
+          String(tx.status) !== 'Agendado'
+      )
+      .reduce(
+        (acc, tx) => {
+          const val = parseTransactionAmount(tx.value);
+          if (isTransferTransaction(tx)) return acc;
+          if (isExpenseTransaction(tx)) {
+            acc.expenses += val;
+          } else if (isIncomeTransaction(tx) || isYieldTransaction(tx)) {
+            acc.income += val;
+          }
+          return acc;
+        },
+        { income: 0, expenses: 0 }
+      );
   }, [periodFiltered]);
 
   const periodBalance = periodTotals.income - periodTotals.expenses;
@@ -145,53 +235,6 @@ export function WalletTransactionsView({
       return labelMatch || catMatch;
     });
   }, [periodFiltered, searchTerm]);
-
-  const getIcon = (cat: string) => {
-    switch (cat) {
-      case 'Moradia':
-        return <Building2 size={20} />;
-      case 'Energia':
-        return <Zap size={20} />;
-      case 'Água':
-        return <Droplets size={20} />;
-      case 'Alimentação':
-      case 'Mercado':
-        return <ShoppingBag size={20} />;
-      case 'Transporte':
-        return <Car size={20} />;
-      case 'Lazer':
-        return <Smile size={20} />;
-      case 'Investimentos':
-        return <TrendingUp size={20} />;
-      case 'Rendimentos':
-        return <Sparkles size={20} />;
-      default:
-        return <Tag size={20} />;
-    }
-  };
-
-  const getColor = (cat: string) => {
-    switch (cat) {
-      case 'Moradia':
-        return 'var(--trend-down)';
-      case 'Energia':
-        return 'var(--accent)';
-      case 'Água':
-        return '#3498db';
-      case 'Alimentação':
-      case 'Mercado':
-        return '#f59e0b';
-      case 'Transporte':
-        return '#f97316';
-      case 'Lazer':
-        return '#a855f7';
-      case 'Investimentos':
-      case 'Rendimentos':
-        return 'var(--accent)';
-      default:
-        return 'var(--text-muted)';
-    }
-  };
 
   const periodOptions = [
     { id: 'current' as const, label: t('Mês Atual', 'Current Month') },
@@ -393,6 +436,9 @@ export function WalletTransactionsView({
               const value = parseTransactionAmount(tx.value);
               const date = getTransactionDate(tx);
               const category = getCategory(tx);
+              const transactionAsset = tx.assetId
+                ? assets?.find((asset) => asset.id === tx.assetId)
+                : undefined;
 
               return (
                 <motion.div
@@ -402,25 +448,10 @@ export function WalletTransactionsView({
                   className="flex justify-between items-center p-4 bg-[var(--bg-card)] rounded-[24px] border border-[var(--border-card)] group hover:border-[var(--accent)] transition-all"
                 >
                   <div className="flex items-center gap-4 min-w-0">
-                    <div
-                      className={`w-12 h-12 rounded-2xl flex items-center justify-center shrink-0 ${
-                        isTransfer
-                          ? 'bg-[var(--text-muted)]/10 text-[var(--text-muted)]'
-                          : isIncome
-                          ? 'bg-[var(--accent)]/10 text-[var(--accent)]'
-                          : 'bg-[var(--trend-down)]/10'
-                      }`}
-                      style={isTransfer || isIncome ? undefined : { color: getColor(category) }}
-                    >
-                      {isTransfer ? (
-                        <ArrowLeftRight size={20} />
-                      ) : (
-                        getIcon(category)
-                      )}
-                    </div>
+                    <TransactionIcon tx={tx} asset={transactionAsset} />
                     <div className="min-w-0">
                       <div className="flex items-center gap-2 flex-wrap">
-                        <p className="text-sm font-medium text-[var(--text-primary)] truncate max-w-[150px] sm:max-w-xs">
+                        <p className="text-sm font-medium text-[var(--text-primary)] truncate min-w-0">
                           {tx.label}
                         </p>
                         {tx.applied === false && (
@@ -433,20 +464,21 @@ export function WalletTransactionsView({
                             {t('Transferência', 'Transfer')}
                           </span>
                         )}
-                        {isYield && (
-                          <span className="text-[9px] px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 font-bold uppercase tracking-wider shrink-0">
-                            {t('Rendimento', 'Yield')}
-                          </span>
-                        )}
                       </div>
                       <div className="flex items-center gap-2 mt-0.5">
                         <p className="text-[10px] text-[var(--text-muted)] uppercase font-bold tracking-wider">
                           {date ? date.toLocaleDateString('pt-BR') : t('Recente', 'Recent')}
                         </p>
                         <span className="text-[10px] text-[var(--text-muted)] opacity-40">•</span>
-                        <p className="text-[10px] text-[var(--text-muted)] font-medium">
-                          {category}
-                        </p>
+                        {isYield ? (
+                          <span className="text-[9px] px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 font-bold uppercase tracking-wider shrink-0">
+                            {t('Rendimento', 'Yield')}
+                          </span>
+                        ) : (
+                          <p className="text-[10px] text-[var(--text-muted)] font-medium">
+                            {category}
+                          </p>
+                        )}
                       </div>
                     </div>
                   </div>

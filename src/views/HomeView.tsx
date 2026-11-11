@@ -1,12 +1,8 @@
-import React, { useMemo, useEffect, useState } from 'react';
+import React, { useMemo } from 'react';
 import { AnimatePresence } from 'motion/react';
 import {
   Sparkles,
-  List,
-  LayoutGrid,
-  GalleryHorizontal,
-  RefreshCw,
-  Calendar,
+  Settings as SettingsIcon,
 } from 'lucide-react';
 import type { MarketRateState } from '../lib/adapters/marketRateService';
 import type { NetWorthProjectionPoint } from '../lib/adapters/netWorthProjection';
@@ -15,8 +11,6 @@ import type { FinancialGoalTargets } from '../lib/finance';
 import type { Asset, Transaction, DDA, Settings, ChartSlot } from '../types/app';
 import { DDASuggestion, MiniMetricCard, AssetMiniCard } from '../components/dashboard/cards';
 import { YieldProjectionCard } from '../components/dashboard/YieldProjectionCard';
-import { YieldReconciliationModal } from '../components/dashboard/YieldReconciliationModal';
-import { FinancialCalendarModal } from '../components/modals/FinancialCalendarModal';
 import type { VisualSettings } from '../components/CardSettingsPanel';
 import { useHomeLayout } from '../hooks/useHomeLayout';
 import { PatrimonioHeroSection } from '../components/dashboard/PatrimonioHeroSection';
@@ -150,7 +144,6 @@ export const HomeView: React.FC<HomeViewProps> = ({
 
   const {
     homeLayout,
-    setHomeLayout,
     activePatrimonioIndex,
     patrimonioCarouselRef,
     handlePatrimonioScroll,
@@ -181,32 +174,6 @@ export const HomeView: React.FC<HomeViewProps> = ({
     chartData,
     openDrawer,
   });
-
-  const [showReconciliation, setShowReconciliation] = useState(false);
-  const [showCalendar, setShowCalendar] = useState(false);
-
-  useEffect(() => {
-    const handleOpen = () => setShowReconciliation(true);
-    window.addEventListener('open-reconciliation', handleOpen);
-    return () => window.removeEventListener('open-reconciliation', handleOpen);
-  }, []);
-
-  const handleSaveReconciliation = async (
-    updatedAssets: Array<{ id: string; manualDailyYield?: number | null; manualWeekendYield?: number | null }>
-  ) => {
-    for (const asset of updatedAssets) {
-      const original = assets.find((a) => a.id === asset.id);
-      const nextDaily = asset.manualDailyYield ?? null;
-      const nextWeekend = asset.manualWeekendYield ?? null;
-      const previousDaily = original?.manualDailyYield ?? null;
-      const previousWeekend = original?.manualWeekendYield ?? null;
-      if (nextDaily === previousDaily && nextWeekend === previousWeekend) continue;
-      await onUpdateAsset(asset.id, {
-        manualDailyYield: nextDaily ?? undefined,
-        manualWeekendYield: nextWeekend ?? undefined,
-      });
-    }
-  };
 
   const filteredRecentTransactions = useMemo(() => {
     let filtered = [...transactions];
@@ -496,6 +463,7 @@ export const HomeView: React.FC<HomeViewProps> = ({
             opacity={opacity}
             tooltipsEnabled={tooltipsEnabled}
             showValues={Boolean(resolveStyle('cashflow', 'show_values', true))}
+            privacyMode={privacyMode}
             openDrawer={openDrawer}
             t={t}
           />
@@ -521,6 +489,10 @@ export const HomeView: React.FC<HomeViewProps> = ({
 
       case 'CHART_SAZON_MENS':
       case 'CHART_PREV_CONTAS': {
+        // Ocultado temporariamente até que os modelos de IA correspondentes estejam prontos
+        const isReady = false;
+        if (!isReady) return null;
+
         const labels: Record<string, string> = {
           CHART_SAZON_MENS: t('Sazonalidade de Categoria', 'Category Seasonality'),
           CHART_PREV_CONTAS: t('Predição de Boletos', 'Bill Prediction'),
@@ -549,31 +521,6 @@ export const HomeView: React.FC<HomeViewProps> = ({
 
   return (
     <>
-      {/* CONTROLE DE LAYOUT */}
-      <div className="flex items-center justify-between gap-3 w-full max-w-md mx-auto sm:max-w-2xl">
-        <span className="text-[10px] font-bold uppercase tracking-widest text-[var(--text-muted)]">
-          {t('Layout', 'Layout')}
-        </span>
-        <div className="flex items-center gap-1 bg-[var(--bg-card)] border border-[var(--border-card)] rounded-2xl p-1">
-          {([
-            { id: 'lista', icon: List, label: t('Lista', 'List') },
-            { id: 'grade', icon: LayoutGrid, label: t('Grade', 'Grid') },
-            { id: 'carrossel', icon: GalleryHorizontal, label: t('Carrossel', 'Carousel') },
-          ] as const).map(({ id, icon: Icon, label }) => (
-            <button
-              key={id}
-              type="button"
-              onClick={() => setHomeLayout(id)}
-              aria-label={label}
-              aria-pressed={homeLayout === id}
-              className={`p-2 rounded-xl transition-colors ${homeLayout === id ? 'bg-[var(--accent)]/15 text-[var(--accent)]' : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'}`}
-            >
-              <Icon size={16} />
-            </button>
-          ))}
-        </div>
-      </div>
-
       {/* DDA SUGGESTIONS */}
       <AnimatePresence>
         {ddas
@@ -614,6 +561,23 @@ export const HomeView: React.FC<HomeViewProps> = ({
       {/* DASHBOARD INTEGRADO (DYNAMIC ORDER) */}
       {metricItems.length > 0 && (
         <div className="space-y-4">
+          <div className="flex items-center justify-between px-1">
+            <span className="text-[10px] font-bold text-[var(--text-muted)] uppercase tracking-widest">
+              {t('Visão Geral', 'Overview')}
+            </span>
+            <button
+              type="button"
+              onClick={() => openDrawer('settings')}
+              className="p-1.5 px-2.5 rounded-xl border border-[var(--border-card)] bg-[var(--bg-card)] hover:border-[var(--accent)] text-[var(--text-muted)] hover:text-[var(--accent)] transition-all active:scale-95 flex items-center gap-1.5 shadow-sm"
+              title={t('Configurações de Layout & Dashboard', 'Layout & Dashboard Settings')}
+              aria-label={t('Configurações de Layout & Dashboard', 'Layout & Dashboard Settings')}
+            >
+              <SettingsIcon size={12} className="text-[var(--accent)]" />
+              <span className="text-[10px] font-bold text-[var(--text-primary)]">
+                {t('Layout', 'Layout')}
+              </span>
+            </button>
+          </div>
           {homeLayout === 'carrossel' ? (
             <>
               {topMetricItems.length > 0 && (
@@ -659,46 +623,6 @@ export const HomeView: React.FC<HomeViewProps> = ({
             </React.Fragment>
           ))}
         </div>
-      )}
-
-      {/* Botão de Conciliação */}
-      <div className="mt-4 flex justify-center mb-8">
-        <button
-          type="button"
-          onClick={() => setShowReconciliation(true)}
-          className="flex items-center gap-2 px-5 py-3 bg-[var(--bg-card)] border border-[var(--border-card)] rounded-full text-xs font-bold text-[var(--text-muted)] hover:text-[var(--accent)] transition-all shadow-lg"
-        >
-          <RefreshCw size={14} /> Conciliar Rendimentos com Extrato
-        </button>
-      </div>
-
-      {showReconciliation && (
-        <YieldReconciliationModal
-          assets={assets}
-          onClose={() => setShowReconciliation(false)}
-          onSave={handleSaveReconciliation}
-        />
-      )}
-
-      {/* Botão Calendário */}
-      <div className="mt-2 flex justify-center">
-        <button
-          type="button"
-          onClick={() => setShowCalendar(true)}
-          className="flex items-center gap-2 px-4 py-2 bg-[var(--bg-card)] border border-[var(--border-card)] rounded-full text-xs font-bold text-[var(--text-muted)] hover:text-[var(--accent)] transition-all shadow-sm"
-        >
-          <Calendar size={14} /> Histórico de Extratos
-        </button>
-      </div>
-
-      {showCalendar && (
-        <FinancialCalendarModal
-          assets={assets}
-          transactions={transactions}
-          onClose={() => setShowCalendar(false)}
-          onUpdateAsset={onUpdateAsset}
-          onUpdateTransaction={onUpdateTransaction}
-        />
       )}
     </>
   );

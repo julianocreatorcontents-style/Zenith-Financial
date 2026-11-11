@@ -257,7 +257,7 @@ export function useAITools({
 
             if (dailyYield && dailyYield > 0) {
               await onAddTransaction({
-                label: `Rendimento ${assetNameStr}`,
+                label: assetNameStr || 'Rendimento',
                 value: dailyYield,
                 type: 'yield',
                 date: updateDate,
@@ -288,7 +288,7 @@ export function useAITools({
 
         if (dailyYield !== undefined && dailyYield > 0) {
           await onAddTransaction({
-            label: `Rendimento ${targetAsset.name}`,
+            label: targetAsset.name || 'Rendimento',
             value: dailyYield,
             type: 'yield',
             date: updateDate,
@@ -339,7 +339,7 @@ export function useAITools({
 
               if (dailyYield && dailyYield > 0) {
                 await onAddTransaction({
-                  label: `Rendimento ${assetNameStr}`,
+                  label: assetNameStr || 'Rendimento',
                   value: dailyYield,
                   type: 'yield',
                   date: updateDate,
@@ -368,7 +368,7 @@ export function useAITools({
 
             if (dailyYield !== undefined && dailyYield > 0) {
               await onAddTransaction({
-                label: `Rendimento ${targetAsset.name}`,
+                label: targetAsset.name || 'Rendimento',
                 value: dailyYield,
                 type: 'yield',
                 date: updateDate,

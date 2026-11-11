@@ -122,6 +122,18 @@ describe('finance utils', () => {
       expect(balance).toBe(850.0); // 1000.50 + 50.25 - 200.75
     });
 
+    it('ignora transferências entre contas próprias no saldo do mês', () => {
+      const txs = [
+        { type: 'in', value: 1000, date: new Date(2026, 3, 5) },
+        { type: 'out', value: 300, date: new Date(2026, 3, 8) },
+        { type: 'out', value: 500, categoria_primaria: 'transferencia', date: new Date(2026, 3, 10) },
+        { type: 'in', value: 500, categoria_primaria: 'transferencia', date: new Date(2026, 3, 11) },
+        { type: 'yield', value: 20, date: new Date(2026, 3, 15) },
+      ];
+
+      expect(calculateMonthBalance(txs, 3, 2026)).toBe(720);
+    });
+
     it('ignora transações com datas inválidas ou nulas', () => {
       const txs = [
         { type: 'in', value: 500, date: null },

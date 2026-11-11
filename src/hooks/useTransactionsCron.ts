@@ -15,6 +15,7 @@ import {
   parseTransactionAmount,
   isExpenseTransaction,
   isYieldTransaction,
+  isTransferTransaction,
 } from '../lib/finance';
 import { addAssetDelta, applyAssetDeltas, AssetDeltaMap } from './useTransactionsData';
 import { parseAssetDate } from '../lib/adapters/assetYieldService';
@@ -44,7 +45,7 @@ export function useTransactionsCron(
         for (const txDoc of snap.docs) {
           if (!isMounted) break;
           const tx = { id: txDoc.id, ...txDoc.data() } as Transaction;
-          if (tx.applied === true && tx.status === 'Confirmado') continue;
+          if (tx.applied === true) continue;
 
           const txDate = parseTransactionDate(tx.date);
           if (txDate && txDate.getTime() <= endOfToday.getTime()) {
@@ -55,7 +56,9 @@ export function useTransactionsCron(
             const amount = parseTransactionAmount(tx.value);
             const isOut = isExpenseTransaction(tx);
             const deltas: AssetDeltaMap = new Map();
-            addAssetDelta(deltas, tx.assetId, isOut ? -amount : amount);
+            if (!isTransferTransaction(tx)) {
+              addAssetDelta(deltas, tx.assetId, isOut ? -amount : amount);
+            }
 
             const batch = writeBatch(db);
             applyAssetDeltas(batch, deltas, rawAssets);
@@ -116,7 +119,7 @@ export function useTransactionsCron(
               const newYieldRef = doc(db, 'transactions', yieldId);
               const yieldTx = {
                 uid: user.uid,
-                label: `Rendimento ${asset.name}`,
+                label: asset.name || 'Rendimento',
                 value: Math.round(yieldAmount * 100) / 100,
                 type: 'yield',
                 categoria_primaria: 'Rendimentos',
