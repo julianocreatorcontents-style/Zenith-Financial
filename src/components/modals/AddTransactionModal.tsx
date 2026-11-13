@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import Modal from '../ui/Modal';
+import { isRetroactiveTransferWithManualBalance } from '../../lib/finance';
 
 export interface AddTransactionModalProps {
   onClose: () => void;
@@ -159,6 +160,24 @@ export function AddTransactionModal({
                 </option>
               ))}
             </select>
+            {(() => {
+              const selectedAsset = selectableAssets.find((a: any) => a.id === formData.assetId);
+              const hasManualBalance = selectedAsset && (
+                selectedAsset.manualBalance === true ||
+                (typeof selectedAsset.manualBalance === 'number' && Number.isFinite(selectedAsset.manualBalance))
+              );
+              if (!hasManualBalance || !isRetroactiveTransferWithManualBalance(formData.date)) {
+                return null;
+              }
+              return (
+                <div data-testid="retroactive-warning" className="mt-2 rounded-xl border border-amber-500/20 bg-amber-500/10 p-3 text-xs text-amber-300">
+                  {t(
+                    `Transferência com data retroativa em conta com saldo manual reancora o rendimento em hoje. O rendimento entre ${formData.date} e hoje não será recalculado automaticamente.`,
+                    `Retroactive transfer on an account with manual balance re-anchors yield to today. Yield between ${formData.date} and today will not be recalculated automatically.`
+                  )}
+                </div>
+              );
+            })()}
           </div>
   
         )}

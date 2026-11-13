@@ -23,8 +23,12 @@ import {
   isIncomeTransaction,
   isYieldTransaction,
   isTransferTransaction,
+  buildTransferLegs,
+  createTransferId,
+  resolveTransferRole,
+  matchLegacyCounterpart,
 } from '../lib/finance';
-import { calculateAssetBalanceUpdate } from '../lib/adapters/assetBalance';
+import { calculateAssetBalanceUpdate, calculateTransferBalanceUpdate } from '../lib/adapters/assetBalance';
 import { parseAssetDate } from '../lib/adapters/assetYieldService';
 import { mapSpreadsheetRow } from '../lib/spreadsheetParser';
 import { extractDocument, getAiErrorMessage, GEMINI_API_KEY_STORAGE } from '../lib/ai';
@@ -61,6 +65,55 @@ export interface UseTransactionsDataProps {
   user: ZenithUser | null;
   rawAssets: Asset[];
   setError?: (msg: string | null) => void;
+}
+
+const localDateKey = (tx: Transaction): string => {
+  const date = parseTransactionDate(tx.date ?? tx.createdAt);
+  if (!date) return '';
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(
+    date.getDate()
+  ).padStart(2, '0')}`;
+};
+
+/**
+ * Localiza a outra perna de uma transferência. Usa `transferId` quando
+ * disponível e, para dados legados, exige um par inequívoco (mesmo valor,
+ * mesma data, contas diferentes e papéis opostos).
+ */
+export function findTransferCounterpart(
+  item: Transaction,
+  transactions: Transaction[]
+): Transaction | undefined {
+  if (!isTransferTransaction(item)) return undefined;
+
+  if (item.transferId) {
+    return transactions.find(
+      (tx) => tx.id !== item.id && tx.transferId === item.transferId
+    );
+  }
+
+  const role = resolveTransferRole(item);
+  if (!role) return undefined;
+  const opposite = role === 'out' ? 'in' : 'out';
+  const value = Math.round(parseTransactionAmount(item.value) * 100) / 100;
+  const dateKey = localDateKey(item);
+
+  return transactions.find((tx) => {
+    if (tx.id === item.id || !isTransferTransaction(tx)) return false;
+    if (resolveTransferRole(tx) !== opposite) return false;
+    if (item.assetId && tx.assetId === item.assetId) return false;
+    if (Math.round(parseTransactionAmount(tx.value) * 100) / 100 !== value) return false;
+    return !dateKey || localDateKey(tx) === dateKey;
+  });
+}
+
+/** Efeito de reversão (-1) ou reaplicação (+1) de uma perna no saldo do ativo. */
+export function transferAssetDelta(tx: Transaction, direction: 1 | -1): number {
+  const value = parseTransactionAmount(tx.value);
+  if (!Number.isFinite(value) || value === 0) return 0;
+  const role = resolveTransferRole(tx);
+  if (role !== 'out' && role !== 'in') return 0;
+  return role === 'out' ? -value * direction : value * direction;
 }
 
 export function useTransactionsData({ user, rawAssets, setError }: UseTransactionsDataProps) {
@@ -126,36 +179,53 @@ export function useTransactionsData({ user, rawAssets, setError }: UseTransactio
       try {
         if (!user) return;
 
-        const deltas: AssetDeltaMap = new Map();
-        if (collectionName === 'transactions' && item.applied && item.assetId && !isTransferTransaction(item)) {
-          const amount = parseTransactionAmount(item.value);
-          const isOut = isExpenseTransaction(item);
-          addAssetDelta(deltas, item.assetId, isOut ? amount : -amount);
-        }
+        const counterpart =
+          collectionName === 'transactions'
+            ? findTransferCounterpart(item as Transaction, transactions)
+            : undefined;
+        const items: any[] = counterpart ? [item, counterpart] : [item];
 
-        const trashRef = doc(collection(db, 'trash'));
-        const itemRef = doc(db, collectionName, item.id);
+        const deltas: AssetDeltaMap = new Map();
+        for (const entry of items) {
+          if (collectionName !== 'transactions') continue;
+          const wasApplied = entry.applied !== false && entry.status !== 'Futuro';
+          if (!wasApplied || !entry.assetId) continue;
+
+          if (isTransferTransaction(entry)) {
+            addAssetDelta(deltas, entry.assetId, transferAssetDelta(entry as Transaction, -1));
+          } else {
+            const amount = parseTransactionAmount(entry.value);
+            const isOut = isExpenseTransaction(entry);
+            addAssetDelta(deltas, entry.assetId, isOut ? amount : -amount);
+          }
+        }
 
         const batch = writeBatch(db);
         applyAssetDeltas(batch, deltas, rawAssets);
-        batch.set(trashRef, {
-          originalId: item.id,
-          originalCollection: collectionName,
-          data: item,
-          deletedAt: serverTimestamp(),
-          uid: user.uid,
-        });
-        batch.delete(itemRef);
+        for (const entry of items) {
+          batch.set(doc(collection(db, 'trash')), {
+            originalId: entry.id,
+            originalCollection: collectionName,
+            data: entry,
+            deletedAt: serverTimestamp(),
+            uid: user.uid,
+          });
+          batch.delete(doc(db, collectionName, entry.id));
+        }
         await batch.commit();
 
         if (collectionName === 'transactions') {
+          console.log('[Firestore] Transação(ões) movida(s) para a lixeira:', {
+            ids: items.map((entry) => entry.id),
+            transfer: items.length > 1,
+          });
           await recalculateBalances(user.uid);
         }
       } catch (e) {
         handleFirestoreError(e, OperationType.DELETE, `${collectionName}/${item.id}`);
       }
     },
-    [user, rawAssets, recalculateBalances]
+    [user, rawAssets, recalculateBalances, transactions]
   );
 
   const restoreFromTrash = useCallback(
@@ -163,19 +233,104 @@ export function useTransactionsData({ user, rawAssets, setError }: UseTransactio
       if (!user || !item?.originalCollection || !item?.originalId) return;
       try {
         const data = item.data || {};
-        const { id: _id, ref: _ref, ...restoredData } = data;
+        const items: any[] = [item];
+
+        // Restaura as duas pernas de uma transferência em conjunto:
+        // Se possui transferId, busca o irmão com o mesmo transferId.
+        // Se legado (sem transferId), busca contraparte inequívoca na lixeira via matchLegacyCounterpart.
+        if (
+          item.originalCollection === 'transactions' &&
+          isTransferTransaction(data)
+        ) {
+          const trashSnap = await getDocs(
+            query(collection(db, 'trash'), where('uid', '==', user.uid))
+          );
+          if (data.transferId) {
+            for (const trashDoc of trashSnap.docs) {
+              if (trashDoc.id === item.id) continue;
+              const candidate = trashDoc.data() as {
+                originalCollection?: string;
+                data?: { transferId?: string };
+              };
+              if (
+                candidate.originalCollection === 'transactions' &&
+                candidate.data?.transferId === data.transferId
+              ) {
+                items.push({ id: trashDoc.id, ...candidate });
+              }
+            }
+          } else {
+            // D3: Legado sem transferId - busca contraparte inequívoca na lixeira
+            const role = resolveTransferRole(data);
+            const counterpartRole = role === 'out' ? 'in' : role === 'in' ? 'out' : null;
+            const candidates: Array<{ id: string; originalCollection: string; originalId: string; data: any }> = [];
+
+            for (const trashDoc of trashSnap.docs) {
+              if (trashDoc.id === item.id) continue;
+              const c = trashDoc.data() as any;
+              if (c.originalCollection === 'transactions' && isTransferTransaction(c.data) && !c.data?.transferId) {
+                if (!counterpartRole || resolveTransferRole(c.data) === counterpartRole) {
+                  candidates.push({ id: trashDoc.id, ...c });
+                }
+              }
+            }
+
+            const match = matchLegacyCounterpart(
+              data,
+              candidates.map((c) => c.data),
+              new Set<number>()
+            );
+
+            if (match) {
+              const matchedCandidate = candidates[match.index];
+              const generatedTransferId = createTransferId();
+              data.transferId = generatedTransferId;
+              data.transferRole = role || 'out';
+              if (matchedCandidate.data.assetId) {
+                data.counterpartAssetId = matchedCandidate.data.assetId;
+              }
+
+              matchedCandidate.data.transferId = generatedTransferId;
+              matchedCandidate.data.transferRole = counterpartRole || (role === 'out' ? 'in' : 'out');
+              if (data.assetId) {
+                matchedCandidate.data.counterpartAssetId = data.assetId;
+              }
+
+              items.push(matchedCandidate);
+            } else {
+              console.warn(`[RESTORE] par legado ambíguo ou ausente: ${item.id}`);
+            }
+          }
+        }
 
         const deltas: AssetDeltaMap = new Map();
-        if (item.originalCollection === 'transactions' && data.applied && data.assetId && !isTransferTransaction(data)) {
-          const amount = Number(data.value) || 0;
-          const isOut = isExpenseTransaction(data);
-          addAssetDelta(deltas, data.assetId, isOut ? -amount : amount);
+        for (const entry of items) {
+          if (entry.originalCollection !== 'transactions') continue;
+          const entryData = entry.data || {};
+          const wasApplied = entryData.applied !== false && entryData.status !== 'Futuro';
+          if (!wasApplied || !entryData.assetId) continue;
+
+          if (isTransferTransaction(entryData)) {
+            addAssetDelta(
+              deltas,
+              entryData.assetId,
+              transferAssetDelta(entryData as Transaction, 1)
+            );
+          } else {
+            const amount = Number(entryData.value) || 0;
+            const isOut = isExpenseTransaction(entryData);
+            addAssetDelta(deltas, entryData.assetId, isOut ? -amount : amount);
+          }
         }
 
         const batch = writeBatch(db);
         applyAssetDeltas(batch, deltas, rawAssets);
-        batch.set(doc(db, item.originalCollection, item.originalId), restoredData);
-        batch.delete(doc(db, 'trash', item.id));
+        for (const entry of items) {
+          const entryData = entry.data || {};
+          const { id: _id, ref: _ref, ...restoredData } = entryData;
+          batch.set(doc(db, entry.originalCollection, entry.originalId), restoredData);
+          batch.delete(doc(db, 'trash', entry.id));
+        }
         await batch.commit();
 
         if (item.originalCollection === 'transactions') {
@@ -219,19 +374,210 @@ export function useTransactionsData({ user, rawAssets, setError }: UseTransactio
         applyAssetDeltas(batch, deltas, rawAssets);
         batch.set(newTxRef, txData);
         await batch.commit();
+        console.log('[Firestore] Transação criada:', { id: newTxRef.id, ...txData });
       } catch (e) {
         handleFirestoreError(e, OperationType.CREATE, 'transactions');
         return;
       }
 
       await recalculateBalances(user.uid);
+      return { id: newTxRef.id };
     },
     [user, rawAssets, recalculateBalances]
+  );
+
+  /**
+   * Cria uma transferência como um par de lançamentos em um único batch:
+   * saída na origem + entrada no destino, com o mesmo `transferId`, e
+   * movimentação dos saldos das duas contas atomicamente.
+   */
+  const addTransfer = useCallback(
+    async (params: {
+      fromAsset: Asset;
+      toAsset: Asset;
+      value: number;
+      date?: string;
+      label?: string;
+      transferId?: string;
+    }) => {
+      if (!user) return;
+      const { fromAsset, toAsset, date, label } = params;
+
+      if (fromAsset.id === toAsset.id) {
+        throw new Error('A conta de origem e a de destino são a mesma.');
+      }
+      const value = Math.round(Number(params.value) * 100) / 100;
+      if (!Number.isFinite(value) || value <= 0) {
+        throw new Error('O valor da transferência deve ser maior que zero.');
+      }
+
+      const transferId = params.transferId || createTransferId();
+      const dateStr = date || new Date().toISOString().split('T')[0];
+      const txDate = parseTransactionDate(dateStr) || new Date();
+      const now = new Date();
+      const endOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
+      const isFuture = txDate.getTime() > endOfToday.getTime();
+
+      const [outLeg, inLeg] = buildTransferLegs({
+        transferId,
+        fromAsset,
+        toAsset,
+        value,
+        date: dateStr,
+        label,
+      });
+
+      const outRef = doc(collection(db, 'transactions'));
+      const inRef = doc(collection(db, 'transactions'));
+
+      try {
+        const batch = writeBatch(db);
+        for (const [ref, leg] of [
+          [outRef, outLeg] as const,
+          [inRef, inLeg] as const,
+        ]) {
+          batch.set(ref, {
+            ...leg,
+            uid: user.uid,
+            applied: !isFuture,
+            status: isFuture ? 'Futuro' : 'Confirmado',
+            date: Timestamp.fromDate(txDate),
+          });
+        }
+
+        if (!isFuture) {
+          const fromUpdate = calculateTransferBalanceUpdate(fromAsset, value, false);
+          const toUpdate = calculateTransferBalanceUpdate(toAsset, value, true);
+          batch.update(doc(db, 'assets', fromAsset.id), {
+            ...fromUpdate,
+            updatedAt: serverTimestamp(),
+          });
+          batch.update(doc(db, 'assets', toAsset.id), {
+            ...toUpdate,
+            updatedAt: serverTimestamp(),
+          });
+        }
+
+        await batch.commit();
+        console.log('[Firestore] Transferência criada:', {
+          transferId,
+          outId: outRef.id,
+          inId: inRef.id,
+          value,
+        });
+      } catch (e) {
+        handleFirestoreError(e, OperationType.CREATE, 'transactions');
+        throw e;
+      }
+
+      await recalculateBalances(user.uid);
+      return { transferId, outId: outRef.id, inId: inRef.id };
+    },
+    [user, recalculateBalances]
   );
 
   const updateTransaction = useCallback(
     async (selectedTx: Transaction, data: Partial<Transaction>) => {
       if (!user) return;
+
+      const counterpart = findTransferCounterpart(selectedTx, transactions);
+      if (counterpart) {
+        const now = new Date();
+        const endOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
+        const dateSource = data.date !== undefined ? data.date : selectedTx.date;
+        const txDate = parseTransactionDate(dateSource) || now;
+        const isFuture = txDate.getTime() > endOfToday.getTime();
+        const applied = !isFuture;
+
+        const oldValue = parseTransactionAmount(selectedTx.value);
+        const newValue = data.value !== undefined ? parseTransactionAmount(data.value) : oldValue;
+        const label = data.label ?? selectedTx.label;
+        const transferId = selectedTx.transferId || counterpart.transferId || createTransferId();
+
+        const outLeg = resolveTransferRole(selectedTx) === 'out' ? selectedTx : counterpart;
+        const inLeg = outLeg.id === selectedTx.id ? counterpart : selectedTx;
+        const selectedIsOut = outLeg.id === selectedTx.id;
+        const outAssetId =
+          selectedIsOut && data.assetId ? data.assetId : outLeg.assetId;
+        const inAssetId =
+          !selectedIsOut && data.assetId ? data.assetId : inLeg.assetId;
+
+        const wasApplied = selectedTx.applied !== false && selectedTx.status !== 'Futuro';
+        const deltas: AssetDeltaMap = new Map();
+        const addMovement = (
+          role: 'out' | 'in' | undefined,
+          assetId: string | undefined,
+          amount: number,
+          direction: 1 | -1
+        ) => {
+          if (!assetId || !Number.isFinite(amount) || amount === 0) return;
+          const movement = role === 'out' ? -amount : amount;
+          addAssetDelta(deltas, assetId, movement * direction);
+        };
+
+        if (wasApplied) {
+          addMovement(
+            resolveTransferRole(outLeg),
+            outLeg.assetId,
+            parseTransactionAmount(outLeg.value),
+            -1
+          );
+          addMovement(
+            resolveTransferRole(inLeg),
+            inLeg.assetId,
+            parseTransactionAmount(inLeg.value),
+            -1
+          );
+        }
+        if (applied) {
+          addMovement('out', outAssetId, newValue, 1);
+          addMovement('in', inAssetId, newValue, 1);
+        }
+
+        const baseData = {
+          uid: user.uid,
+          label,
+          value: newValue,
+          categoria_primaria: 'transferencia',
+          applied,
+          status: isFuture ? 'Futuro' : 'Confirmado',
+          date: Timestamp.fromDate(txDate),
+          transferId,
+        };
+
+        try {
+          const batch = writeBatch(db);
+          applyAssetDeltas(batch, deltas, rawAssets);
+          batch.update(doc(db, 'transactions', outLeg.id), {
+            ...baseData,
+            type: 'out',
+            transferRole: 'out',
+            assetId: outAssetId,
+            counterpartAssetId: inAssetId,
+          });
+          batch.update(doc(db, 'transactions', inLeg.id), {
+            ...baseData,
+            type: 'in',
+            transferRole: 'in',
+            assetId: inAssetId,
+            counterpartAssetId: outAssetId,
+          });
+          await batch.commit();
+          console.log('[Firestore] Transferência atualizada atomicamente:', {
+            transferId,
+            outId: outLeg.id,
+            inId: inLeg.id,
+            newValue,
+          });
+        } catch (e) {
+          handleFirestoreError(e, OperationType.UPDATE, `transactions/${selectedTx.id}`);
+          return;
+        }
+
+        await recalculateBalances(user.uid);
+        return;
+      }
+
       const now = new Date();
       const endOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
       const txDate = parseTransactionDate(data.date) || now;
@@ -282,7 +628,7 @@ export function useTransactionsData({ user, rawAssets, setError }: UseTransactio
 
       await recalculateBalances(user.uid);
     },
-    [user, rawAssets, recalculateBalances]
+    [user, rawAssets, recalculateBalances, transactions]
   );
 
   const confirmPendingTransaction = useCallback(
@@ -450,6 +796,7 @@ export function useTransactionsData({ user, rawAssets, setError }: UseTransactio
     moveToTrash,
     restoreFromTrash,
     addTransaction,
+    addTransfer,
     updateTransaction,
     confirmPendingTransaction,
     handleFileUpload,

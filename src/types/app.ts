@@ -75,6 +75,9 @@ export interface Transaction {
   etiqueta_personalizada?: string;
   metodo_origem?: string;
   status?: 'Confirmado' | 'Futuro';
+  transferId?: string;
+  transferRole?: 'out' | 'in';
+  counterpartAssetId?: string;
   contexto_ia?: {
     insight: string;
     tendencia: 'Alta' | 'Baixa' | 'Estável';

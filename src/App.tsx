@@ -72,7 +72,7 @@ export default function ZenithApp() {
     user, profile, assets, transactions, ddas, settings, privacyMode,
     isAuthReady, userRules, notifications, investorProfile,
     isBiometryModalOpen, setIsBiometryModalOpen, marketRate,
-    error, setError, firestoreIssues, setFirestoreIssues,
+    error, setError, logoutError, firestoreIssues, setFirestoreIssues,
     geminiApiKey, apiKeyError, setApiKeyError,
     pendingTransaction, setPendingTransaction, isProcessingIA,
     metrics, chartData, projectionData, cashFlowData,
@@ -81,7 +81,7 @@ export default function ZenithApp() {
     handleGoogleLogin, handleEmailLogin, handleRegister, handleLogout, handleDeleteAccount,
     handleAcceptDDA, handleRejectDDA, moveToTrash, restoreFromTrash,
     createAsset, updateAsset, deleteAsset,
-    addTransaction, updateTransaction, confirmPendingTransaction,
+    addTransaction, addTransfer, updateTransaction, confirmPendingTransaction,
     handleFileUpload
   } = data;
 
@@ -407,6 +407,7 @@ export default function ZenithApp() {
                 goals={goals}
                 getGeminiApiKey={getGeminiApiKey}
                 onAddTransaction={addTransaction}
+                onAddTransfer={addTransfer}
                 onUpdateTransaction={updateTransaction}
                 onDeleteTransaction={(item: Transaction) => moveToTrash(item, 'transactions')}
                 onCreateAsset={createAsset}
@@ -448,6 +449,7 @@ export default function ZenithApp() {
             onChangeVisualSettings={setVisualSettings}
             settingsLanguage={settings?.language}
             onLogout={handleLogout}
+            logoutError={logoutError}
             onDeleteAccount={handleDeleteAccount}
             onOpenSettings={handleOpenSettings}
           />
@@ -762,6 +764,7 @@ export default function ZenithApp() {
             setCurrentTab('IA');
           }}
           onAddTransaction={addTransaction}
+          onAddTransfer={addTransfer}
           onUpdateTransaction={updateTransaction}
           onDeleteTransaction={(item: Transaction) => moveToTrash(item, 'transactions')}
           onCreateAsset={createAsset}

@@ -17,6 +17,7 @@ import type { FinancialGoalTargets } from '../lib/finance';
 import { usePersistentState } from '../hooks/usePersistentState';
 import { useVoiceRecognition } from '../hooks/useVoiceRecognition';
 import { useAITools } from '../hooks/useAITools';
+import type { AddTransferParams } from '../hooks/useAITools';
 import ChatMessageBubble from '../components/ai/ChatMessageBubble';
 import type { Message } from '../components/ai/ChatMessageBubble';
 import ChatInputBar from '../components/ai/ChatInputBar';
@@ -41,13 +42,14 @@ interface ChatSession {
 const MAX_SESSIONS = 30;
 
 interface ZenithIAViewProps {
-  user?: unknown;
+  user?: { uid?: string } | null;
   language?: string;
   transactions: Transaction[];
   assets: Asset[];
   goals?: FinancialGoalTargets | Record<string, unknown>;
   getGeminiApiKey: () => string;
   onAddTransaction: (data: Omit<Transaction, 'id' | 'uid' | 'createdAt'> & { uid?: string; applied?: boolean }) => Promise<unknown>;
+  onAddTransfer?: (params: AddTransferParams) => Promise<unknown>;
   onUpdateTransaction?: (selectedTx: Transaction, data: Partial<Transaction>) => Promise<unknown>;
   onDeleteTransaction?: (item: Transaction) => Promise<unknown>;
   onCreateAsset?: (data: Omit<Asset, 'id' | 'uid' | 'createdAt'>) => Promise<unknown>;
@@ -62,12 +64,14 @@ interface ZenithIAViewProps {
 }
 
 export default function ZenithIAView({
+  user,
   language,
   transactions = [],
   assets = [],
   goals,
   getGeminiApiKey,
   onAddTransaction,
+  onAddTransfer,
   onUpdateTransaction,
   onDeleteTransaction,
   onCreateAsset,
@@ -334,7 +338,9 @@ export default function ZenithIAView({
     assets,
     transactions,
     goals,
+    userId: user?.uid,
     onAddTransaction,
+    onAddTransfer,
     onUpdateTransaction,
     onDeleteTransaction,
     onCreateAsset,

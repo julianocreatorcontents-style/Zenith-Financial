@@ -22,6 +22,9 @@ export const TransactionSchema = z.object({
   etiqueta_personalizada: z.string().max(100, "Etiqueta muito longa").optional(),
   metodo_origem: z.string().max(50, "Método de origem muito longo").optional(),
   status: z.enum(['Confirmado', 'Futuro']).optional(),
+  transferId: z.string().optional(),
+  transferRole: z.enum(['out', 'in']).optional(),
+  counterpartAssetId: z.string().optional(),
   contexto_ia: z.object({
     insight: z.string().optional(),
     tendencia: z.enum(['Alta', 'Baixa', 'Estável']).optional()

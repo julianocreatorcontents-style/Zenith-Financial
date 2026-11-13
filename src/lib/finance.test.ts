@@ -189,6 +189,39 @@ describe('finance utils', () => {
       expect(totals.out).toBe(5000);
       expect(totals.yield).toBe(45.67);
     });
+
+    it('ignora as duas pernas de uma transferência entre ativos criada pela IA', () => {
+      const transferDate = new Date(2026, 10, 11);
+      const txs = [
+        {
+          type: 'out' as const,
+          value: 1000,
+          date: transferDate,
+          categoria_primaria: 'transferencia',
+          assetId: 'asset-99pay-v',
+          applied: true,
+          label: 'Transferência 99Pay - V → 99Pay',
+        },
+        {
+          type: 'in' as const,
+          value: 1000,
+          date: transferDate,
+          categoria_primaria: 'transferencia',
+          assetId: 'asset-99pay',
+          applied: true,
+          label: 'Transferência 99Pay - V → 99Pay',
+        },
+      ];
+
+      expect(isTransferTransaction(txs[0])).toBe(true);
+      expect(isTransferTransaction(txs[1])).toBe(true);
+
+      const totals = calculateTotals(txs, 10, 2026, []);
+
+      expect(totals.in).toBe(0);
+      expect(totals.out).toBe(0);
+      expect(totals.yield).toBe(0);
+    });
   });
 
   describe('calculateNetWorth', () => {

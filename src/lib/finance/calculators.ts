@@ -29,6 +29,9 @@ export interface TransactionInput {
   durationMonths?: number | string | null;
   categoria_primaria?: string;
   category?: string;
+  transferId?: string;
+  transferRole?: 'out' | 'in';
+  counterpartAssetId?: string;
 }
 
 export interface AssetInput {
@@ -53,9 +56,23 @@ export const calculateRealProfitability = (nominalRate: number, inflationRate: n
 
 export const isTransferTransaction = (tx: TransactionInput | null | undefined): boolean => {
   if (!tx) return false;
+  // Metadados explícitos são a fonte de verdade (novas transferências).
+  if (tx.transferId) return true;
+  if (tx.counterpartAssetId) return true;
+
   const cat = String(tx.categoria_primaria || tx.category || '').toLowerCase().trim();
+  if (cat === 'transferencia' || cat === 'transferência') return true;
+
+  // Legado: só considera transferência se o rótulo indicar movimentação entre
+  // contas próprias. Evita classificar "Transferência recebida" de terceiros
+  // como neutra.
   const label = String(tx.label || '').toLowerCase();
-  return cat === 'transferencia' || cat === 'transferência' || label.includes('transfer');
+  return (
+    label.includes('transferência entre') ||
+    label.includes('transferencia entre') ||
+    label.includes('entre contas') ||
+    label.includes('entre ativos')
+  );
 };
 
 export const isExpenseTransaction = (tx: TransactionInput | null | undefined): boolean => {

@@ -16,6 +16,9 @@ import {
   Camera,
   Save,
   BellOff,
+  Eye,
+  EyeOff,
+  AlertTriangle,
 } from 'lucide-react';
 import LoadingSpinner from '../LoadingSpinner';
 import { testApiKey } from '../../lib/ai';
@@ -66,7 +69,7 @@ interface ProfileSectionProps {
   onSave: (profile: any) => Promise<void>;
   onDone: () => void;
   language?: string;
-  onDeleteAccount?: () => Promise<{ success: boolean; error?: string }>;
+  onDeleteAccount?: () => Promise<{ success: boolean; error?: string; status?: string }>;
 }
 
 export function ProfileSection({ profile, onSave, onDone, language, onDeleteAccount }: ProfileSectionProps) {
@@ -78,6 +81,7 @@ export function ProfileSection({ profile, onSave, onDone, language, onDeleteAcco
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [deletionStatus, setDeletionStatus] = useState<'idle' | 'partial-auth' | 'partial-data'>('idle');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handlePhotoChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -92,7 +96,7 @@ export function ProfileSection({ profile, onSave, onDone, language, onDeleteAcco
     setPhotoLoading(true);
     try {
       const dataUrl = await imageFileToAvatar(file);
-      setFormData((current: any) => ({ ...current, photoURL: dataUrl }));
+      setFormData((current: Partial<UserProfile>) => ({ ...current, photoURL: dataUrl }));
     } catch {
       setPhotoError(t('Não foi possível carregar esta imagem.', 'Could not load this image.'));
     } finally {
@@ -118,18 +122,37 @@ export function ProfileSection({ profile, onSave, onDone, language, onDeleteAcco
     if (!onDeleteAccount) return;
     setIsDeleting(true);
     setDeleteError(null);
+    setDeletionStatus('idle');
     const result = await onDeleteAccount();
-    if (!result.success) {
+    setIsDeleting(false);
+    setShowDeleteModal(false);
+    if (result.status === 'partial-auth') {
+      setDeletionStatus('partial-auth');
       setDeleteError(
-        result.error?.includes('requires-recent-login')
-          ? t(
-              'Por segurança, faça logout e login novamente antes de excluir sua conta.',
-              'For security, please log out and log in again before deleting your account.'
-            )
-          : (result.error ?? t('Erro ao excluir conta. Tente novamente.', 'Failed to delete account. Try again.'))
+        result.error ??
+        t(
+          'Dados excluídos. A conta Firebase não pôde ser encerrada — tente novamente.',
+          'Data deleted. Firebase account could not be closed — try again.'
+        )
       );
-      setIsDeleting(false);
-      setShowDeleteModal(false);
+    } else if (result.status === 'partial-data') {
+      setDeletionStatus('partial-data');
+      setDeleteError(
+        result.error ??
+        t('Exclusão incompleta. Tente novamente.', 'Deletion incomplete. Try again.')
+      );
+    } else if (result.status === 'reauth-required') {
+      setDeleteError(
+        result.error ??
+        t(
+          'Por segurança, faça logout e login novamente antes de excluir sua conta.',
+          'For security, please log out and log in again before deleting your account.'
+        )
+      );
+    } else if (!result.success) {
+      setDeleteError(
+        result.error ?? t('Erro ao excluir conta. Tente novamente.', 'Failed to delete account. Try again.')
+      );
     }
   };
 
@@ -194,10 +217,14 @@ export function ProfileSection({ profile, onSave, onDone, language, onDeleteAcco
             <p className="text-[10px] text-[var(--destructive)] mb-3 leading-relaxed">{deleteError}</p>
           )}
           <button
-            onClick={() => setShowDeleteModal(true)}
+            onClick={() => { setShowDeleteModal(true); setDeleteError(null); setDeletionStatus('idle'); }}
             className="w-full py-3 border border-[var(--destructive)]/40 text-[var(--destructive)] rounded-2xl text-[10px] font-black uppercase tracking-widest hover:bg-[var(--destructive)]/10 transition-all"
           >
-            {t('Excluir minha conta', 'Delete my account')}
+            {deletionStatus === 'partial-auth'
+              ? t('Tentar novamente (encerrar conta Auth)', 'Retry (close Auth account)')
+              : deletionStatus === 'partial-data'
+              ? t('Tentar novamente (retomar exclusão)', 'Retry (resume deletion)')
+              : t('Excluir minha conta', 'Delete my account')}
           </button>
         </div>
       )}
@@ -245,9 +272,17 @@ export function NotificationsSection({ notifications = [], language }: any) {
 export function AiKeySection({ apiKey, error, onSave, onClearError, language }: any) {
   const t = (pt: string, en: string) => (language === 'en-US' ? en : pt);
   const [draft, setDraft] = useState(apiKey || '');
+  const [showKey, setShowKey] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
   const [isValidating, setIsValidating] = useState(false);
   const [validationStatus, setValidationStatus] = useState<'idle' | 'ok' | 'error'>('idle');
+
+  // Re-mascarar quando apiKey muda (após salvar)
+  useEffect(() => {
+    setDraft(apiKey || '');
+    setShowKey(false);
+    setValidationStatus('idle');
+  }, [apiKey]);
 
   const handleSave = async () => {
     if (!draft.trim()) {
@@ -267,6 +302,8 @@ export function AiKeySection({ apiKey, error, onSave, onClearError, language }: 
       }
       onSave(draft.trim());
       setValidationStatus('ok');
+      // Re-mascarar imediatamente após salvar com sucesso
+      setShowKey(false);
     } catch {
       setValidationStatus('error');
       setLocalError(t('Erro ao validar. Tente novamente.', 'Validation error. Please try again.'));
@@ -291,18 +328,29 @@ export function AiKeySection({ apiKey, error, onSave, onClearError, language }: 
         </p>
       </div>
 
-      <input
-        type="password"
-        value={draft}
-        onChange={(e) => {
-          setDraft(e.target.value);
-          setLocalError(null);
-          setValidationStatus('idle');
-          onClearError?.();
-        }}
-        placeholder="AIza..."
-        className="w-full bg-[var(--bg-app)] border border-[var(--border-card)] rounded-xl p-3 text-[var(--text-primary)] text-sm focus:border-[var(--accent)] outline-none font-mono"
-      />
+      {/* Campo com show/hide */}
+      <div className="relative">
+        <input
+          type={showKey ? 'text' : 'password'}
+          value={draft}
+          onChange={(e) => {
+            setDraft(e.target.value);
+            setLocalError(null);
+            setValidationStatus('idle');
+            onClearError?.();
+          }}
+          placeholder="AIza..."
+          className="w-full bg-[var(--bg-app)] border border-[var(--border-card)] rounded-xl p-3 pr-12 text-[var(--text-primary)] text-sm focus:border-[var(--accent)] outline-none font-mono"
+        />
+        <button
+          type="button"
+          onClick={() => setShowKey((v) => !v)}
+          aria-label={showKey ? t('Ocultar chave', 'Hide key') : t('Mostrar chave', 'Show key')}
+          className="absolute right-3 top-1/2 -translate-y-1/2 text-[var(--text-muted)] hover:text-[var(--text-primary)] transition-colors"
+        >
+          {showKey ? <EyeOff size={16} /> : <Eye size={16} />}
+        </button>
+      </div>
 
       {(localError || error) && (
         <p className="text-xs text-[var(--destructive)] font-medium">{localError || error}</p>
@@ -313,6 +361,17 @@ export function AiKeySection({ apiKey, error, onSave, onClearError, language }: 
           {t('✓ Chave válida e salva com segurança.', '✓ Valid key saved securely.')}
         </p>
       )}
+
+      {/* Aviso de dispositivo compartilhado — T2 */}
+      <div className="flex items-start gap-2 p-3 bg-[var(--bg-app)] border border-[var(--border-card)] rounded-xl">
+        <AlertTriangle size={14} className="text-[var(--text-muted)] shrink-0 mt-0.5" />
+        <p className="text-[10px] text-[var(--text-muted)] leading-relaxed">
+          {t(
+            'A chave é armazenada neste dispositivo. Se você compartilha o aparelho, faça logout ao terminar.',
+            'The key is stored on this device. If you share this device, log out when you are done.'
+          )}
+        </p>
+      </div>
 
       <p className="text-[10px] text-[var(--text-muted)] leading-relaxed">
         {t('Obtenha uma chave em', 'Get a key at')}{' '}
@@ -367,7 +426,8 @@ export interface ProfileDrawerProps {
   currentConfig?: ZenithConfig;
   settingsLanguage?: string;
   onLogout: () => void;
-  onDeleteAccount?: () => Promise<{ success: boolean; error?: string }>;
+  logoutError?: string | null;
+  onDeleteAccount?: () => Promise<{ success: boolean; error?: string; status?: string }>;
   onOpenSettings?: (initialTab?: 'perfil' | 'aparencia' | 'seguranca' | 'dashboard' | 'ia') => void;
 }
 
@@ -391,6 +451,7 @@ export function ProfileDrawer({
   currentConfig,
   settingsLanguage,
   onLogout,
+  logoutError,
   visualSettings,
   onChangeVisualSettings,
   onDeleteAccount,
@@ -398,10 +459,24 @@ export function ProfileDrawer({
 }: ProfileDrawerProps) {
   const t = (pt: string, en: string) => (language === 'en-US' ? en : pt);
   const [activeDrawerPage, setActiveDrawerPage] = useState<DrawerPage>('menu');
+  const [isLoggingOut, setIsLoggingOut] = useState(false);
 
   useEffect(() => {
     setActiveDrawerPage(isOpen ? initialPage : 'menu');
   }, [isOpen, initialPage]);
+
+  const handleLogoutClick = async () => {
+    setIsLoggingOut(true);
+    try {
+      await onLogout();
+      // Se não houve erro, fecha o drawer
+      if (!logoutError) {
+        onClose();
+      }
+    } finally {
+      setIsLoggingOut(false);
+    }
+  };
 
   if (!isOpen) return null;
 
@@ -569,15 +644,27 @@ export function ProfileDrawer({
         </div>
 
         <div className="pt-4 mt-4 border-t border-[var(--border-card)]">
+          {logoutError && (
+            <div className="mb-3 p-3 bg-[var(--destructive)]/10 border border-[var(--destructive)]/30 rounded-2xl flex items-center justify-between gap-3">
+              <p className="text-[11px] text-[var(--destructive)] font-medium leading-tight">
+                {logoutError}
+              </p>
+              <button
+                type="button"
+                onClick={handleLogoutClick}
+                className="px-2.5 py-1 bg-[var(--destructive)] text-white text-[10px] font-bold uppercase tracking-wider rounded-lg shrink-0 hover:opacity-90 transition-opacity"
+              >
+                {t('Tentar novamente', 'Try again')}
+              </button>
+            </div>
+          )}
           <button
-            onClick={() => {
-              onLogout();
-              onClose();
-            }}
-            className="w-full flex items-center gap-4 p-4 rounded-2xl text-[var(--destructive)] hover:bg-[var(--destructive)]/10 transition-all font-bold uppercase tracking-widest text-xs"
+            onClick={handleLogoutClick}
+            disabled={isLoggingOut}
+            className="w-full flex items-center gap-4 p-4 rounded-2xl text-[var(--destructive)] hover:bg-[var(--destructive)]/10 transition-all font-bold uppercase tracking-widest text-xs disabled:opacity-50"
           >
-            <LogOut size={20} />
-            {t('Sair da Conta', 'Log Out')}
+            {isLoggingOut ? <Loader2 size={20} className="animate-spin" /> : <LogOut size={20} />}
+            {isLoggingOut ? t('Saindo...', 'Logging out...') : t('Sair da Conta', 'Log Out')}
           </button>
         </div>
       </motion.aside>

@@ -42,7 +42,7 @@ export interface SettingsViewProps {
   visualSettings?: VisualSettings;
   onChangeVisualSettings?: (settings: VisualSettings) => void;
   onSaveProfile?: (profile: any) => Promise<void>;
-  onDeleteAccount?: () => Promise<{ success: boolean; error?: string }>;
+  onDeleteAccount?: () => Promise<{ success: boolean; error?: string; status?: string }>;
   apiKey?: string;
   apiKeyError?: string | null;
   onSaveApiKey?: (key: string) => void;

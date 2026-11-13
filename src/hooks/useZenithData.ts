@@ -18,6 +18,8 @@ import { FirebaseAuthentication } from '@capacitor-firebase/authentication';
 import {
   GEMINI_API_KEY_STORAGE,
   MissingApiKeyError,
+  clearAIApiKey,
+  redactApiKey,
 } from '../lib/ai';
 import { friendlyFirebaseError } from '../lib/errorUtils';
 import { deleteAccount } from '../lib/deleteAccount';
@@ -61,6 +63,7 @@ export function useZenithData() {
   const [isAuthReady, setIsAuthReady] = useState(() => Boolean(auth.currentUser || getSyncCachedUser()));
   const [marketRate, setMarketRate] = useState<MarketRateState>(getCachedCdiRate);
   const [error, setError] = useState<string | null>(null);
+  const [logoutError, setLogoutError] = useState<string | null>(null);
 
   const [geminiApiKey, setGeminiApiKey] = useState(() => {
     try {
@@ -138,6 +141,7 @@ export function useZenithData() {
     moveToTrash,
     restoreFromTrash,
     addTransaction,
+    addTransfer,
     updateTransaction,
     confirmPendingTransaction,
     handleFileUpload,
@@ -302,27 +306,42 @@ export function useZenithData() {
   }, []);
 
   const handleLogout = useCallback(async () => {
+    setLogoutError(null);
     try {
+      // T3: signOut PRIMEIRO — se falhar, o estado visual permanece coerente com auth.currentUser
+      await signOut(auth);
+      // Só limpa estado local após signOut confirmar sucesso
+      await clearAIApiKey();
       await clearCachedUser();
       setUser(null);
       setProfile(null);
-      await signOut(auth);
-    } catch (e) {
-      console.error('Logout error:', e);
+      setGeminiApiKey('');
+    } catch (e: unknown) {
+      console.error('Erro ao fazer logout:', redactApiKey(e));
+      // NÃO limpar estado — manter usuário logado visualmente
+      setLogoutError('Não foi possível encerrar a sessão. Tente novamente.');
     }
   }, [setProfile]);
 
-  const handleDeleteAccount = useCallback(async (): Promise<{ success: boolean; error?: string }> => {
-    if (!auth.currentUser) return { success: false, error: 'Usuário não autenticado.' };
-    const result = await deleteAccount(auth.currentUser);
-    if (result.success) {
-      try { await clearCachedUser(); } catch { /* ignore */ }
-      setUser(null);
-      setProfile(null);
-      await signOut(auth);
-    }
-    return result;
-  }, [setProfile]);
+  const handleDeleteAccount = useCallback(
+    async (options?: import('../lib/accountDeletion').DeleteAccountOptions): Promise<import('../lib/deleteAccount').AccountDeletionResult> => {
+      if (!auth.currentUser) {
+        return { status: 'error', success: false, error: 'Usuário não autenticado.' };
+      }
+      const result = await deleteAccount(auth.currentUser, options);
+      if (result.status === 'success') {
+        // clearAllLocalUserData já foi chamado pelo executor; apenas sincroniza estado React
+        try { await clearCachedUser(); } catch { /* ignore */ }
+        setUser(null);
+        setProfile(null);
+        setGeminiApiKey('');
+        // signOut pode falhar silenciosamente – o Auth user já foi deletado
+        try { await signOut(auth); } catch { /* ignore */ }
+      }
+      return result;
+    },
+    [setProfile]
+  );
 
   // Cálculos de Projeção Patrimonial
   const assetsValueAt = useCallback(
@@ -451,6 +470,7 @@ export function useZenithData() {
     marketRate,
     error,
     setError,
+    logoutError,
     firestoreIssues,
     setFirestoreIssues,
     geminiApiKey,
@@ -486,6 +506,7 @@ export function useZenithData() {
     updateAsset,
     deleteAsset,
     addTransaction,
+    addTransfer,
     updateTransaction,
     confirmPendingTransaction,
     handleFileUpload,

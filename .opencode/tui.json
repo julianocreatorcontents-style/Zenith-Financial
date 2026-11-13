@@ -1,0 +1,6 @@
+{
+  "plugin": [
+    "opencode-copy-message",
+    "@slkiser/opencode-quota"
+  ]
+}

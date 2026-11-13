@@ -16,6 +16,56 @@ export const GEMINI_API_KEY_STORAGE = 'zenith_gemini_api_key';
 export const PRIMARY_MODELS = GEMINI_PRIMARY_MODELS;
 
 /**
+ * Redige qualquer ocorrência de chave de API em mensagens, URLs ou objetos antes de logar.
+ */
+export function redactApiKey(input: unknown): unknown {
+  if (typeof input === 'string') {
+    return input
+      .replace(/AIza[0-9A-Za-z-_]{35}/g, '[REDACTED_API_KEY]')
+      .replace(/key=[^&\s]+/g, 'key=[REDACTED]')
+      .replace(/apiKey[:=]\s*["']?[^"'\s]+["']?/gi, 'apiKey="[REDACTED]"');
+  }
+  if (input instanceof Error) {
+    const safeError = new Error(redactApiKey(input.message) as string);
+    safeError.name = input.name;
+    safeError.stack = input.stack ? (redactApiKey(input.stack) as string) : undefined;
+    return safeError;
+  }
+  return input;
+}
+
+/**
+ * Helper idempotente para remover a chave da API de IA de todos os armazenamentos persistentes
+ * (Preferences nativo em produção e localStorage na Web).
+ */
+export async function clearAIApiKey(): Promise<void> {
+  const keysToRemove = [GEMINI_API_KEY_STORAGE, 'zenith_ai_api_key'];
+
+  for (const k of keysToRemove) {
+    try {
+      if (typeof localStorage !== 'undefined') {
+        localStorage.removeItem(k);
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  try {
+    const { Preferences } = await import('@capacitor/preferences');
+    for (const k of keysToRemove) {
+      try {
+        await Preferences.remove({ key: k });
+      } catch {
+        // ignore
+      }
+    }
+  } catch {
+    // ignore
+  }
+}
+
+/**
  * Carrega a chave da API de IA do storage persistente (Preferences nativo em produção, localStorage na web).
  */
 export async function loadStoredApiKey(): Promise<string> {
@@ -258,6 +308,29 @@ const createTransactionTool: AIToolDeclaration = {
   },
 };
 
+const transferBetweenAssetsTool: AIToolDeclaration = {
+  name: "transferBetweenAssets",
+  description: "Transfere um valor entre duas contas/ativos do usuário (ex: da '99Pay - V' para '99Pay'). Registra uma saída na origem e uma entrada no destino sem afetar receitas ou despesas.",
+  parameters: {
+    type: "object",
+    properties: {
+      fromAssetName: {
+        type: "string",
+        description: "Nome ou ID da conta/ativo de origem (ex: '99Pay - V', 'Mercado Pago')."
+      },
+      toAssetName: {
+        type: "string",
+        description: "Nome ou ID da conta/ativo de destino (ex: '99Pay', 'Cofrinho MP')."
+      },
+      value: {
+        type: "number",
+        description: "Valor a transferir em Reais (R$). Ex: 1000.00"
+      }
+    },
+    required: ["fromAssetName", "toAssetName", "value"]
+  }
+};
+
 const deleteTransactionTool: AIToolDeclaration = {
   name: "deleteTransaction",
   description: "Exclui ou move para a lixeira um lançamento financeiro pelo ID ou buscando pelo nome/descrição mais recente.",
@@ -492,6 +565,7 @@ export const allZenithTools: AIToolDeclaration[] = [
   getGoalsTool,
   getTransactionsTool,
   createTransactionTool,
+  transferBetweenAssetsTool,
   deleteTransactionTool,
   updateTransactionTool,
   createAssetTool,
@@ -523,15 +597,17 @@ Sempre responda em português do Brasil de forma clara, amigável e prestativa.
 SUAS CAPACIDADES DE AGENTE:
 Você pode executar tarefas reais no app através de chamadas de funções (tools):
 1. 'createTransaction': Cria uma despesa ('out'), receita ('in') ou rendimento ('yield').
-2. 'deleteTransaction': Exclui/move para a lixeira um lançamento existente.
-3. 'updateTransaction': Edita valor, categoria, descrição ou data de uma transação.
-4. 'createAsset': Cria um novo ativo ou investimento na carteira do usuário.
-5. 'updateAssetBalance': Ajusta o saldo de um ativo ou conta cadastrada.
-6. 'deleteAsset': Exclui um ativo da carteira.
-7. 'updateFinancialGoals': Atualiza metas de Reserva de Emergência ou Liberdade Financeira.
-8. 'navigateToTab': Troca para uma aba do aplicativo ('Início', 'Carteira', 'Investimentos', 'Armazenamento').
+2. 'transferBetweenAssets': Move dinheiro entre duas contas/ativos do usuário.
+3. 'deleteTransaction': Exclui/move para a lixeira um lançamento existente.
+4. 'updateTransaction': Edita valor, categoria, descrição ou data de uma transação.
+5. 'createAsset': Cria um novo ativo ou investimento na carteira do usuário.
+6. 'updateAssetBalance': Ajusta o saldo de um ativo ou conta cadastrada.
+7. 'deleteAsset': Exclui um ativo da carteira.
+8. 'updateFinancialGoals': Atualiza metas de Reserva de Emergência ou Liberdade Financeira.
+9. 'navigateToTab': Troca para uma aba do aplicativo ('Início', 'Carteira', 'Investimentos', 'Armazenamento').
 
 DIRETRIZES:
+- TRANSFERÊNCIAS: Para mover dinheiro entre contas, NUNCA use \`createTransaction\`. Use SEMPRE a ferramenta \`transferBetweenAssets\`.
 - Se o usuário pedir para realizar uma ação, acione a ferramenta correspondente.
 - Se o usuário fornecer extrato ou anotação (ex: "Cofrinho 99Pay: R$ 5.011,48 - Último rendimento (5/11) R$ 2,19"):
   * Identifique o ativo e atualize com 'updateAssetBalance'.
@@ -539,6 +615,7 @@ DIRETRIZES:
   * Se houver menção a rendimento diário ou último rendimento, passe em 'dailyYield' e a data correspondente em 'yieldDate' (formato YYYY-MM-DD).
 - Se for apenas tirar dúvidas ou pedir conselhos financeiros, responda com análises precisas baseadas nos dados reais fornecidos.
 - Quando executar uma ferramenta com sucesso, dê um retorno afetuoso e claro confirmando os valores e detalhes da operação.
+- NUNCA diga que uma operação foi concluída sem antes receber o resultado real da ferramenta. Se a ferramenta retornar erro, aviso ou bloqueio, informe o usuário com transparência em vez de afirmar sucesso.
 
 
 Histórico da conversa até agora:
@@ -560,10 +637,13 @@ ${chatHistory.map(msg => `${msg.role === 'user' ? 'Usuário' : 'Zenith IA'}: ${m
     let turns = 0;
     while (response.functionCalls && response.functionCalls.length > 0 && turns < 5) {
       turns++;
+      console.log(`[Zenith IA] Turno ${turns}: ${response.functionCalls.length} ferramenta(s) solicitada(s):`, response.functionCalls.map((fc) => ({ name: fc.name, args: fc.args })));
 
       conversationContents.push({
         role: 'model',
-        parts: response.functionCalls.map((fc) => ({ functionCall: fc })),
+        parts: response.modelParts && response.modelParts.length > 0
+          ? response.modelParts
+          : response.functionCalls.map((fc) => ({ functionCall: fc })),
       });
 
       const functionResponseParts: AIMessage['parts'] = [];
@@ -571,8 +651,10 @@ ${chatHistory.map(msg => `${msg.role === 'user' ? 'Usuário' : 'Zenith IA'}: ${m
         let toolResult: unknown;
         try {
           toolResult = await onExecuteTool(call.name, call.args);
+          console.log(`[Zenith IA] Resultado de ${call.name}:`, toolResult);
         } catch (err: unknown) {
           toolResult = `Erro na execução: ${err instanceof Error ? err.message : String(err)}`;
+          console.error(`[Zenith IA] Falha ao executar ${call.name}:`, redactApiKey(err));
         }
 
         functionResponseParts.push({
@@ -604,7 +686,7 @@ ${chatHistory.map(msg => `${msg.role === 'user' ? 'Usuário' : 'Zenith IA'}: ${m
       modelUsed: response.modelUsed,
     };
   } catch (error: unknown) {
-    console.error('[Zenith IA] Erro:', error);
+    console.error('[Zenith IA] Erro:', redactApiKey(error));
     throw error;
   }
 }

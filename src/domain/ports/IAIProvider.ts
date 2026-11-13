@@ -28,6 +28,12 @@ export interface AIContentPart {
   inlineData?: AIInlineData;
   functionCall?: AIFunctionCall;
   functionResponse?: AIFunctionResponse;
+  /**
+   * Assinatura opaca do raciocínio do modelo, devolvida pela API.
+   * Deve ser reenviada junto da parte correspondente em turnos seguintes
+   * (exigido por modelos Gemini 3 com function calling).
+   */
+  thoughtSignature?: string;
 }
 
 export interface AIMessage {
@@ -68,6 +74,12 @@ export interface AIGenerateResult {
   text: string;
   modelUsed: string;
   functionCalls?: AIFunctionCall[];
+  /**
+   * Partes originais retornadas pelo modelo, incluindo `thoughtSignature`.
+   * Devem ser reenviadas como turno `model` antes dos `functionResponse`
+   * para preservar o raciocínio exigido pelo provedor.
+   */
+  modelParts?: AIContentPart[];
   rawCandidateContent?: unknown;
 }
 

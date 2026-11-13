@@ -5,17 +5,20 @@ import { chatWithZenithAI, getAiErrorMessage } from '../../lib/ai';
 import type { Asset, Transaction } from '../../types/app';
 import type { FinancialGoalTargets } from '../../lib/finance';
 import { useAITools } from '../../hooks/useAITools';
+import type { AddTransferParams } from '../../hooks/useAITools';
 
 export interface QuickAIChatProps {
   isOpen: boolean;
   onClose: () => void;
   getGeminiApiKey: () => string;
+  userId?: string;
   transactions?: Transaction[];
   assets?: Asset[];
   goals?: FinancialGoalTargets | Record<string, unknown>;
   language?: string;
   onNavigateFullAI: (initialPrompt?: string) => void;
   onAddTransaction?: (data: Omit<Transaction, 'id' | 'uid' | 'createdAt'> & { uid?: string; applied?: boolean }) => Promise<unknown>;
+  onAddTransfer?: (params: AddTransferParams) => Promise<unknown>;
   onUpdateTransaction?: (selectedTx: Transaction, data: Partial<Transaction>) => Promise<unknown>;
   onDeleteTransaction?: (item: Transaction) => Promise<unknown>;
   onCreateAsset?: (data: Omit<Asset, 'id' | 'uid' | 'createdAt'>) => Promise<unknown>;
@@ -27,12 +30,14 @@ export function QuickAIChat({
   isOpen,
   onClose,
   getGeminiApiKey,
+  userId,
   transactions = [],
   assets = [],
   goals,
   language = 'pt-BR',
   onNavigateFullAI,
   onAddTransaction,
+  onAddTransfer,
   onUpdateTransaction,
   onDeleteTransaction,
   onCreateAsset,
@@ -52,8 +57,10 @@ export function QuickAIChat({
     transactions,
     assets,
     goals,
+    userId,
     setActionFeedback: () => {},
     onAddTransaction: onAddTransaction ?? (() => Promise.resolve()),
+    onAddTransfer,
     onUpdateTransaction,
     onDeleteTransaction,
     onCreateAsset,

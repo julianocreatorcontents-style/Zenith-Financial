@@ -8,6 +8,7 @@ import { Type } from '@google/genai';
 import type {
   IAIProvider,
   AIMessage,
+  AIContentPart,
   AIGenerateOptions,
   AIGenerateResult,
   AIToolDeclaration,
@@ -152,13 +153,41 @@ export class GeminiProvider implements IAIProvider {
           }
         }
 
-        const candidateParts = response.candidates?.[0]?.content?.parts as Array<{ text?: string }> | undefined;
+        const candidateParts = response.candidates?.[0]?.content?.parts as
+          | Array<{
+              text?: string;
+              thought?: boolean;
+              thoughtSignature?: string;
+              functionCall?: { id?: string; name?: string; args?: Record<string, unknown> };
+            }>
+          | undefined;
+
+        const modelParts: AIContentPart[] = [];
+        for (const p of candidateParts ?? []) {
+          if (p.functionCall) {
+            modelParts.push({
+              functionCall: {
+                ...(p.functionCall.id ? { id: p.functionCall.id } : {}),
+                name: p.functionCall.name || '',
+                args: p.functionCall.args || {},
+              },
+              ...(p.thoughtSignature ? { thoughtSignature: p.thoughtSignature } : {}),
+            });
+          } else if (p.text !== undefined) {
+            modelParts.push({
+              text: p.text,
+              ...(p.thoughtSignature ? { thoughtSignature: p.thoughtSignature } : {}),
+            });
+          }
+        }
+
         const text = response.text || candidateParts?.find((p) => p.text)?.text || '';
 
         return {
           text,
           modelUsed: model,
           functionCalls: functionCalls.length > 0 ? functionCalls : undefined,
+          modelParts: modelParts.length > 0 ? modelParts : undefined,
           rawCandidateContent: response.candidates?.[0]?.content,
         };
       } catch (err: unknown) {
@@ -184,11 +213,12 @@ export class GeminiProvider implements IAIProvider {
   private mapMessagesToGemini(messages: AIMessage[]) {
     return messages.map((m) => {
       const parts = m.parts.map((p) => {
+        const signature = p.thoughtSignature ? { thoughtSignature: p.thoughtSignature } : {};
         if (p.text !== undefined) {
-          return { text: p.text };
+          return { text: p.text, ...signature };
         }
         if (p.inlineData) {
-          return { inlineData: p.inlineData };
+          return { inlineData: p.inlineData, ...signature };
         }
         if (p.functionCall) {
           return {
@@ -197,6 +227,7 @@ export class GeminiProvider implements IAIProvider {
               args: p.functionCall.args,
               ...(p.functionCall.id ? { id: p.functionCall.id } : {}),
             },
+            ...signature,
           };
         }
         if (p.functionResponse) {
@@ -206,6 +237,7 @@ export class GeminiProvider implements IAIProvider {
               response: { result: p.functionResponse.response },
               ...(p.functionResponse.id ? { id: p.functionResponse.id } : {}),
             },
+            ...signature,
           };
         }
         return {};

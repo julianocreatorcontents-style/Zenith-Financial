@@ -1,13 +1,25 @@
 import { useCallback } from 'react';
 import type { Transaction, Asset } from '../types/app';
-import { parseTransactionAmount } from '../lib/finance';
+import { parseTransactionAmount, buildTransferLegs, createTransferId } from '../lib/finance';
 import type { FinancialGoalTargets } from '../lib/finance';
+import { calculateTransferBalanceUpdate } from '../lib/adapters/assetBalance';
+
+export interface AddTransferParams {
+  fromAsset: Asset;
+  toAsset: Asset;
+  value: number;
+  date?: string;
+  label?: string;
+  transferId?: string;
+}
 
 export interface UseAIToolsParams {
   assets: Asset[];
   transactions: Transaction[];
   goals?: FinancialGoalTargets | Record<string, unknown>;
+  userId?: string;
   onAddTransaction: (data: Omit<Transaction, 'id' | 'uid' | 'createdAt'> & { uid?: string; applied?: boolean }) => Promise<unknown>;
+  onAddTransfer?: (params: AddTransferParams) => Promise<unknown>;
   onUpdateTransaction?: (selectedTx: Transaction, data: Partial<Transaction>) => Promise<unknown>;
   onDeleteTransaction?: (item: Transaction) => Promise<unknown>;
   onCreateAsset?: (data: Omit<Asset, 'id' | 'uid' | 'createdAt'>) => Promise<unknown>;
@@ -25,7 +37,9 @@ export function useAITools({
   assets,
   transactions,
   goals,
+  userId,
   onAddTransaction,
+  onAddTransfer,
   onUpdateTransaction,
   onDeleteTransaction,
   onCreateAsset,
@@ -78,7 +92,7 @@ export function useAITools({
   }, [assets]);
 
   const executeTool = useCallback(async (name: string, args: Record<string, unknown>): Promise<string> => {
-    console.log('[Zenith IA] Tool call requested:', name, args);
+    console.log(`[Zenith IA] Executando ferramenta: ${name} com args:`, JSON.stringify(args));
 
     // --- 1. FERRAMENTAS DE LEITURA ---
     if (name === 'get_balances') {
@@ -93,14 +107,7 @@ export function useAITools({
       return `Fonte: banco Zenith. Transacoes recentes: ${JSON.stringify(recent)}`;
     }
 
-    // --- 2. TRAVA DE SEGURANCA (ESCRITA) ---
-    if (['createTransaction', 'updateAssetBalance', 'deleteTransaction', 'updateFinancialGoals', 'updateTransaction'].includes(name)) {
-      if (!args.confirmation) {
-        return `Aviso: Acao bloqueada. Voce deve perguntar ao usuario se ele confirma a operacao antes de executar.`;
-      }
-    }
-
-    // --- 3. EXECUCAO REAL ---
+    // --- 2. EXECUCAO REAL ---
     if (name === 'createTransaction') {
       try {
         const targetAsset = matchAsset(args.assetName as string | undefined);
@@ -110,7 +117,7 @@ export function useAITools({
         const label = String(args.label || 'Sem descrição');
         const type = (args.type as 'in' | 'out' | 'yield' | undefined) || 'out';
 
-        await onAddTransaction({
+        const created = await onAddTransaction({
           label,
           value: val,
           type,
@@ -118,13 +125,76 @@ export function useAITools({
           categoria_primaria: (args.category as string | undefined) || 'Outros',
           assetId: targetAsset ? targetAsset.id : undefined,
           applied: true,
-          uid: '',
+          status: 'Confirmado',
+          uid: userId ?? '',
         });
 
+        const createdId = (created as { id?: string } | undefined)?.id;
+        console.log(`[Zenith IA] createTransaction concluído. id=${createdId ?? 'desconhecido'}`, { label, val, type, txDate });
+
         setActionFeedback(`Lançamento criado: ${label} (${formatBRL(val)})`);
-        return `Transação "${label}" de ${formatBRL(val)} (${type === 'in' ? 'Receita' : 'Despesa'}) cadastrada com sucesso${targetAsset ? ` associada à conta ${targetAsset.name}` : ''}.`;
+        return `Transação "${label}" de ${formatBRL(val)} (${type === 'in' ? 'Receita' : type === 'yield' ? 'Rendimento' : 'Despesa'}) cadastrada com sucesso${targetAsset ? ` associada à conta ${targetAsset.name}` : ''}${createdId ? ` (id: ${createdId})` : ''}.`;
       } catch (e: unknown) {
         return `Erro ao criar transação: ${(e as Error).message}`;
+      }
+    }
+
+    if (name === 'transferBetweenAssets') {
+      try {
+        const fromAsset = matchAsset(args.fromAssetName as string | undefined);
+        const toAsset = matchAsset(args.toAssetName as string | undefined);
+
+        if (!fromAsset) {
+          return `Conta de origem "${String(args.fromAssetName || '')}" não encontrada na carteira.`;
+        }
+        if (!toAsset) {
+          return `Conta de destino "${String(args.toAssetName || '')}" não encontrada na carteira.`;
+        }
+        if (fromAsset.id === toAsset.id) {
+          return 'A conta de origem e a de destino são a mesma. Informe duas contas diferentes.';
+        }
+
+        const value = parseTransactionAmount((args.value as number | string | undefined) ?? 0);
+        if (value <= 0) {
+          return 'O valor da transferência deve ser maior que zero.';
+        }
+
+        const nowStr = new Date().toISOString().split('T')[0];
+        const transferId = createTransferId();
+        const label = `Transferência ${fromAsset.name} → ${toAsset.name}`;
+
+        if (onAddTransfer) {
+          // Caminho atômico: par de lançamentos + saldos em um único batch.
+          await onAddTransfer({
+            fromAsset,
+            toAsset,
+            value,
+            date: nowStr,
+            label,
+            transferId,
+          });
+        } else {
+          // Fallback para contextos sem o agregado de transferência.
+          const [outLeg, inLeg] = buildTransferLegs({
+            transferId,
+            fromAsset,
+            toAsset,
+            value,
+            date: nowStr,
+            label,
+          });
+          await onAddTransaction({ ...outLeg, applied: true, uid: userId ?? '' });
+          await onAddTransaction({ ...inLeg, applied: true, uid: userId ?? '' });
+          if (onUpdateAsset) {
+            await onUpdateAsset(fromAsset.id, calculateTransferBalanceUpdate(fromAsset, value, false));
+            await onUpdateAsset(toAsset.id, calculateTransferBalanceUpdate(toAsset, value, true));
+          }
+        }
+
+        setActionFeedback(`Transferência: ${formatBRL(value)} de ${fromAsset.name} para ${toAsset.name}`);
+        return `Transferência de ${formatBRL(value)} de "${fromAsset.name}" para "${toAsset.name}" registrada com sucesso (transferência: ${transferId}). Os saldos das duas contas foram atualizados e os lançamentos são neutralizados nas entradas e saídas.`;
+      } catch (e: unknown) {
+        return `Erro ao transferir entre ativos: ${(e as Error).message}`;
       }
     }
 
@@ -263,7 +333,7 @@ export function useAITools({
                 date: updateDate,
                 categoria_primaria: 'Rendimentos',
                 applied: true,
-                uid: '',
+                uid: userId ?? '',
               });
             }
 
@@ -295,7 +365,7 @@ export function useAITools({
             categoria_primaria: 'Rendimentos',
             assetId: targetAsset.id,
             applied: true,
-            uid: '',
+            uid: userId ?? '',
           });
         }
 
@@ -345,7 +415,7 @@ export function useAITools({
                   date: updateDate,
                   categoria_primaria: 'Rendimentos',
                   applied: true,
-                  uid: '',
+                  uid: userId ?? '',
                 });
               }
 
@@ -375,7 +445,7 @@ export function useAITools({
                 categoria_primaria: 'Rendimentos',
                 assetId: targetAsset.id,
                 applied: true,
-                uid: '',
+                uid: userId ?? '',
               });
             }
 
@@ -469,8 +539,10 @@ export function useAITools({
     assets,
     transactions,
     goals,
+    userId,
     matchAsset,
     onAddTransaction,
+    onAddTransfer,
     onUpdateTransaction,
     onDeleteTransaction,
     onCreateAsset,

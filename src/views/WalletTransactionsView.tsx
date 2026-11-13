@@ -19,9 +19,12 @@ import {
   isIncomeTransaction,
   isYieldTransaction,
   isTransferTransaction,
+  groupTransactionsForWallet,
+  type WalletEntry,
 } from '../lib/finance';
 import Card from '../components/ui/Card';
 import Modal from '../components/ui/Modal';
+import { TransferWalletRow } from '../components/wallet/TransferWalletRow';
 import type { Transaction, Asset } from '../types/app';
 import { YieldReconciliationModal } from '../components/dashboard/YieldReconciliationModal';
 import { FinancialCalendarModal } from '../components/modals/FinancialCalendarModal';
@@ -178,18 +181,22 @@ export function WalletTransactionsView({
     return tx.categoria_primaria || tx.category || 'Outros';
   };
 
-  const allTransactions = useMemo(() => {
-    return [...transactions].sort((a, b) => {
+  const getEntryDate = (entry: WalletEntry<Transaction>): Date | null =>
+    entry.kind === 'transfer' ? entry.date : getTransactionDate(entry.transaction);
+
+  const allEntries = useMemo(() => {
+    const sorted = [...transactions].sort((a, b) => {
       const da = getTransactionDate(a)?.getTime() || 0;
       const db = getTransactionDate(b)?.getTime() || 0;
       return db - da;
     });
+    return groupTransactionsForWallet(sorted);
   }, [transactions]);
 
-  const periodFiltered = useMemo(() => {
-    return allTransactions.filter((tx) => {
+  const periodFilteredEntries = useMemo(() => {
+    return allEntries.filter((entry) => {
       if (period === 'all') return true;
-      const date = getTransactionDate(tx);
+      const date = getEntryDate(entry);
       if (!date) return false;
       if (period === 'current') {
         return date.getMonth() === currentMonth && date.getFullYear() === currentYear;
@@ -199,42 +206,57 @@ export function WalletTransactionsView({
         date.getFullYear() === previousMonthDate.getFullYear()
       );
     });
-  }, [allTransactions, period, currentMonth, currentYear, previousMonthDate]);
+  }, [allEntries, period, currentMonth, currentYear, previousMonthDate]);
 
   const periodTotals = useMemo(() => {
-    return periodFiltered
-      .filter(
-        (tx) =>
-          tx.applied !== false &&
-          tx.status !== 'Futuro' &&
-          String(tx.status) !== 'Agendado'
-      )
-      .reduce(
-        (acc, tx) => {
-          const val = parseTransactionAmount(tx.value);
-          if (isTransferTransaction(tx)) return acc;
-          if (isExpenseTransaction(tx)) {
-            acc.expenses += val;
-          } else if (isIncomeTransaction(tx) || isYieldTransaction(tx)) {
-            acc.income += val;
-          }
+    return periodFilteredEntries.reduce(
+      (acc, entry) => {
+        if (entry.kind === 'transfer') return acc;
+        const tx = entry.transaction;
+        if (
+          tx.applied === false ||
+          tx.status === 'Futuro' ||
+          String(tx.status) === 'Agendado' ||
+          isTransferTransaction(tx)
+        ) {
           return acc;
-        },
-        { income: 0, expenses: 0 }
-      );
-  }, [periodFiltered]);
+        }
+        const val = parseTransactionAmount(tx.value);
+        if (isExpenseTransaction(tx)) {
+          acc.expenses += val;
+        } else if (isIncomeTransaction(tx) || isYieldTransaction(tx)) {
+          acc.income += val;
+        }
+        return acc;
+      },
+      { income: 0, expenses: 0 }
+    );
+  }, [periodFilteredEntries]);
 
   const periodBalance = periodTotals.income - periodTotals.expenses;
 
-  const filteredTransactions = useMemo(() => {
-    if (!searchTerm.trim()) return periodFiltered;
+  const filteredEntries = useMemo(() => {
+    if (!searchTerm.trim()) return periodFilteredEntries;
     const term = searchTerm.toLowerCase().trim();
-    return periodFiltered.filter((tx) => {
-      const labelMatch = tx.label?.toLowerCase().includes(term);
-      const catMatch = getCategory(tx).toLowerCase().includes(term);
-      return labelMatch || catMatch;
+    return periodFilteredEntries.filter((entry) => {
+      if (entry.kind === 'transfer') {
+        const accountNames = [entry.fromAssetId, entry.toAssetId]
+          .map((assetId) => assets?.find((asset) => asset.id === assetId)?.name || '')
+          .join(' ');
+        const legMatch = entry.legs.some(
+          (tx) =>
+            tx.label?.toLowerCase().includes(term) ||
+            getCategory(tx).toLowerCase().includes(term)
+        );
+        return legMatch || accountNames.toLowerCase().includes(term);
+      }
+      const tx = entry.transaction;
+      return (
+        tx.label?.toLowerCase().includes(term) ||
+        getCategory(tx).toLowerCase().includes(term)
+      );
     });
-  }, [periodFiltered, searchTerm]);
+  }, [periodFilteredEntries, searchTerm, assets]);
 
   const periodOptions = [
     { id: 'current' as const, label: t('Mês Atual', 'Current Month') },
@@ -361,7 +383,7 @@ export function WalletTransactionsView({
               {t('Histórico de Transações', 'Transaction History')}
             </h2>
             <span className="text-[10px] font-mono text-[var(--text-muted)]">
-              {filteredTransactions.length} {t('itens', 'items')}
+              {filteredEntries.length} {t('itens', 'items')}
             </span>
           </div>
           <div className="flex gap-1 p-1 bg-[var(--bg-card)] border border-[var(--border-card)] rounded-2xl w-full sm:w-auto">
@@ -403,7 +425,7 @@ export function WalletTransactionsView({
         </div>
 
         <div className="space-y-3">
-          {filteredTransactions.length === 0 ? (
+          {filteredEntries.length === 0 ? (
             <div className="py-16 text-center border border-dashed border-[var(--border-card)] rounded-[32px] p-6">
               <History size={32} className="mx-auto text-[var(--text-muted)] mb-3 opacity-30" />
               <p className="text-xs font-bold uppercase tracking-widest text-[var(--text-muted)] mb-3">
@@ -429,7 +451,20 @@ export function WalletTransactionsView({
               ) : null}
             </div>
           ) : (
-            filteredTransactions.map((tx, idx) => {
+            filteredEntries.map((entry, idx) => {
+              if (entry.kind === 'transfer') {
+                return (
+                  <TransferWalletRow
+                    key={`${entry.key}-${idx}`}
+                    entry={entry}
+                    assets={assets}
+                    language={language}
+                    onEdit={onEdit}
+                    onDelete={(tx) => setTransactionToDelete(tx)}
+                  />
+                );
+              }
+              const tx = entry.transaction;
               const isTransfer = isTransferTransaction(tx);
               const isIncome = !isTransfer && !isExpenseTransaction(tx);
               const isYield = isYieldTransaction(tx);
@@ -539,19 +574,30 @@ export function WalletTransactionsView({
         />
       )}
 
-      {transactionToDelete && (
+      {transactionToDelete && (() => {
+        const deletingTransfer = isTransferTransaction(transactionToDelete);
+        return (
         <Modal
           open={Boolean(transactionToDelete)}
           onClose={() => setTransactionToDelete(null)}
-          title={t('Excluir Transação', 'Delete Transaction')}
+          title={
+            deletingTransfer
+              ? t('Excluir Transferência', 'Delete Transfer')
+              : t('Excluir Transação', 'Delete Transaction')
+          }
           className="max-w-sm"
         >
           <div className="space-y-4 pt-1">
             <p className="text-xs text-[var(--text-secondary)] leading-relaxed">
-              {t(
-                `Deseja realmente mover a transação "${transactionToDelete.label || 'Transação'}" para a lixeira?`,
-                `Are you sure you want to move the transaction "${transactionToDelete.label || 'Transaction'}" to trash?`
-              )}
+              {deletingTransfer
+                ? t(
+                    `Deseja mover a transferência "${transactionToDelete.label || 'Transferência'}" para a lixeira? As duas pernas (origem e destino) serão removidas e os saldos revertidos.`,
+                    `Move the transfer "${transactionToDelete.label || 'Transfer'}" to trash? Both legs (origin and destination) will be removed and balances reverted.`
+                  )
+                : t(
+                    `Deseja realmente mover a transação "${transactionToDelete.label || 'Transação'}" para a lixeira?`,
+                    `Are you sure you want to move the transaction "${transactionToDelete.label || 'Transaction'}" to trash?`
+                  )}
             </p>
             <div className="flex gap-2 justify-end pt-3">
               <button
@@ -574,7 +620,8 @@ export function WalletTransactionsView({
             </div>
           </div>
         </Modal>
-      )}
+        );
+      })()}
     </div>
   );
 }

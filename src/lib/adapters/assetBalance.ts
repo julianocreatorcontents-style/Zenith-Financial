@@ -64,6 +64,49 @@ export function calculateAssetBalanceUpdate(
   return update;
 }
 
+export interface TransferAssetSnapshot extends AssetBalanceSnapshot {
+  currentValue?: number | null;
+}
+
+export interface TransferAssetUpdate {
+  value: number;
+  manualBalance: number;
+  manualBalanceDate: string;
+  valorInvestido: number;
+}
+
+const formatLocalDate = (date: Date): string => {
+  const pad = (value: number) => String(value).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+};
+
+/**
+ * Calcula o novo saldo de um ativo em uma transferência entre contas.
+ *
+ * Usa `currentValue` (saldo enriquecido com rendimento) como base, reancora
+ * `manualBalanceDate` em hoje e move o principal na mesma proporção. Assim o
+ * rendimento acumulado de cada conta é preservado e o patrimônio total
+ * permanece neutro (um saldo sobe, o outro desce pelo mesmo valor).
+ */
+export function calculateTransferBalanceUpdate(
+  asset: TransferAssetSnapshot,
+  amount: number,
+  isAddition: boolean,
+  now: Date = new Date(),
+): TransferAssetUpdate {
+  const currentValue = Number(asset.currentValue ?? asset.manualBalance ?? asset.value ?? 0) || 0;
+  const principal = Number(asset.valorInvestido ?? currentValue) || currentValue;
+  const delta = isAddition ? amount : -amount;
+  const nextBalance = roundCurrency(currentValue + delta);
+
+  return {
+    value: nextBalance,
+    manualBalance: nextBalance,
+    manualBalanceDate: formatLocalDate(now),
+    valorInvestido: Math.max(0, roundCurrency(principal + delta)),
+  };
+}
+
 export type AssetDeltaMap = Map<string, number>;
 
 export function addAssetDelta(deltas: AssetDeltaMap, assetId: string | undefined, delta: number) {
