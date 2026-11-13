@@ -13,7 +13,8 @@
     "typecheck:domain": "tsc -p tsconfig.domain.json --noEmit",
     "build:android": "vite build && cap sync android",
     "apk:debug": "vite build && cap sync android && cd android && ./gradlew assembleDebug",
-    "apk:open": "cap open android"
+    "apk:open": "cap open android",
+    "test:rules": "firebase emulators:exec --only firestore \"vitest run --config vitest.rules.config.ts\" --project=demo-zenith"
   },
   "dependencies": {
     "@capacitor-community/speech-recognition": "^7.0.1",
@@ -26,6 +27,7 @@
     "@tailwindcss/vite": "^4.1.14",
     "@vitejs/plugin-react": "^5.0.4",
     "firebase": "^12.11.0",
+    "firebase-admin": "^14.5.1",
     "lucide-react": "^0.546.0",
     "motion": "^12.23.24",
     "react": "^19.0.0",
@@ -38,6 +40,7 @@
   "devDependencies": {
     "@capacitor/assets": "^4.0.0",
     "@capacitor/cli": "^8.6.0",
+    "@firebase/rules-unit-testing": "^5.0.2",
     "@types/node": "^22.14.0",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",

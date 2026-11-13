@@ -18,6 +18,14 @@ service cloud.firestore {
       return isAuthenticated() && request.resource.data.uid == request.auth.uid;
     }
 
+    // Sprint 3 — T3.4: uid e createdAt são imutáveis em updates.
+    // `diff()` só considera campos efetivamente alterados, então documentos
+    // legados sem `createdAt` continuam atualizáveis.
+    function immutableFieldsUnchanged() {
+      return !request.resource.data.diff(resource.data).affectedKeys()
+        .hasAny(['uid', 'createdAt']);
+    }
+
     // Perfil do usuário (id do documento = uid)
     match /users/{userId} {
       allow read, write: if isOwner(userId);
@@ -35,11 +43,27 @@ service cloud.firestore {
       allow update: if isDocOwner() && isWritingOwnData();
     }
 
+    // Sprint 4a — R2/T3.3 (decisão D3 = A): conteúdo mínimo de uma transação.
+    // Sem isto, create/update aceitavam type desconhecido, value negativo e label ausente.
+    // Não valida `assetId` de propósito: o schema de aplicação exige assetId para in/out,
+    // mas docs legados de importação/DDA não o possuem — endurecer aqui quebraria legado
+    // sem fechar nenhum buraco de integridade real.
+    function isValidTransactionPayload() {
+      return request.resource.data.keys().hasAll(['uid', 'label', 'value', 'type'])
+        && request.resource.data.label is string
+        && request.resource.data.label.size() > 0
+        && request.resource.data.value is number
+        && request.resource.data.value > 0
+        && request.resource.data.type in ['in', 'out', 'yield'];
+    }
+
     // Transações financeiras
     match /transactions/{transactionId} {
       allow read, delete: if isDocOwner();
-      allow create: if isWritingOwnData();
-      allow update: if isDocOwner() && isWritingOwnData();
+      allow create: if isWritingOwnData() && isValidTransactionPayload();
+      // Sprint 4a — O2: isWritingOwnData() é redundante aqui. isDocOwner() garante que
+      // o doc pertence ao usuário e immutableFieldsUnchanged() impede trocar o uid.
+      allow update: if isDocOwner() && isValidTransactionPayload() && immutableFieldsUnchanged();
     }
 
     // DDAs / Boletos eletrônicos

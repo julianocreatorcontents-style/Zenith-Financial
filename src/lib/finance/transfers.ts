@@ -7,6 +7,7 @@
  */
 
 import { parseTransactionAmount, parseTransactionDate } from './parsers';
+import { roundCurrency } from './formatters';
 import { isTransferTransaction, type TransactionInput } from './calculators';
 
 export type TransferLegRole = 'out' | 'in';
@@ -60,8 +61,6 @@ export interface SingleEntry<T> {
 }
 
 export type WalletEntry<T> = TransferGroup<T> | SingleEntry<T>;
-
-const roundCurrency = (value: number): number => Math.round(value * 100) / 100;
 
 export function createTransferId(): string {
   const globalCrypto = typeof globalThis !== 'undefined' ? globalThis.crypto : undefined;

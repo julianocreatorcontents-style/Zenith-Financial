@@ -119,7 +119,19 @@ export function parseSpreadsheetStatus(value: unknown): string | undefined {
   return String(value ?? '').trim();
 }
 
-export function mapSpreadsheetRow(row: Record<string, unknown>) {
+/**
+ * Converte uma linha bruta de planilha no payload de importação.
+ *
+ * Sprint 4a — R6 (decisão D2 = D): `assetId` NÃO é exigido — a UI de importação é um
+ * `input type="file"` nativo disparado por `useAppNavigation.handleUniversalIngestion`,
+ * fora do escopo autorizado do sprint. O parâmetro opcional `options.assetId` é o
+ * ponto de integração preparado para o débito R6-UI: quando a UI passar a perguntar a
+ * conta de destino, todas as linhas herdam o mesmo `assetId` sem mexer neste parser.
+ */
+export function mapSpreadsheetRow(
+  row: Record<string, unknown>,
+  options: { assetId?: string } = {}
+) {
   const mapped: Record<string, unknown> = {};
 
   Object.entries(row).forEach(([key, value]) => {
@@ -134,12 +146,14 @@ export function mapSpreadsheetRow(row: Record<string, unknown>) {
   };
 
   const amount = parseSpreadsheetAmount(mapped.value);
+  const assetId = options.assetId?.trim();
 
   return {
     label: String(mapped.label ?? '').trim(),
     value: Math.abs(amount),
     type: parseSpreadsheetType(mapped.type),
     date: parseSpreadsheetDate(mapped.date),
+    assetId: assetId || undefined,
     categoria_primaria: text(mapped.category),
     etiqueta_personalizada: text(mapped.tag),
     metodo_origem: text(mapped.method),

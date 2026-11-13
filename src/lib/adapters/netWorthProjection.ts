@@ -6,7 +6,12 @@ import { IofPolicy } from '../../domain/tax/IofPolicy';
 import { Money } from '../../domain/money/Money';
 import type { Investment } from '../../domain/investment/Investment';
 import type { YieldPolicy } from '../../domain/yield/YieldPolicy';
-import { calculateNetWorth, calculateCashFlowData, parseTransactionAmount } from '../finance';
+import {
+  calculateNetWorth,
+  calculateCashFlowData,
+  parseTransactionAmount,
+  roundCurrency,
+} from '../finance';
 
 export const DEFAULT_CDI_ANNUAL_PERCENT = 13.65;
 
@@ -47,8 +52,6 @@ export interface NetWorthProjectionInput {
   monthlyContribution?: number;
   includeCashFlow?: boolean;
 }
-
-const roundCurrency = (value: number) => Math.round(value * 100) / 100;
 
 const startOfLocalDay = (date: Date) =>
   new Date(date.getFullYear(), date.getMonth(), date.getDate());

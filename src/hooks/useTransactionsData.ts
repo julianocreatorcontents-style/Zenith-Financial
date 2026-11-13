@@ -19,6 +19,7 @@ import { z } from 'zod';
 import {
   parseTransactionDate,
   parseTransactionAmount,
+  calculatePartialBalances,
   isExpenseTransaction,
   isIncomeTransaction,
   isYieldTransaction,
@@ -32,12 +33,107 @@ import { calculateAssetBalanceUpdate, calculateTransferBalanceUpdate } from '../
 import { parseAssetDate } from '../lib/adapters/assetYieldService';
 import { mapSpreadsheetRow } from '../lib/spreadsheetParser';
 import { extractDocument, getAiErrorMessage, GEMINI_API_KEY_STORAGE } from '../lib/ai';
-import { TransactionSchema } from '../lib/validations';
+import {
+  TransactionSchema,
+  ValidationError,
+  assertValidTransactionPayloads,
+  validateTransactionForWrite,
+  validateTransactionImportRow,
+  getTransactionIssues,
+} from '../lib/validations';
 import { useTransactionsCron } from './useTransactionsCron';
 import type { Asset, Transaction } from '../types/app';
 import type { ZenithUser } from './useZenithData';
 
 export type AssetDeltaMap = Map<string, number>;
+
+/**
+ * Sprint 4a — R5 (decisão A): issues de integridade de um doc que vai ser restaurado.
+ *
+ * Retorna `null` quando não há nada a avisar:
+ * - coleção diferente de `transactions` (não há schema de conteúdo para ela aqui);
+ * - doc em conformidade com o TransactionSchema.
+ *
+ * Nunca lança e nunca bloqueia: `restoreFromTrash` é recuperação, não criação.
+ */
+export function getRestoreIntegrityIssues(
+  originalCollection: string | undefined,
+  data: Record<string, unknown> | undefined
+): { path: (string | number | symbol)[]; message: string }[] | null {
+  if (originalCollection !== 'transactions' || !data) return null;
+  return getTransactionIssues(data);
+}
+
+/** Sprint 3 — T1 (B1): limite de writes por batch do Firestore. */
+export const BALANCE_BATCH_CHUNK_SIZE = 500;
+
+export interface ChunkCommitResult {
+  ok: boolean;
+  totalChunks: number;
+  appliedChunks: number[];
+  failedChunk: number | null;
+  error?: unknown;
+}
+
+export interface ChunkCommitOptions<T> {
+  chunkSize?: number;
+  /** Tentativas extras após a primeira falha de um lote. Default: 1. */
+  retries?: number;
+  /**
+   * Aplica um lote. Precisa ser re-executável com o mesmo slice (idempotente),
+   * pois pode ser chamado mais de uma vez em caso de falha.
+   */
+  apply: (slice: T[], chunkIndex: number) => Promise<void>;
+  onChunkCommitted?: (chunkIndex: number, totalChunks: number, size: number) => void;
+}
+
+/**
+ * Sprint 3 — T1 (B1): divide os updates em lotes independentes de até `chunkSize`
+ * e commita sequencialmente, com retry por lote.
+ *
+ * Semântica de falha (decisão A): lotes anteriores permanecem aplicados; o lote que
+ * falhou e os seguintes ficam pendentes. Como `apply` é idempotente, re-executar o
+ * recálculo inteiro converge para o estado correto.
+ *
+ * @returns estado final com a lista de lotes aplicados (para diagnóstico).
+ */
+export async function commitInChunks<T>(
+  items: T[],
+  options: ChunkCommitOptions<T>
+): Promise<ChunkCommitResult> {
+  const chunkSize = Math.max(1, Math.floor(options.chunkSize ?? BALANCE_BATCH_CHUNK_SIZE));
+  const retries = Math.max(0, Math.floor(options.retries ?? 1));
+  const totalChunks = Math.ceil(items.length / chunkSize);
+  const appliedChunks: number[] = [];
+
+  for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex++) {
+    const slice = items.slice(chunkIndex * chunkSize, (chunkIndex + 1) * chunkSize);
+    let lastError: unknown;
+    let applied = false;
+
+    for (let attempt = 0; attempt <= retries; attempt++) {
+      try {
+        await options.apply(slice, chunkIndex);
+        applied = true;
+        break;
+      } catch (error) {
+        lastError = error;
+      }
+    }
+
+    if (!applied) {
+      return { ok: false, totalChunks, appliedChunks, failedChunk: chunkIndex, error: lastError };
+    }
+
+    appliedChunks.push(chunkIndex);
+    options.onChunkCommitted?.(chunkIndex, totalChunks, slice.length);
+  }
+
+  return { ok: true, totalChunks, appliedChunks, failedChunk: null };
+}
+
+export type BalanceRecalculationResult = ChunkCommitResult;
+
 
 export function addAssetDelta(deltas: AssetDeltaMap, assetId: string | undefined, delta: number) {
   if (!assetId || !Number.isFinite(delta) || delta === 0) return;
@@ -146,32 +242,107 @@ export function useTransactionsData({ user, rawAssets, setError }: UseTransactio
     return unsub;
   }, [user]);
 
-  // Recálculo atômico de saldos parciais
-  const recalculateBalances = useCallback(async (userId: string) => {
-    try {
-      const q = query(collection(db, 'transactions'), where('uid', '==', userId), orderBy('date', 'asc'));
-      const snap = await getDocs(q);
-      let currentBal = 0;
-      const batch = writeBatch(db);
-      snap.docs.forEach((d) => {
-        const tx = d.data() as Transaction;
-        const val = parseTransactionAmount(tx.value);
-        if (isIncomeTransaction(tx) || isYieldTransaction(tx)) {
-          currentBal += val;
-        } else if (isExpenseTransaction(tx)) {
-          currentBal -= val;
+  /**
+   * Sprint 3 — T1 (B1): Recálculo resiliente a histórico >500 transações.
+   *
+   * Decisão (A) — Chunking idempotente:
+   *   1. Calcula TODOS os novos partialBalance em memória (puro, determinístico).
+   *   2. Fatia em lotes de até BALANCE_BATCH_CHUNK_SIZE (500) e commita sequencialmente.
+   *   3. Cada lote é independente e re-executável → idempotente por design.
+   *   4. Retry interno de 1x por lote. Falha total devolve a lista de lotes aplicados.
+   *
+   * Não-regressão de atomicidade: a escrita da transação e o recálculo já eram
+   * batches SEPARADOS antes deste sprint (a transação é commitada e só depois
+   * recalculateBalances é chamado). O chunking não quebra nenhuma atomicidade
+   * existente — apenas divide o recálculo.
+   *
+   * A assinatura de chamada (`(userId) => Promise<...>`) permanece compatível;
+   * o retorno passa a carregar o estado da operação para diagnóstico.
+   */
+  const recalculateBalances = useCallback(
+    async (userId: string): Promise<BalanceRecalculationResult> => {
+      try {
+        const q = query(
+          collection(db, 'transactions'),
+          where('uid', '==', userId),
+          orderBy('date', 'asc')
+        );
+        const snap = await getDocs(q);
+        const docs = snap.docs;
+        const txsForCalc = docs.map((d) => d.data() as Transaction);
+
+        // T2.5 — decisão registrada: doc legado inválido NÃO bloqueia o recálculo.
+        // Aviso agregado (sem dados sensíveis) para diagnóstico.
+        const legacyIssues = txsForCalc.reduce(
+          (count, tx) => count + (getTransactionIssues(tx) ? 1 : 0),
+          0
+        );
+        if (legacyIssues > 0) {
+          console.warn(
+            `[recalculateBalances] ${legacyIssues} doc(s) fora do TransactionSchema ` +
+            `aceito(s) com warning (histórico legado não é migrado).`
+          );
         }
-        currentBal = Math.round(currentBal * 100) / 100;
-        batch.update(d.ref, { partialBalance: currentBal });
-      });
-      await batch.commit();
-    } catch (e) {
-      handleFirestoreError(e, OperationType.WRITE, 'recalculate_balances');
-    }
-  }, []);
+
+        // Fase 1 — Cálculo puro em memória (idempotente, sem I/O)
+        const balances = calculatePartialBalances(txsForCalc);
+        const updates = docs.map((d, index) => ({
+          ref: d.ref,
+          partialBalance: balances[index],
+        }));
+
+        // Fase 2 — Commits em chunks de até BALANCE_BATCH_CHUNK_SIZE
+        const result = await commitInChunks(updates, {
+          chunkSize: BALANCE_BATCH_CHUNK_SIZE,
+          retries: 1,
+          apply: async (slice) => {
+            const batch = writeBatch(db);
+            slice.forEach(({ ref, partialBalance }) => {
+              batch.update(ref, { partialBalance });
+            });
+            await batch.commit();
+          },
+          onChunkCommitted: (chunkIndex, totalChunks, size) => {
+            console.log(
+              `[recalculateBalances] chunk ${chunkIndex + 1}/${totalChunks} aplicado (${size} docs)`
+            );
+          },
+        });
+
+        if (!result.ok) {
+          console.error(
+            `[recalculateBalances] falha no chunk ${(result.failedChunk ?? 0) + 1}/${result.totalChunks}. ` +
+            `Chunks aplicados: [${result.appliedChunks.join(', ')}]. ` +
+            `Chunks pendentes: ${result.failedChunk}..${result.totalChunks - 1}.`
+          );
+          handleFirestoreError(result.error, OperationType.WRITE, 'recalculate_balances');
+        }
+
+        return result;
+      } catch (e) {
+        handleFirestoreError(e, OperationType.WRITE, 'recalculate_balances');
+        return {
+          ok: false,
+          totalChunks: 0,
+          appliedChunks: [],
+          failedChunk: null,
+          error: e,
+        };
+      }
+    },
+    []
+  );
+
+  // Adapter para o cron, que declara a dependência como `(userId) => Promise<void>`.
+  const recalculateBalancesForCron = useCallback(
+    async (userId: string): Promise<void> => {
+      await recalculateBalances(userId);
+    },
+    [recalculateBalances]
+  );
 
   // CRON: Aplicação de Transações Agendadas / Pendentes e Rendimentos Diários
-  useTransactionsCron(user, rawAssets, transactions, recalculateBalances);
+  useTransactionsCron(user, rawAssets, transactions, recalculateBalancesForCron);
 
   // Mover para lixeira com reversão atômica de saldo
   const moveToTrash = useCallback(
@@ -225,9 +396,16 @@ export function useTransactionsData({ user, rawAssets, setError }: UseTransactio
         handleFirestoreError(e, OperationType.DELETE, `${collectionName}/${item.id}`);
       }
     },
-    [user, rawAssets, recalculateBalances, transactions]
+    [user, rawAssets, recalculateBalances, transactions, setError]
   );
 
+  /**
+   * Sprint 4a — R5 (decisão A): restauração NÃO revalida/bloqueia.
+   *
+   * `moveToTrash` não recebe payload novo — apenas move o doc existente — logo não há
+   * o que validar por design. `restoreFromTrash` é operação de recuperação: um doc
+   * legado inválido deve voltar como estava. O único efeito é um aviso de diagnóstico.
+   */
   const restoreFromTrash = useCallback(
     async (item: any) => {
       if (!user || !item?.originalCollection || !item?.originalId) return;
@@ -323,6 +501,17 @@ export function useTransactionsData({ user, rawAssets, setError }: UseTransactio
           }
         }
 
+        // R5 (decisão A): diagnóstico, nunca bloqueio. Doc legado volta como estava.
+        for (const entry of items) {
+          const issues = getRestoreIntegrityIssues(entry.originalCollection, entry.data);
+          if (issues) {
+            console.warn(
+              `[RESTORE] doc fora do TransactionSchema restaurado como estava ` +
+              `(decisão R5-A): ${entry.originalId} — ${issues.length} issue(s).`
+            );
+          }
+        }
+
         const batch = writeBatch(db);
         applyAssetDeltas(batch, deltas, rawAssets);
         for (const entry of items) {
@@ -362,6 +551,24 @@ export function useTransactionsData({ user, rawAssets, setError }: UseTransactio
         date: data.date ? Timestamp.fromDate(txDate) : serverTimestamp(),
       };
 
+      // Sprint 3 — T2 (A): Validação obrigatória antes do write
+      try {
+        validateTransactionForWrite({
+          ...data,
+          uid: user.uid,
+          applied,
+          status: isFuture ? 'Futuro' : 'Confirmado',
+          date: txDate,
+          value: Number(data.value),
+        });
+      } catch (e) {
+        if (e instanceof ValidationError) {
+          setError?.(e.message);
+          return;
+        }
+        throw e;
+      }
+
       const deltas: AssetDeltaMap = new Map();
       if (applied && data.assetId && !isTransferTransaction(data as Transaction)) {
         const amount = Number(data.value) || 0;
@@ -383,7 +590,7 @@ export function useTransactionsData({ user, rawAssets, setError }: UseTransactio
       await recalculateBalances(user.uid);
       return { id: newTxRef.id };
     },
-    [user, rawAssets, recalculateBalances]
+    [user, rawAssets, recalculateBalances, setError]
   );
 
   /**
@@ -430,20 +637,31 @@ export function useTransactionsData({ user, rawAssets, setError }: UseTransactio
       const outRef = doc(collection(db, 'transactions'));
       const inRef = doc(collection(db, 'transactions'));
 
+      // Sprint 3 — T2 (A): valida as duas pernas antes do write.
+      // (A lógica de transferência do Plano C não foi alterada; apenas a validação foi adicionada.)
+      const legWrites = [
+        { ref: outRef, leg: outLeg },
+        { ref: inRef, leg: inLeg },
+      ].map(({ ref, leg }) => ({
+        ref,
+        payload: {
+          ...leg,
+          uid: user.uid,
+          applied: !isFuture,
+          status: isFuture ? 'Futuro' : 'Confirmado',
+          date: Timestamp.fromDate(txDate),
+        },
+      }));
+
+      legWrites.forEach(({ payload }) => {
+        validateTransactionForWrite(payload);
+      });
+
       try {
         const batch = writeBatch(db);
-        for (const [ref, leg] of [
-          [outRef, outLeg] as const,
-          [inRef, inLeg] as const,
-        ]) {
-          batch.set(ref, {
-            ...leg,
-            uid: user.uid,
-            applied: !isFuture,
-            status: isFuture ? 'Futuro' : 'Confirmado',
-            date: Timestamp.fromDate(txDate),
-          });
-        }
+        legWrites.forEach(({ ref, payload }) => {
+          batch.set(ref, payload);
+        });
 
         if (!isFuture) {
           const fromUpdate = calculateTransferBalanceUpdate(fromAsset, value, false);
@@ -545,23 +763,38 @@ export function useTransactionsData({ user, rawAssets, setError }: UseTransactio
           transferId,
         };
 
+        const outPayload = {
+          ...baseData,
+          type: 'out',
+          transferRole: 'out',
+          assetId: outAssetId,
+          counterpartAssetId: inAssetId,
+        };
+        const inPayload = {
+          ...baseData,
+          type: 'in',
+          transferRole: 'in',
+          assetId: inAssetId,
+          counterpartAssetId: outAssetId,
+        };
+
+        // Sprint 4a — R4: validação atômica do par ANTES do batch.
+        // Se uma perna falhar, a operação inteira é rejeitada (nenhuma perna muda).
+        try {
+          assertValidTransactionPayloads([outPayload, inPayload]);
+        } catch (e) {
+          if (e instanceof ValidationError) {
+            setError?.(e.message);
+            return;
+          }
+          throw e;
+        }
+
         try {
           const batch = writeBatch(db);
           applyAssetDeltas(batch, deltas, rawAssets);
-          batch.update(doc(db, 'transactions', outLeg.id), {
-            ...baseData,
-            type: 'out',
-            transferRole: 'out',
-            assetId: outAssetId,
-            counterpartAssetId: inAssetId,
-          });
-          batch.update(doc(db, 'transactions', inLeg.id), {
-            ...baseData,
-            type: 'in',
-            transferRole: 'in',
-            assetId: inAssetId,
-            counterpartAssetId: outAssetId,
-          });
+          batch.update(doc(db, 'transactions', outLeg.id), outPayload);
+          batch.update(doc(db, 'transactions', inLeg.id), inPayload);
           await batch.commit();
           console.log('[Firestore] Transferência atualizada atomicamente:', {
             transferId,
@@ -583,6 +816,25 @@ export function useTransactionsData({ user, rawAssets, setError }: UseTransactio
       const txDate = parseTransactionDate(data.date) || now;
       const isFuture = txDate.getTime() > endOfToday.getTime();
       const applied = !isFuture;
+
+      // Sprint 3 — T2 (A): Validação obrigatória antes do write em updateTransaction
+      try {
+        validateTransactionForWrite({
+          ...selectedTx,
+          ...data,
+          uid: user.uid,
+          applied,
+          status: isFuture ? 'Futuro' : 'Confirmado',
+          date: txDate,
+          value: Number(data.value ?? selectedTx.value),
+        });
+      } catch (e) {
+        if (e instanceof ValidationError) {
+          setError?.(e.message);
+          return;
+        }
+        throw e;
+      }
 
       const txRef = doc(db, 'transactions', selectedTx.id);
       const txData = {
@@ -628,7 +880,7 @@ export function useTransactionsData({ user, rawAssets, setError }: UseTransactio
 
       await recalculateBalances(user.uid);
     },
-    [user, rawAssets, recalculateBalances, transactions]
+    [user, rawAssets, recalculateBalances, transactions, setError]
   );
 
   const confirmPendingTransaction = useCallback(
@@ -715,8 +967,49 @@ export function useTransactionsData({ user, rawAssets, setError }: UseTransactio
               return;
             }
 
+            // Sprint 3 — T2: validação por linha antes do write em lote.
+            // Exceção documentada à decisão (A): o payload de planilha não tem assetId,
+            // então usa TransactionImportRowSchema (schema reduzido) em vez do schema
+            // completo de write — que rejeitaria 100% das linhas.
+            const validRows: typeof parsedTxList = [];
+            const invalidRows: number[] = [];
+            parsedTxList.forEach((tx, idx) => {
+              try {
+                validateTransactionImportRow(tx);
+                validRows.push(tx);
+              } catch {
+                invalidRows.push(idx + 1);
+              }
+            });
+
+            if (validRows.length === 0) {
+              setError?.(`Nenhuma linha válida na planilha (${invalidRows.length} rejeitadas).`);
+              return;
+            }
+            if (invalidRows.length > 0) {
+              console.warn(
+                `[handleFileUpload] ${invalidRows.length} linha(s) rejeitadas pelo schema: linhas ${invalidRows.join(', ')}`
+              );
+              setError?.(
+                `${invalidRows.length} linha(s) inválida(s) ignorada(s). ${validRows.length} importada(s).`
+              );
+            }
+
+            // Sprint 4a — R6 (decisão D2 = D): a importação continua aceitando linhas
+            // sem conta (a UI de destino é o débito R6-UI), mas o usuário é avisado —
+            // essas transações não entram no saldo de nenhuma conta até serem editadas.
+            const withoutAsset = validRows.filter((tx) => !tx.assetId).length;
+            if (withoutAsset > 0 && invalidRows.length === 0) {
+              console.warn(
+                `[handleFileUpload] ${withoutAsset} transação(ões) importada(s) sem assetId (R6-UI pendente).`
+              );
+              setError?.(
+                `${withoutAsset} transação(ões) importada(s) sem conta. Atribua a conta editando cada transação.`
+              );
+            }
+
             const batch = writeBatch(db);
-            parsedTxList.forEach((tx) => {
+            validRows.forEach((tx) => {
               const newTxRef = doc(collection(db, 'transactions'));
               batch.set(newTxRef, {
                 ...tx,

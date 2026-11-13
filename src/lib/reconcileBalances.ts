@@ -5,6 +5,7 @@ import {
   isYieldTransaction,
   parseTransactionAmount,
   parseTransactionDate,
+  roundCurrency,
   type TransactionInput,
 } from './finance';
 
@@ -25,8 +26,6 @@ export interface TransferEffectAudit {
   net: number;
   count: number;
 }
-
-const roundCurrency = (value: number) => Math.round(value * 100) / 100;
 
 export function isAppliedTransaction(tx: ReconciliableTransaction): boolean {
   const status = String(tx.status ?? '').toLowerCase();

@@ -1,6 +1,17 @@
 /**
  * Cálculos financeiros essenciais do Zenith.
  * Segue o princípio de Responsabilidade Única (SRP) com tipagem estrita sem `any`.
+ *
+ * # Convenção de Aritmética Monetária (Sprint 3 — Decisão B)
+ *
+ * Este módulo usa **number + roundCurrency()** nas fronteiras de cálculo.
+ * Não usa Money (domain/money/Money.ts) — a uniformização está pendente para Sprint 4+.
+ *
+ * Regra: roundCurrency() deve ser aplicado em TODA saída que representa valor monetário
+ * persistido ou exibido. Não aplique em valores intermediários de acumulação (use no final).
+ *
+ * Fonte de entrada canônica: parseTransactionAmount(tx.value) → number em BRL.
+ * Não misturar Money e number em um mesmo fluxo de persistência.
  */
 
 import { parseTransactionAmount, parseTransactionDate } from './parsers';
@@ -134,6 +145,36 @@ export const isYieldTransaction = (tx: TransactionInput | null | undefined): boo
   }
   const cat = String(tx.categoria_primaria || tx.category || '').toLowerCase().trim();
   return cat === 'investimentos' || cat === 'rendimentos';
+};
+
+/**
+ * Sprint 3 — T1 (B1): cálculo puro e determinístico do `partialBalance`.
+ *
+ * Recebe as transações já ordenadas por data (mesma ordem usada na persistência)
+ * e devolve o saldo acumulado após cada uma. É puro: mesma entrada → mesma saída,
+ * sem I/O, sem dependência de estado do componente. Essa idempotência é o que
+ * permite recomputar tudo novamente após uma falha parcial de commit.
+ *
+ * Regras de negócio preservadas do recálculo original:
+ * - entradas (in) e rendimentos (yield) somam;
+ * - saídas (out) subtraem;
+ * - transferências entre contas próprias são neutras;
+ * - arredondamento monetário a cada passo (`roundCurrency`).
+ */
+export const calculatePartialBalances = (
+  transactions: TransactionInput[] = []
+): number[] => {
+  let currentBalance = 0;
+  return transactions.map((transaction) => {
+    const value = parseTransactionAmount(transaction.value);
+    if (isIncomeTransaction(transaction) || isYieldTransaction(transaction)) {
+      currentBalance += value;
+    } else if (isExpenseTransaction(transaction)) {
+      currentBalance -= value;
+    }
+    currentBalance = roundCurrency(currentBalance);
+    return currentBalance;
+  });
 };
 
 export const hasAssetMovementSince = (

@@ -1,3 +1,23 @@
+/**
+ * Representação monetária imutável baseada em centavos inteiros.
+ *
+ * # Convenção de Aritmética Monetária — Sprint 3 (Decisão B)
+ *
+ * O Zenith mantém DUAS convenções de representação monetária:
+ *
+ * | Camada                        | Convenção           | Notas                              |
+ * |-------------------------------|---------------------|------------------------------------|
+ * | domain/money/Money.ts (aqui)  | centavos inteiros   | Usado em domínio puro (tipo opaco) |
+ * | lib/finance/calculators.ts    | number + roundCurrency | Cálculos de dashboard/projeção  |
+ * | hooks/recalculateBalances     | number + roundCurrency | Persistência em Firestore       |
+ * | lib/adapters/assetBalance.ts  | number + Number()   | Saldos de ativos                   |
+ *
+ * **Regra obrigatória**: Não misturar Money e number em um mesmo fluxo de persistência.
+ * Conversão legítima: Money.fromBRL(number) na entrada, .toBRL() na saída.
+ *
+ * Para uniformização completa (migrar todos para Money): Sprint 4+ (decisão pendente).
+ * Risco atual: teórico (listas longas de floats). Sem divergência reproduzível (ver T4.1).
+ */
 export class Money {
   private readonly cents: number;
 

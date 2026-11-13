@@ -9,6 +9,11 @@ export default defineConfig({
       'src/lib/**/*.test.ts',
       'src/hooks/**/*.test.ts',
     ],
+    // Excluir testes de regras Firestore (requerem emulador — rodar via test:rules)
+    exclude: [
+      '**/node_modules/**',
+      'src/**/*.rules.test.ts',
+    ],
     environment: 'node',
   },
 });
